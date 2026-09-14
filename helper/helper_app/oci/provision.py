@@ -80,10 +80,13 @@ class Provisioner:
         job.launch_options = launch_options
         if not job.disks:
             job.disks = [
-                DiskState(index=d.index, label=d.label, capacity_bytes=d.capacity_bytes, is_boot=(d.index == 0),
-                          size_gb=volume_size_gb(d.capacity_bytes, self.s.min_volume_gb))
+                DiskState(index=d.index, label=d.label, capacity_bytes=d.capacity_bytes, is_boot=(d.index == 0))
                 for d in sorted(vm.disks, key=lambda d: d.index)
             ]
+        # the API pre-creates the disk records without a size (so the job view can list them right away)
+        for disk in job.disks:
+            if disk.size_gb <= 0:
+                disk.size_gb = volume_size_gb(disk.capacity_bytes, self.s.min_volume_gb)
 
         # 1. seed image
         if not job.seed_image_id:

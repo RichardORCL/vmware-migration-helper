@@ -57,7 +57,7 @@ class Env:
     def __init__(self, tmp_path, fail_once=frozenset({1}), block_event=None, store=None):
         self.settings = Settings(device_prefix=str(tmp_path / "dev" / "oraclevd"), db_path=str(tmp_path / "jobs.db"),
                                  seed_bucket="vc-oci-seed", launch_timeout_s=5, volume_timeout_s=5,
-                                 image_import_timeout_s=5, min_volume_gb=1, cookie_secure=False,
+                                 image_import_timeout_s=5, cookie_secure=False,
                                  vcenter_host="vc.test", disk_retry_attempts=3, max_concurrent_jobs=2,
                                  update_source_dir=str(tmp_path / "src"), update_venv_dir=str(tmp_path / "venv"),
                                  update_log_path=str(tmp_path / "update.log"),

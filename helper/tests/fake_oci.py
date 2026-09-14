@@ -22,6 +22,14 @@ def service_error(status: int, code: str, message: str, operation: str) -> oci.e
                                        request_endpoint=f"POST https://iaas.fake/{operation}")
 
 
+def check_volume_size(size_gb, operation: str, what: str = "Boot volume") -> None:
+    """Mimic OCI's size validation for boot and block volumes."""
+    if size_gb is None or not (50 <= size_gb <= 32768):
+        raise service_error(400, "InvalidParameter",
+                            f"Requested volume size {size_gb or 0}GB is not in the allowed range. {what} should be "
+                            "greater than or equal to 50GB and less than or equal to 32,768GB.", operation)
+
+
 def check_tags(details, operation: str) -> None:
     """Mimic OCI's freeform tag validation: keys may not contain periods or spaces."""
     for key in (getattr(details, "freeform_tags", None) or {}):
@@ -56,6 +64,7 @@ class FakeCompute:
     # instances -----------------------------------------------------------
     def launch_instance(self, details):
         check_tags(details, "launch_instance")
+        check_volume_size(getattr(details.source_details, "boot_volume_size_in_gbs", None), "launch_instance")
         self.launch_details.append(details)
         iid = oid("instance")
         inst = NS(id=iid, display_name=details.display_name, lifecycle_state="PROVISIONING",
@@ -219,6 +228,7 @@ class FakeBlockstorage:
 
     def create_volume(self, details):
         check_tags(details, "create_volume")
+        check_volume_size(details.size_in_gbs, "create_volume", "Volume")
         vid = oid("volume")
         vol = NS(id=vid, display_name=details.display_name, size_in_gbs=details.size_in_gbs,
                  lifecycle_state="AVAILABLE", availability_domain=details.availability_domain,

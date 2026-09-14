@@ -96,6 +96,8 @@ To replace the self-signed certificate, put your own into `/etc/vc-oci-helper/se
 | `HELPER_SKIP_ZERO_GRAINS` | `true` | Do not write all-zero grains (fresh volumes read as zero) |
 | `HELPER_DB_PATH` | `/var/lib/vc-oci-helper/jobs.sqlite3` | Job database |
 | `HELPER_TLS_CERT_FILE` / `HELPER_TLS_KEY_FILE` | – | TLS material for 8443 |
+| `HELPER_LOG_LEVEL` | `INFO` | Helper log level (`journalctl -u vc-oci-helper`) |
+| `HELPER_OCI_LOG_REQUESTS` | `false` | Dump every OCI SDK request/response including bodies (for analysing `InvalidParameter` errors) |
 | `HELPER_UPDATE_SOURCE_DIR` / `HELPER_UPDATE_VENV_DIR` | `/opt/vc-oci/src` / `/opt/vc-oci/venv` | Git checkout and virtualenv used by the self-update |
 | `HELPER_UPDATE_SERVICE` / `HELPER_UPDATE_LOG_PATH` | `vc-oci-helper` / `/var/lib/vc-oci-helper/update.log` | systemd unit restarted after an update; update log shown in the UI |
 
@@ -115,7 +117,7 @@ The same thing by hand: `sudo /usr/local/sbin/vc-oci-helper-install && sudo syst
 
 ## Maintenance
 
-- Seed images accumulate one per firmware/OS combination. Delete them from the *Setup* tab, with `DELETE /api/seed-images` (logged in) or from the console (tag `vc-oci.seed=true`).
+- Seed images accumulate one per firmware/OS combination. Delete them from the *Setup* tab, with `DELETE /api/seed-images` (logged in) or from the console (tag `vc-oci-seed=true`).
 - Jobs are stored in `HELPER_DB_PATH`. A failed job leaves its OCI resources in place for inspection; *Clean up OCI resources* in the job view (`POST /api/jobs/{id}/cancel`) terminates the instance and deletes the volumes.
 - After a restart of the service, jobs that were running are marked `FAILED` (their vCenter session is gone); clean them up and start again.
 - The helper supports up to 32 attached volumes at once, which bounds `HELPER_MAX_CONCURRENT_JOBS`.

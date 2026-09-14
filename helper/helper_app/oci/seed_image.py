@@ -22,7 +22,7 @@ from helper_app.oci.mapping import OsMetadata, seed_image_tags
 
 log = logging.getLogger(__name__)
 
-SEED_TAG = "vc-oci.seed"
+SEED_TAG = "vc-oci-seed"
 
 
 class SeedImageService:

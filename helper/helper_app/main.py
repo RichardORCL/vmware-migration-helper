@@ -40,7 +40,11 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+        logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO),
+                            format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+        if settings.oci_log_requests:  # HELPER_OCI_LOG_REQUESTS=true: full request/response dump of the OCI SDK
+            logging.getLogger("oci").setLevel(logging.DEBUG)
+            logging.getLogger("oci.base_client").setLevel(logging.DEBUG)
         app.state.settings = settings
         app.state.store = store or JobStore(settings.db_path)
         app.state.clients = clients or build_clients(settings)

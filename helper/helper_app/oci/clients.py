@@ -20,6 +20,26 @@ class OciError(RuntimeError):
     """Raised for provisioning failures with a human readable message."""
 
 
+def describe_error(exc: BaseException) -> str:
+    """Human readable one-liner for an exception; OCI ``ServiceError`` gets operation, status, code,
+    message and request id instead of the raw dict dump."""
+    try:
+        import oci
+
+        service_error = oci.exceptions.ServiceError
+    except Exception:  # pragma: no cover
+        service_error = ()
+    if isinstance(exc, service_error):
+        parts = [f"OCI {exc.operation_name or 'request'} failed with HTTP {exc.status} {exc.code}: {exc.message}"]
+        if exc.request_endpoint:
+            parts.append(f"endpoint {exc.request_endpoint}")
+        if exc.request_id:
+            parts.append(f"opc-request-id {exc.request_id}")
+        return " | ".join(parts)
+    text = str(exc) or exc.__class__.__name__
+    return text if text != str(exc.__class__) else exc.__class__.__name__
+
+
 @dataclass
 class HelperIdentity:
     instance_id: str
@@ -113,6 +133,8 @@ def build_clients(settings: Settings) -> OciClients:
         kwargs = {"config": config}
     else:
         raise OciError(f"unsupported HELPER_OCI_AUTH={settings.oci_auth}")
+    if settings.oci_log_requests:
+        config["log_requests"] = True  # SDK dumps every request/response (headers + bodies) at DEBUG
 
     retry = oci.retry.DEFAULT_RETRY_STRATEGY
     return OciClients(

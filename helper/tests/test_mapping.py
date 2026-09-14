@@ -115,4 +115,4 @@ def test_volume_size_gb():
 
 def test_seed_tags():
     tags = m.seed_image_tags(m.map_guest_os("windows2022srvNext_64Guest"), "UEFI_64")
-    assert tags == {"vc-oci.seed": "true", "vc-oci.firmware": "UEFI_64", "vc-oci.os": "windows-server-2022-standard"}
+    assert tags == {"vc-oci-seed": "true", "vc-oci-firmware": "UEFI_64", "vc-oci-os": "windows-server-2022-standard"}

@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     lease_ready_timeout_s: int = 300
     disk_retry_attempts: int = 3
 
+    # Logging
+    log_level: str = "INFO"
+    oci_log_requests: bool = False  # log every OCI SDK request/response (bodies included) at DEBUG
+
     # OCI authentication: instance principals on the helper VM, config file for development
     oci_auth: Literal["instance_principal", "config_file", "mock"] = "instance_principal"
     oci_config_file: str = "~/.oci/config"

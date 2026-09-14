@@ -20,6 +20,7 @@ from helper_app.disk.vmdk_stream import StreamOptimizedDecoder, VmdkFormatError
 from helper_app.disk.writer import BlockDeviceWriter
 from helper_app.jobs.store import JobStore
 from helper_app.models import DiskState, DiskStatus, Job, JobPhase
+from helper_app.oci.clients import describe_error
 from helper_app.oci.provision import Provisioner
 from helper_app.sessions import UserSession
 from helper_app.vsphere.export import ExportError, NfcExport, match_disk_urls
@@ -134,14 +135,15 @@ class MigrationRunner:
             try:
                 self.prov.cleanup(job)
             except Exception as exc:  # noqa: BLE001
-                log.warning("cleanup for %s failed: %s", job.id, exc)
+                log.warning("cleanup for %s failed: %s", job.id, describe_error(exc))
                 job.phase = JobPhase.CANCELLED
-                job.error = f"cleanup incomplete: {exc}"
+                job.error = f"cleanup incomplete: {describe_error(exc)}"
                 self.store.put(job)
         except Exception as exc:  # noqa: BLE001
-            log.exception("job %s failed", job_id)
-            job.error = str(exc)
-            self._save(job, JobPhase.FAILED, f"Failed: {exc}")
+            log.exception("job %s failed at step %s", job_id, job.step)
+            detail = describe_error(exc)
+            job.error = f"step '{job.step}': {detail}" if job.step else detail
+            self._save(job, JobPhase.FAILED, f"Failed in step {job.step or '?'}: {detail}")
         finally:
             self._finish(job_id)
 
@@ -154,7 +156,7 @@ class MigrationRunner:
             log.exception("cleanup of %s failed", job_id)
             if job is not None:
                 job.phase = JobPhase.CANCELLED
-                job.error = f"cleanup incomplete: {exc}"
+                job.error = f"cleanup incomplete: {describe_error(exc)}"
                 self.store.put(job)
         finally:
             self._finish(job_id)

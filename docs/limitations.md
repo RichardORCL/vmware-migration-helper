@@ -29,7 +29,7 @@
 | `invalid VMDK stream` / `bad magic` | Something other than a stream-optimized VMDK was returned (a login page or error body); check the lease URL host and proxies between the helper and vCenter. |
 | Disk retried three times then `FAILED` | Persistent network trouble between the helper and vCenter/ESXi; check MTU on the VPN/FastConnect path. |
 | Target does not boot | Firmware mismatch (compare *Launch options* in the job view with the source), missing virtio drivers (try compatibility mode), or a BIOS guest whose disk uses GPT without a protective MBR. Use the OCI console connection to inspect. |
-| Job `FAILED` with resources left behind | Inspect in the OCI console (tags `vc-oci.job=<id>`), then *Clean up OCI resources* in the job view (`POST /api/jobs/{id}/cancel`). |
+| Job `FAILED` with resources left behind | Inspect in the OCI console (tags `vc-oci-job=<id>`), then *Clean up OCI resources* in the job view (`POST /api/jobs/{id}/cancel`). |
 | Job `FAILED: helper restarted` | Expected after a service restart; clean up and start the migration again. |
 
 ## Manual end-to-end test procedure

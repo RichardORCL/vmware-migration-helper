@@ -162,7 +162,7 @@ def volume_size_gb(capacity_bytes: int, min_volume_gb: int = 50) -> int:
 
 def seed_image_tags(os_meta: OsMetadata, firmware: str) -> dict[str, str]:
     return {
-        "vc-oci.seed": "true",
-        "vc-oci.firmware": firmware,
-        "vc-oci.os": os_meta.slug,
+        "vc-oci-seed": "true",
+        "vc-oci-firmware": firmware,
+        "vc-oci-os": os_meta.slug,
     }

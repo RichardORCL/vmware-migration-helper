@@ -17,6 +17,18 @@ def oid(kind: str) -> str:
     return f"ocid1.{kind}.oc1..{next(_ids):06d}"
 
 
+def service_error(status: int, code: str, message: str, operation: str) -> oci.exceptions.ServiceError:
+    return oci.exceptions.ServiceError(status, code, {"opc-request-id": "FAKE"}, message, operation_name=operation,
+                                       request_endpoint=f"POST https://iaas.fake/{operation}")
+
+
+def check_tags(details, operation: str) -> None:
+    """Mimic OCI's freeform tag validation: keys may not contain periods or spaces."""
+    for key in (getattr(details, "freeform_tags", None) or {}):
+        if "." in key or " " in key or len(key) > 100:
+            raise service_error(400, "InvalidParameter", "Invalid tags", operation)
+
+
 class Resp:
     def __init__(self, data, headers=None):
         self.data = data
@@ -43,6 +55,7 @@ class FakeCompute:
 
     # instances -----------------------------------------------------------
     def launch_instance(self, details):
+        check_tags(details, "launch_instance")
         self.launch_details.append(details)
         iid = oid("instance")
         inst = NS(id=iid, display_name=details.display_name, lifecycle_state="PROVISIONING",
@@ -156,6 +169,7 @@ class FakeCompute:
         return Resp(imgs)
 
     def create_image(self, details):
+        check_tags(details, "create_image")
         iid = oid("image")
         src = details.image_source_details
         img = NS(id=iid, display_name=details.display_name, compartment_id=details.compartment_id,
@@ -185,6 +199,7 @@ class FakeCompute:
         return Resp([NS(name="v1.0")])
 
     def create_compute_image_capability_schema(self, details):
+        check_tags(details, "create_compute_image_capability_schema")
         self.capability_schemas.append(details)
         return Resp(NS(id=oid("capschema"), image_id=details.image_id, schema_data=details.schema_data))
 
@@ -196,6 +211,7 @@ class FakeBlockstorage:
         self.deleted: list[str] = []
 
     def create_volume(self, details):
+        check_tags(details, "create_volume")
         vid = oid("volume")
         vol = NS(id=vid, display_name=details.display_name, size_in_gbs=details.size_in_gbs,
                  lifecycle_state="AVAILABLE", availability_domain=details.availability_domain,

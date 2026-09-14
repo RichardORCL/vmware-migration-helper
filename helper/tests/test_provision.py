@@ -77,10 +77,11 @@ def test_prepare_linux_two_disks(env):
     # seed image created with CUSTOM launch mode, VMDK placeholder, OS metadata and capability schema
     img = fake.compute.images[job.seed_image_id]
     assert img.compartment_id == fake.identity.compartment_id  # helper compartment from discovered identity
+    assert all("." not in k and " " not in k for k in img.freeform_tags), "OCI rejects freeform tag keys with periods"
     assert img.launch_mode == "CUSTOM"
     assert img.source_image_type == "VMDK"
     assert (img.operating_system, img.operating_system_version) == ("Oracle Linux", "8")
-    assert img.freeform_tags["vc-oci.firmware"] == "UEFI_64"
+    assert img.freeform_tags["vc-oci-firmware"] == "UEFI_64"
     assert fake.object_storage.deleted == [img.object_name]  # placeholder object removed
     assert "vc-oci-seed" in fake.object_storage.buckets
     schema = fake.compute.capability_schemas[0].schema_data

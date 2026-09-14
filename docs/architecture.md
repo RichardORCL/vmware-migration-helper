@@ -90,7 +90,7 @@ those knobs, so the helper imports a placeholder VMDK as a custom image per
 (firmware, OS) combination, applies a `ComputeImageCapabilitySchema` that fixes
 `Compute.Firmware`, `Storage.BootVolumeType` and `Network.AttachmentType`, and launches from it
 with `launchMode=CUSTOM`. The seed's boot volume is replaced by the copied disk before the instance
-ever boots. Seed images are tagged `vc-oci.seed=true` and can be removed with
+ever boots. Seed images are tagged `vc-oci-seed=true` and can be removed with
 `DELETE /api/seed-images`.
 
 ## Windows licensing

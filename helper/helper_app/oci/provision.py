@@ -122,9 +122,9 @@ class Provisioner:
                     is_consistent_volume_naming_enabled=launch_options.is_consistent_volume_naming_enabled,
                 ),
                 freeform_tags={
-                    "vc-oci.job": job.id,
-                    "vc-oci.source-vm": vm.name[:100],
-                    "vc-oci.source-moid": vm.moid,
+                    "vc-oci-job": job.id,
+                    "vc-oci-source-vm": vm.name[:100],
+                    "vc-oci-source-moid": vm.moid,
                 },
                 metadata={},
             )
@@ -177,7 +177,7 @@ class Provisioner:
                     compartment_id=target.compartment_id,
                     display_name=f"{job.instance_display_name or vm.name}-disk{disk.index}",
                     size_in_gbs=disk.size_gb,
-                    freeform_tags={"vc-oci.job": job.id, "vc-oci.disk-index": str(disk.index)},
+                    freeform_tags={"vc-oci-job": job.id, "vc-oci-disk-index": str(disk.index)},
                 )
             ).data
             disk.volume_id = vol.id

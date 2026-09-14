@@ -74,11 +74,11 @@ def test_prepare_linux_two_disks(env):
     assert len(job.disks) == 2 and job.disks[0].is_boot
     assert job.disks[0].size_gb == 50 and job.disks[1].size_gb == 100
 
-    # seed image created with CUSTOM launch mode, VMDK placeholder, OS metadata and capability schema
+    # seed image imported as PARAVIRTUALIZED (CUSTOM is not importable), VMDK placeholder, OS metadata, schema
     img = fake.compute.images[job.seed_image_id]
     assert img.compartment_id == fake.identity.compartment_id  # helper compartment from discovered identity
     assert all("." not in k and " " not in k for k in img.freeform_tags), "OCI rejects freeform tag keys with periods"
-    assert img.launch_mode == "CUSTOM"
+    assert img.launch_mode == "PARAVIRTUALIZED"
     assert img.source_image_type == "VMDK"
     assert (img.operating_system, img.operating_system_version) == ("Oracle Linux", "8")
     assert img.freeform_tags["vc-oci-firmware"] == "UEFI_64"
@@ -86,7 +86,10 @@ def test_prepare_linux_two_disks(env):
     assert "vc-oci-seed" in fake.object_storage.buckets
     schema = fake.compute.capability_schemas[0].schema_data
     assert schema["Compute.Firmware"].values == ["UEFI_64"]
-    assert schema["Compute.LaunchMode"].default_value == "CUSTOM"
+    assert schema["Compute.LaunchMode"].default_value == "PARAVIRTUALIZED"
+    # every device model stays selectable so per-job LaunchOptions are accepted at launch
+    assert set(schema["Storage.BootVolumeType"].values) >= {"PARAVIRTUALIZED", "IDE", "SCSI", "ISCSI"}
+    assert set(schema["Network.AttachmentType"].values) >= {"PARAVIRTUALIZED", "E1000", "VFIO"}
 
     # instance launched from the seed with explicit launch options and matching shape
     ld = fake.compute.launch_details[0]
@@ -131,6 +134,7 @@ def test_prepare_windows_bios_licensing_and_seed_reuse(env):
     assert ld.create_vnic_details.hostname_label == "win-box-1"
     img = fake.compute.images[job.seed_image_id]
     assert img.operating_system == "Windows" and img.operating_system_version == "Server 2022 Standard"
+    assert img.launch_mode == "EMULATED"  # IDE + E1000 requested
 
     # a second Windows/BIOS job reuses the seed image
     job2 = make_job(make_vm(windows=True, firmware=Firmware.BIOS, disks=1), target)

@@ -2,9 +2,10 @@
 
 OCI derives an instance's firmware (BIOS / UEFI_64) and device model from the image
 it is launched from.  Platform images do not let us pick those freely, so for each
-(firmware, OS) combination we import a tiny placeholder VMDK as a custom image with
-``launchMode=CUSTOM`` and pin its capability schema.  Instances launched from the
-seed image accept explicit ``LaunchOptions`` and, for Windows, ``licensingConfigs``.
+(firmware, OS) combination we import a tiny placeholder VMDK as a custom image
+(``launchMode`` PARAVIRTUALIZED or EMULATED) and pin its capability schema: firmware
+fixed, all boot volume / NIC types allowed.  Instances launched from the seed image
+accept explicit ``LaunchOptions`` and, for Windows, ``licensingConfigs``.
 The seed's boot volume content is irrelevant: it is overwritten by the block copy.
 """
 
@@ -23,6 +24,15 @@ from helper_app.oci.mapping import OsMetadata, seed_image_tags
 log = logging.getLogger(__name__)
 
 SEED_TAG = "vc-oci-seed"
+
+
+def import_launch_mode(lo: LaunchOptionsSpec) -> str:
+    """Launch mode for the image import.  ``CUSTOM`` cannot be requested through the public API (it is
+    what OCI reports after launch options were edited), so pick the closest supported mode; the
+    capability schema and the per-job ``LaunchOptions`` take care of the details."""
+    if lo.boot_volume_type.value == "IDE" or lo.network_type.value == "E1000":
+        return "EMULATED"
+    return "PARAVIRTUALIZED"
 
 
 class SeedImageService:
@@ -74,10 +84,11 @@ class SeedImageService:
         self.c.object_storage.put_object(namespace, self.s.seed_bucket, object_name, payload)
 
         try:
+            launch_mode = import_launch_mode(launch_options)
             details = M.CreateImageDetails(
                 compartment_id=self.seed_compartment,
                 display_name=display,
-                launch_mode="CUSTOM",
+                launch_mode=launch_mode,
                 freeform_tags=tags,
                 image_source_details=M.ImageSourceViaObjectStorageTupleDetails(
                     source_type="objectStorageTuple",
@@ -99,7 +110,7 @@ class SeedImageService:
                 failure_states=("DELETED", "DISABLED"),
                 what=f"seed image {display}",
             )
-            self._apply_capability_schema(image.id, firmware, launch_options, display, tags)
+            self._apply_capability_schema(image.id, firmware, launch_options, display, tags, launch_mode)
             return image.id
         finally:
             try:
@@ -151,8 +162,11 @@ class SeedImageService:
         return versions[0].name
 
     def _apply_capability_schema(
-        self, image_id: str, firmware: str, lo: LaunchOptionsSpec, display: str, tags: dict[str, str]
+        self, image_id: str, firmware: str, lo: LaunchOptionsSpec, display: str, tags: dict[str, str],
+        launch_mode: str = "PARAVIRTUALIZED",
     ) -> None:
+        """Pin the firmware and allow every device model, so that the explicit ``LaunchOptions`` of each job
+        (which may differ from the import defaults) are accepted at launch."""
         import oci.core.models as M
 
         def enum(values: list[str], default: str):
@@ -163,7 +177,7 @@ class SeedImageService:
 
         schema_data = {
             "Compute.Firmware": enum([firmware], firmware),
-            "Compute.LaunchMode": enum(["CUSTOM", "PARAVIRTUALIZED", "EMULATED", "NATIVE"], "CUSTOM"),
+            "Compute.LaunchMode": enum(["PARAVIRTUALIZED", "EMULATED", "NATIVE", "CUSTOM"], launch_mode),
             "Storage.BootVolumeType": enum(["PARAVIRTUALIZED", "ISCSI", "SCSI", "IDE"], lo.boot_volume_type.value),
             "Storage.RemoteDataVolumeType": enum(["PARAVIRTUALIZED", "ISCSI"], "PARAVIRTUALIZED"),
             "Network.AttachmentType": enum(["PARAVIRTUALIZED", "E1000", "VFIO"], lo.network_type.value),

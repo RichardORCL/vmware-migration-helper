@@ -40,8 +40,8 @@ which VM, OCI IAM (instance principal + dynamic group policy) decides what the h
    - map guest OS -> seed image metadata, firmware -> `BIOS`/`UEFI_64`, controller/NIC -> launch
      options, vCPU/RAM -> flex shape ([os-mapping.md](os-mapping.md));
    - `SeedImageService.get_or_create`: import a 1 GB placeholder stream-optimized VMDK as a custom
-     image with `launchMode=CUSTOM`, pin its capability schema (firmware, boot volume type, network
-     type), reuse by freeform tags on later jobs;
+     image (`launchMode` PARAVIRTUALIZED, or EMULATED for IDE/E1000), pin its capability schema
+     (firmware fixed; all boot volume and NIC types allowed), reuse by freeform tags on later jobs;
    - `LaunchInstance` from the seed image with explicit `launchOptions`, `shapeConfig`, optional
      `licensingConfigs` (Windows) and a boot volume sized for disk 0; stop it; detach its boot
      volume;
@@ -87,9 +87,10 @@ file. Memory use is a few MB per running disk; the OCI volumes are the only stor
 
 OCI takes an instance's firmware and device model from its image. Platform images do not expose
 those knobs, so the helper imports a placeholder VMDK as a custom image per
-(firmware, OS) combination, applies a `ComputeImageCapabilitySchema` that fixes
-`Compute.Firmware`, `Storage.BootVolumeType` and `Network.AttachmentType`, and launches from it
-with `launchMode=CUSTOM`. The seed's boot volume is replaced by the copied disk before the instance
+(firmware, OS) combination (imported as PARAVIRTUALIZED or EMULATED; `CUSTOM` cannot be requested
+through the import API), applies a `ComputeImageCapabilitySchema` that fixes `Compute.Firmware` and
+allows every `Storage.BootVolumeType` / `Network.AttachmentType`, and launches from it with the
+job's explicit `launchOptions`. The seed's boot volume is replaced by the copied disk before the instance
 ever boots. Seed images are tagged `vc-oci-seed=true` and can be removed with
 `DELETE /api/seed-images`.
 

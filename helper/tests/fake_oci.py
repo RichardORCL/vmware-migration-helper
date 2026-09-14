@@ -170,6 +170,11 @@ class FakeCompute:
 
     def create_image(self, details):
         check_tags(details, "create_image")
+        if details.launch_mode not in ("NATIVE", "EMULATED", "PARAVIRTUALIZED"):
+            # CUSTOM is not importable through the public API (CreateImageDetails has no launchOptions)
+            raise service_error(400, "MissingParameter",
+                                "Missing launchOptions: launchOptions must be provided when using CUSTOM launchMode",
+                                "create_image")
         iid = oid("image")
         src = details.image_source_details
         img = NS(id=iid, display_name=details.display_name, compartment_id=details.compartment_id,

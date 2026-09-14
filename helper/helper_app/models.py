@@ -215,6 +215,7 @@ class Job(BaseModel):
     id: str
     phase: JobPhase = JobPhase.QUEUED
     step: str = ""
+    step_percent: Optional[int] = None  # progress of the current step when OCI reports one (work requests)
     message: str = ""
     error: Optional[str] = None
     vm: VmSpec

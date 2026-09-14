@@ -62,6 +62,7 @@
   const stopPolling = () => { if (activePoll) { activePoll(); activePoll = null; } };
   const isWindows = (vm) => /windows/i.test((vm.guest_id || "") + " " + (vm.guest_full_name || ""));
   const TERMINAL = ["COMPLETED", "FAILED", "CANCELLED"];
+  const STEP_LABELS = { seed_image: "Seed image import", launch_instance: "Instance launch" };
 
   // -------------------------------------------------------------------- auth
   function setUser(me) {
@@ -132,11 +133,17 @@
     // export-phase line: the percentage vCenter shows on its "Export OVF template" task + the last-minute speed
     const tr = job.transfer || {};
     const transfer = root.querySelector("[data-transfer]");
+    transfer.innerHTML = "";
     if (job.phase === "EXPORTING" && tr.started_at) {
       transfer.hidden = false;
       transfer.textContent = `Export OVF template: ${tr.percent || 0}% - ${fmtBytes(tr.bytes_received)} received` +
         (tr.throughput_bps ? ` at ${fmtRate(tr.throughput_bps)} (last minute)` : "") +
         ` - running ${fmtDuration((Date.now() - new Date(tr.started_at)) / 1000)}`;
+    } else if (!TERMINAL.includes(job.phase) && job.step_percent !== null && job.step_percent !== undefined) {
+      // an OCI work request (e.g. the seed image import) reports how far the current step is
+      transfer.hidden = false;
+      transfer.append(el("div", { class: "meta" }, el("span", {}, `${STEP_LABELS[job.step] || job.step}: ${job.step_percent}%`)),
+        el("div", { class: "bar" }, el("div", { style: `width:${job.step_percent}%` })));
     } else transfer.hidden = true;
 
     const disks = root.querySelector("[data-disks]");
@@ -414,7 +421,9 @@
       el("tbody", {}, ...jobs.map((j) => el("tr", {},
         el("td", { class: "name" }, j.vm.name), el("td", {}, el("span", { class: "phase " + j.phase }, j.phase)),
         el("td", {}, (j.message || "") + (j.phase === "EXPORTING" && j.transfer && j.transfer.started_at
-          ? ` - ${j.transfer.percent || 0}%${j.transfer.throughput_bps ? ", " + fmtRate(j.transfer.throughput_bps) : ""}` : "")),
+          ? ` - ${j.transfer.percent || 0}%${j.transfer.throughput_bps ? ", " + fmtRate(j.transfer.throughput_bps) : ""}`
+          : !TERMINAL.includes(j.phase) && j.step_percent !== null && j.step_percent !== undefined && !/\d+%/.test(j.message || "")
+            ? ` - ${j.step_percent}%` : "")),
         el("td", { class: "ocid" }, j.instance_id || "-"),
         el("td", {}, new Date(j.created_at).toLocaleString()), el("td", {}, j.created_by || "-"),
         el("td", {}, el("a", { class: "button secondary small", href: `#/jobs/${j.id}` }, "Details"))))));

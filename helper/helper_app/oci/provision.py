@@ -54,8 +54,19 @@ class Provisioner:
         if check is not None:
             check()  # give a pending cancellation a chance before the next long OCI operation
         job.step = step
+        job.step_percent = None
         job.message = message or step
         log.info("job %s: %s %s", job.id, step, message)
+        self.save(job)
+
+    def _step_progress(self, job: Job, percent: int, message: str,
+                       check: Callable[[], None] | None = None) -> None:
+        """Progress inside the current step (e.g. ``percentComplete`` of an OCI work request)."""
+        if check is not None:
+            check()  # a long import is a good place to notice a cancellation
+        job.step_percent = max(0, min(100, int(percent)))
+        job.message = message
+        log.info("job %s: %s %s%% %s", job.id, job.step, job.step_percent, message)
         self.save(job)
 
     @property
@@ -124,7 +135,10 @@ class Provisioner:
         if not job.seed_image_id:
             step("seed_image", f"Resolving seed image for {firmware} / {os_meta.operating_system} "
                                            f"{os_meta.operating_system_version}")
-            job.seed_image_id = self.seeds.get_or_create(os_meta, firmware, launch_options)
+            job.seed_image_id = self.seeds.get_or_create(
+                os_meta, firmware, launch_options,
+                on_progress=lambda pct, text: self._step_progress(job, pct, text, check_cancel))
+            job.step_percent = None
             self.save(job)
 
         # 2. launch the target instance

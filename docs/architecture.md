@@ -30,7 +30,10 @@ which VM, OCI IAM (instance principal + dynamic group policy) decides what the h
 ## Job lifecycle
 
 `Job.phase`: `QUEUED -> PROVISIONING -> EXPORTING -> FINALIZING -> COMPLETED | FAILED | CANCELLED`.
-`Job.step`/`Job.message` carry the fine-grained progress, `Job.disks[]` the per-disk state
+`Job.step`/`Job.message` carry the fine-grained progress; `Job.step_percent` is set while a step is backed
+by an OCI work request with a `percentComplete` (the seed image import polls its `CreateImage` work
+request between image state checks; reading it is best effort and needs `read work-requests`).
+`Job.disks[]` holds the per-disk state
 (`PENDING -> ATTACHED -> COPYING -> COPIED | FAILED`, with `bytes_received`, `bytes_written`,
 `grains_written`, `attempts`, `stream_bytes` (size of the exported stream when the lease reports it),
 `percent` and `throughput_bps` (received bytes/s over the last minute)).

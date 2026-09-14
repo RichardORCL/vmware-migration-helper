@@ -73,7 +73,8 @@ def collect(job: Job, settings: Settings, ident: HelperIdentity, commit: str,
         f"seed_compartment={settings.seed_compartment_id or '(helper)'} "
         f"max_concurrent_jobs={settings.max_concurrent_jobs} disk_retry_attempts={settings.disk_retry_attempts}",
         "",
-        f"job {job.id}: phase={job.phase.value} step={job.step or '-'}",
+        f"job {job.id}: phase={job.phase.value} step={job.step or '-'}"
+        + (f" step_percent={job.step_percent}" if job.step_percent is not None else ""),
         f"  created {job.created_at.isoformat(timespec='seconds')} by {job.created_by or '-'}; "
         f"updated {job.updated_at.isoformat(timespec='seconds')}",
         f"  message: {job.message or '-'}",

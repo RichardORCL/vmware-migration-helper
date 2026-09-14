@@ -12,8 +12,9 @@ The seed's boot volume content is irrelevant: it is overwritten by the block cop
 from __future__ import annotations
 
 import logging
+import time
 import uuid
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from helper_app.config import Settings
 from helper_app.disk.vmdk_stream import encode_empty_disk
@@ -24,6 +25,9 @@ from helper_app.oci.mapping import OsMetadata, seed_image_tags
 log = logging.getLogger(__name__)
 
 SEED_TAG = "vc-oci-seed"
+
+# called while an import runs: (percent complete 0-100, human readable status)
+ProgressCallback = Callable[[int, str], None]
 
 
 def import_launch_mode(lo: LaunchOptionsSpec) -> str:
@@ -46,13 +50,14 @@ class SeedImageService:
         return self.s.seed_compartment_id or self.c.identity_info.compartment_id
 
     # ------------------------------------------------------------------ public
-    def get_or_create(self, os_meta: OsMetadata, firmware: str, launch_options: LaunchOptionsSpec) -> str:
+    def get_or_create(self, os_meta: OsMetadata, firmware: str, launch_options: LaunchOptionsSpec,
+                      on_progress: Optional[ProgressCallback] = None) -> str:
         tags = seed_image_tags(os_meta, firmware)
         existing = self.find(tags)
         if existing is not None:
             log.info("reusing seed image %s (%s)", existing.id, existing.display_name)
             return existing.id
-        return self.create(os_meta, firmware, launch_options, tags)
+        return self.create(os_meta, firmware, launch_options, tags, on_progress)
 
     def find(self, tags: dict[str, str]) -> Optional[Any]:
         import oci
@@ -69,7 +74,8 @@ class SeedImageService:
         return None
 
     def create(
-        self, os_meta: OsMetadata, firmware: str, launch_options: LaunchOptionsSpec, tags: dict[str, str]
+        self, os_meta: OsMetadata, firmware: str, launch_options: LaunchOptionsSpec, tags: dict[str, str],
+        on_progress: Optional[ProgressCallback] = None,
     ) -> str:
         import oci.core.models as M
         from oci.object_storage.models import CreateBucketDetails
@@ -104,18 +110,15 @@ class SeedImageService:
             image = resp.data
             work_request_id = (getattr(resp, "headers", None) or {}).get("opc-work-request-id", "")
             log.info("importing seed image %s (%s), work request %s", image.id, display, work_request_id or "-")
+            if on_progress:
+                on_progress(0, f"Importing seed image {display}")
             try:
-                self.c.wait_for(
-                    lambda: self.c.compute.get_image(image.id),
-                    "lifecycle_state",
-                    ["AVAILABLE"],
-                    self.s.image_import_timeout_s,
-                    failure_states=("DELETED", "DISABLED"),
-                    what=f"seed image {display}",
-                )
+                self._wait_import(image.id, work_request_id, display, on_progress)
             except OciError as exc:
                 # OCI deletes an image whose import failed; the reason only exists on the work request
                 raise OciError(f"{exc}; {self._import_failure_detail(work_request_id)}") from exc
+            if on_progress:
+                on_progress(100, f"Seed image {display} imported; applying capability schema")
             self._apply_capability_schema(image.id, firmware, launch_options, display, tags, launch_mode)
             return image.id
         finally:
@@ -139,6 +142,39 @@ class SeedImageService:
         return deleted
 
     # ----------------------------------------------------------------- private
+    def _wait_import(self, image_id: str, work_request_id: str, display: str,
+                     on_progress: Optional[ProgressCallback]) -> None:
+        """Poll the image until AVAILABLE; in between, read ``percentComplete`` of the CreateImage work
+        request so the job can show how far the import is.  The image state stays authoritative: OCI deletes
+        an image whose import failed, and the work request may be unreadable (no ``read work-requests``)."""
+        deadline = time.monotonic() + self.s.image_import_timeout_s
+        last_percent = -1
+        wr_readable = bool(work_request_id) and self.c.work_requests is not None
+        while True:
+            state = self.c.compute.get_image(image_id).data.lifecycle_state
+            if state == "AVAILABLE":
+                return
+            if state in ("DELETED", "DISABLED"):
+                raise OciError(f"seed image {display} entered state {state} while waiting for ['AVAILABLE']")
+            if wr_readable and on_progress:
+                try:
+                    wr = self.c.work_requests.get_work_request(work_request_id).data
+                except Exception as exc:  # noqa: BLE001 - progress is best effort
+                    log.info("cannot read work request %s for import progress: %s", work_request_id,
+                             describe_error(exc))
+                    wr_readable = False
+                else:
+                    percent = int(getattr(wr, "percent_complete", None) or 0)
+                    status = str(getattr(wr, "status", "") or "IN_PROGRESS")
+                    if percent != last_percent:
+                        last_percent = percent
+                        on_progress(max(0, min(99, percent)),
+                                    f"Importing seed image {display}: {percent}% ({status.lower().replace('_', ' ')})")
+            if time.monotonic() >= deadline:
+                raise OciError(f"timed out after {self.s.image_import_timeout_s:.0f}s waiting for seed image "
+                               f"{display} to reach ['AVAILABLE'] (last={state})")
+            time.sleep(self.c.poll_interval_s)
+
     def _import_failure_detail(self, work_request_id: str) -> str:
         """Errors and log of the CreateImage work request, or the usual cause when OCI recorded nothing."""
         if not work_request_id:

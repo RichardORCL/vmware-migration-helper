@@ -156,6 +156,43 @@ def test_prepare_rejects_other_ad(env):
         prov.prepare(job)
 
 
+def test_seed_import_progress_is_tracked_from_the_work_request(env):
+    """While the CreateImage work request runs, its percentComplete lands in job.step_percent / message
+    (every save is visible to the UI); the field is cleared once the step is over."""
+    settings, fake, store, prov = env
+    fake.import_polls = 4  # 25% -> 50% -> 75% -> 100% (image still IMPORTING) -> AVAILABLE
+    seen: list[tuple[str, int | None, str]] = []
+    saved = store.put
+
+    def spy(job):
+        seen.append((job.step, job.step_percent, job.message))
+        return saved(job)
+
+    prov.save = spy
+    job = make_job(make_vm(), make_target())
+    store.put(job)
+    prov.prepare(job)
+
+    import_updates = [(pct, msg) for step, pct, msg in seen if step == "seed_image" and pct is not None]
+    # 0 when the import is requested; the work request's percent while it runs (capped at 99 until the image
+    # is really AVAILABLE); 100 once it is
+    assert [pct for pct, _ in import_updates] == [0, 25, 50, 75, 99, 100]
+    assert import_updates[2][1] == "Importing seed image vc-oci-seed-uefi_64-oracle-linux-8: 50% (in progress)"
+    assert import_updates[-1][1].startswith("Seed image vc-oci-seed-uefi_64-oracle-linux-8 imported")
+    # the next step starts with a clean percentage, and a finished prepare has none
+    assert all(pct is None for step, pct, _ in seen if step == "launch_instance")
+    assert job.step_percent is None and job.seed_image_id in fake.compute.images
+
+    # progress reading is best effort: without `read work-requests` the import still completes
+    fake.work_requests.error = service_error(404, "NotAuthorizedOrNotFound", "Authorization failed", "get_work_request")
+    fake.compute.images.clear()
+    job2 = make_job(make_vm(), make_target())
+    job2.id = "job0002"
+    store.put(job2)
+    prov.prepare(job2)
+    assert job2.seed_image_id in fake.compute.images
+
+
 def test_seed_import_failure_explains_work_request(env):
     """OCI deletes an image whose import failed; the reason lives on the work request, so it is copied into the
     job error (or, when OCI recorded nothing, the usual cause: the import service cannot create a PAR)."""
@@ -257,16 +294,13 @@ def test_prepare_cancel_hook_aborts_between_steps(env):
     settings, fake, store, prov = env
     job = make_job(make_vm(), make_target())
     store.put(job)
-    calls = {"n": 0}
-
-    def check():
-        calls["n"] += 1
-        if calls["n"] == 3:
+    def check():  # the hook runs before every step and on every in-step progress update
+        if job.instance_id:
             raise RuntimeError("cancelled")
 
     with pytest.raises(RuntimeError, match="cancelled"):
         prov.prepare(job, check_cancel=check)
-    assert job.instance_id is not None  # launched before the third step
+    assert job.instance_id is not None  # launched, cancelled before the step after it
     assert all(d.device is None for d in job.disks)  # never got to the attachments
 
 

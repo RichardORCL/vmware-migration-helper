@@ -5,7 +5,7 @@ from __future__ import annotations
 import itertools
 from pathlib import Path
 from types import SimpleNamespace as NS
-from typing import Optional
+from typing import Callable, Optional
 
 import oci
 from helper_app.oci.clients import HelperIdentity, OciClients
@@ -60,6 +60,7 @@ class FakeCompute:
         self.updates: list = []
         self.terminated: list[str] = []
         self.pending_transitions: dict[str, str] = {}
+        self.import_polls_left: dict[str, int] = {}  # image id -> get_image calls before the import settles
 
     # instances -----------------------------------------------------------
     def launch_instance(self, details):
@@ -220,12 +221,19 @@ class FakeCompute:
                  object_name=src.object_name)
         self.images[iid] = img
         self.pending_transitions[iid] = self.f.import_outcome
-        wr_id = self.f.work_requests.add("CreateImage", details.compartment_id, iid, self.f.import_errors,
-                                         self.f.import_logs)
+        # the import stays IMPORTING for `import_polls` get_image calls; the work request percent follows
+        self.import_polls_left[iid] = self.f.import_polls
+        total = max(1, self.f.import_polls)
+        wr_id = self.f.work_requests.add(
+            "CreateImage", details.compartment_id, iid, self.f.import_errors, self.f.import_logs,
+            percent=lambda: 100.0 * (total - self.import_polls_left.get(iid, 0)) / total)
         return Resp(img, headers={"opc-work-request-id": wr_id})
 
     def get_image(self, iid):
         img = self.images[iid]
+        if self.import_polls_left.get(iid, 0) > 0:
+            self.import_polls_left[iid] -= 1
+            return Resp(img)
         nxt = self.pending_transitions.pop(iid, None)
         if nxt:
             img.lifecycle_state = nxt
@@ -310,13 +318,24 @@ class FakeWorkRequests:
         self.by_resource: dict[str, list[NS]] = {}  # resource id -> work request summaries
         self.error: Optional[Exception] = None  # raised on every lookup when set (e.g. missing policy)
 
-    def add(self, operation: str, compartment_id: str, resource_id: str, errors: list, logs: list = ()) -> str:
+    def add(self, operation: str, compartment_id: str, resource_id: str, errors: list, logs: list = (),
+            percent: Optional[Callable[[], float]] = None) -> str:
         wr_id = oid("coreservicesworkrequest")
         self.requests[wr_id] = (list(errors), list(logs))
         self.by_resource.setdefault(resource_id, []).append(
             NS(id=wr_id, operation_type=operation, compartment_id=compartment_id,
-               status="FAILED" if errors else "SUCCEEDED"))
+               status="FAILED" if errors else "SUCCEEDED", percent=percent))
         return wr_id
+
+    def get_work_request(self, work_request_id, **kw):
+        """Like OCI: ``percent_complete`` grows while the operation runs, ``status`` ends SUCCEEDED/FAILED."""
+        if self.error:
+            raise self.error
+        wr = next(w for ws in self.by_resource.values() for w in ws if w.id == work_request_id)
+        pct = wr.percent() if wr.percent else 100.0
+        status = wr.status if pct >= 100 else "IN_PROGRESS"
+        return Resp(NS(id=wr.id, operation_type=wr.operation_type, compartment_id=wr.compartment_id,
+                       status=status, percent_complete=pct))
 
     def list_work_requests(self, compartment_id, resource_id=None, **kw):
         if self.error:
@@ -400,6 +419,7 @@ class FakeOci:
         self.import_outcome = "AVAILABLE"
         self.import_errors: list[tuple[str, str]] = []
         self.import_logs: list[str] = []
+        self.import_polls = 0  # >0: the image stays IMPORTING that many polls, work request percent grows
         # instance launch outcome (state reached after PROVISIONING) and work request errors
         self.launch_outcome = "RUNNING"
         self.launch_errors: list[tuple[str, str]] = []

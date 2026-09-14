@@ -82,6 +82,7 @@ td.ocid { font-family: Consolas, monospace; font-size: 11px; word-break: break-a
 
 .job-head { display: flex; gap: 10px; align-items: baseline; margin-bottom: 8px; }
 .transfer { font-size: 13px; margin: -4px 0 8px; font-variant-numeric: tabular-nums; }
+.transfer .bar { margin-top: 4px; }
 .phase { font-weight: 600; padding: 2px 8px; border-radius: 10px; background: #e3eef5; color: var(--primary); text-decoration: none; font-size: 12px; }
 .phase.COMPLETED { background: #e3f5e6; color: var(--ok); }
 .phase.FAILED, .phase.CANCELLED { background: #fbe5e1; color: var(--danger); }

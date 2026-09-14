@@ -90,8 +90,12 @@
             <select name="availability_domain" required></select>
             <small>Must match the helper VM's availability domain (boot volumes are AD-local).</small>
           </label>
+          <label>VCN
+            <select name="vcn_id" required></select>
+          </label>
           <label>Subnet
             <select name="subnet_id" required></select>
+            <small id="subnet-hint"></small>
           </label>
           <label>Shape
             <select name="shape"></select>

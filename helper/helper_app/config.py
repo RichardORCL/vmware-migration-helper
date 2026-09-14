@@ -71,10 +71,6 @@ class Settings(BaseSettings):
     skip_zero_grains: bool = True
 
     @property
-    def seed_compartment(self) -> str:
-        return self.seed_compartment_id or self.compartment_id
-
-    @property
     def nfc_host(self) -> str:
         return self.nfc_host_override or self.vcenter_host
 

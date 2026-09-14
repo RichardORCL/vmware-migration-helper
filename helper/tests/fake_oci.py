@@ -262,12 +262,28 @@ class FakeIdentity:
 
 
 class FakeNetwork:
+    vcns = {
+        "ocid1.vcn.oc1..1": NS(id="ocid1.vcn.oc1..1", display_name="vcn-main", cidr_blocks=["10.0.0.0/16"]),
+        "ocid1.vcn.oc1..2": NS(id="ocid1.vcn.oc1..2", display_name="vcn-dmz", cidr_blocks=["192.168.0.0/24"]),
+        "ocid1.vcn.oc1..shared": NS(id="ocid1.vcn.oc1..shared", display_name="vcn-shared", cidr_blocks=["172.16.0.0/16"]),
+    }
+
     def list_vcns(self, compartment_id, **kw):
-        return Resp([NS(id="ocid1.vcn.oc1..1", display_name="vcn-main")])
+        # vcn-shared lives in another compartment; only its subnet is visible here
+        return Resp([v for k, v in self.vcns.items() if k != "ocid1.vcn.oc1..shared"])
+
+    def get_vcn(self, vcn_id):
+        return Resp(self.vcns[vcn_id])
 
     def list_subnets(self, compartment_id, **kw):
-        return Resp([NS(id="ocid1.subnet.oc1..1", display_name="private", vcn_id="ocid1.vcn.oc1..1",
-                        cidr_block="10.0.1.0/24", availability_domain=None, prohibit_public_ip_on_vnic=True)])
+        return Resp([
+            NS(id="ocid1.subnet.oc1..1", display_name="private", vcn_id="ocid1.vcn.oc1..1",
+               cidr_block="10.0.1.0/24", availability_domain=None, prohibit_public_ip_on_vnic=True),
+            NS(id="ocid1.subnet.oc1..2", display_name="public", vcn_id="ocid1.vcn.oc1..2",
+               cidr_block="192.168.0.0/25", availability_domain=None, prohibit_public_ip_on_vnic=False),
+            NS(id="ocid1.subnet.oc1..3", display_name="app", vcn_id="ocid1.vcn.oc1..shared",
+               cidr_block="172.16.1.0/24", availability_domain=None, prohibit_public_ip_on_vnic=True),
+        ])
 
 
 class FakeOci:

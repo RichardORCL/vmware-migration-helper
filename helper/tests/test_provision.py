@@ -76,6 +76,7 @@ def test_prepare_linux_two_disks(env):
 
     # seed image created with CUSTOM launch mode, VMDK placeholder, OS metadata and capability schema
     img = fake.compute.images[job.seed_image_id]
+    assert img.compartment_id == fake.identity.compartment_id  # helper compartment from discovered identity
     assert img.launch_mode == "CUSTOM"
     assert img.source_image_type == "VMDK"
     assert (img.operating_system, img.operating_system_version) == ("Oracle Linux", "8")

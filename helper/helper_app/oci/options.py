@@ -1,4 +1,4 @@
-"""Inventory lookups feeding the plugin UI dropdowns."""
+"""OCI inventory lookups feeding the target form in the web UI."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import logging
 from typing import Optional
 
 from helper_app.config import Settings
-from helper_app.models import OciCompartment, OciOptions, OciShape, OciSubnet
+from helper_app.models import OciCompartment, OciOptions, OciShape, OciSubnet, OciVcn
 from helper_app.oci.clients import OciClients
 
 log = logging.getLogger(__name__)
@@ -58,22 +58,44 @@ def list_availability_domains(c: OciClients) -> list[str]:
     return [a.name for a in ads]
 
 
-def list_subnets(c: OciClients, compartment_id: str) -> list[OciSubnet]:
-    vcns = {v.id: v.display_name for v in _all(c.network.list_vcns, compartment_id=compartment_id,
-                                                lifecycle_state="AVAILABLE")}
-    subnets = _all(c.network.list_subnets, compartment_id=compartment_id, lifecycle_state="AVAILABLE")
-    return [
-        OciSubnet(
-            id=s.id,
-            name=s.display_name,
-            vcn_id=s.vcn_id,
-            vcn_name=vcns.get(s.vcn_id, ""),
-            cidr_block=s.cidr_block or "",
-            availability_domain=s.availability_domain,
-            prohibit_public_ip=bool(s.prohibit_public_ip_on_vnic),
-        )
-        for s in subnets
+def list_vcns(c: OciClients, compartment_id: str) -> list[OciVcn]:
+    vcns = _all(c.network.list_vcns, compartment_id=compartment_id, lifecycle_state="AVAILABLE")
+    result = [
+        OciVcn(id=v.id, name=v.display_name,
+               cidr_blocks=list(getattr(v, "cidr_blocks", None) or ([v.cidr_block] if getattr(v, "cidr_block", None)
+                                                                     else [])))
+        for v in vcns
     ]
+    return sorted(result, key=lambda v: v.name.lower())
+
+
+def list_subnets(c: OciClients, compartment_id: str, vcns: list[OciVcn]) -> list[OciSubnet]:
+    """Subnets in ``compartment_id``; VCN names resolved from ``vcns`` (a subnet may live in another
+    compartment than its VCN, so unknown VCNs are looked up individually)."""
+    names = {v.id: v.name for v in vcns}
+    subnets = _all(c.network.list_subnets, compartment_id=compartment_id, lifecycle_state="AVAILABLE")
+    for s in subnets:
+        if s.vcn_id not in names:
+            try:
+                names[s.vcn_id] = c.network.get_vcn(s.vcn_id).data.display_name
+            except Exception as exc:  # noqa: BLE001
+                log.debug("cannot resolve VCN %s: %s", s.vcn_id, exc)
+                names[s.vcn_id] = ""
+    return sorted(
+        (
+            OciSubnet(
+                id=s.id,
+                name=s.display_name,
+                vcn_id=s.vcn_id,
+                vcn_name=names.get(s.vcn_id, ""),
+                cidr_block=s.cidr_block or "",
+                availability_domain=s.availability_domain,
+                prohibit_public_ip=bool(s.prohibit_public_ip_on_vnic),
+            )
+            for s in subnets
+        ),
+        key=lambda s: (s.vcn_name.lower(), s.name.lower()),
+    )
 
 
 def list_flex_shapes(c: OciClients, compartment_id: str, availability_domain: str) -> list[OciShape]:
@@ -100,6 +122,7 @@ def list_flex_shapes(c: OciClients, compartment_id: str, availability_domain: st
 def build_options(c: OciClients, settings: Settings, compartment_id: Optional[str] = None) -> OciOptions:
     ident = c.identity_info
     comp = compartment_id or ident.compartment_id
+    vcns = list_vcns(c, comp)
     return OciOptions(
         region=ident.region,
         helper_instance_id=ident.instance_id,
@@ -108,6 +131,7 @@ def build_options(c: OciClients, settings: Settings, compartment_id: Optional[st
         default_shape=settings.default_shape,
         compartments=list_compartments(c),
         availability_domains=list_availability_domains(c),
-        subnets=list_subnets(c, comp),
+        vcns=vcns,
+        subnets=list_subnets(c, comp, vcns),
         shapes=list_flex_shapes(c, comp, ident.availability_domain),
     )

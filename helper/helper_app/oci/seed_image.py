@@ -30,6 +30,11 @@ class SeedImageService:
         self.c = clients
         self.s = settings
 
+    @property
+    def seed_compartment(self) -> str:
+        """Configured seed compartment, else the helper's own (discovered from the instance metadata)."""
+        return self.s.seed_compartment_id or self.c.identity_info.compartment_id
+
     # ------------------------------------------------------------------ public
     def get_or_create(self, os_meta: OsMetadata, firmware: str, launch_options: LaunchOptionsSpec) -> str:
         tags = seed_image_tags(os_meta, firmware)
@@ -44,7 +49,7 @@ class SeedImageService:
 
         images = oci.pagination.list_call_get_all_results(
             self.c.compute.list_images,
-            compartment_id=self.s.seed_compartment,
+            compartment_id=self.seed_compartment,
             lifecycle_state="AVAILABLE",
         ).data
         for img in images:
@@ -70,7 +75,7 @@ class SeedImageService:
 
         try:
             details = M.CreateImageDetails(
-                compartment_id=self.s.seed_compartment,
+                compartment_id=self.seed_compartment,
                 display_name=display,
                 launch_mode="CUSTOM",
                 freeform_tags=tags,
@@ -108,7 +113,7 @@ class SeedImageService:
 
         deleted: list[str] = []
         images = oci.pagination.list_call_get_all_results(
-            self.c.compute.list_images, compartment_id=self.s.seed_compartment
+            self.c.compute.list_images, compartment_id=self.seed_compartment
         ).data
         for img in images:
             if (img.freeform_tags or {}).get(SEED_TAG) == "true" and img.lifecycle_state != "DELETED":
@@ -128,7 +133,7 @@ class SeedImageService:
                 raise
         self.c.object_storage.create_bucket(
             namespace,
-            create_bucket_details_cls(name=self.s.seed_bucket, compartment_id=self.s.seed_compartment,
+            create_bucket_details_cls(name=self.s.seed_bucket, compartment_id=self.seed_compartment,
                                       public_access_type="NoPublicAccess"),
         )
 
@@ -166,7 +171,7 @@ class SeedImageService:
             "Compute.SecureBoot": boolean(False),
         }
         details = M.CreateComputeImageCapabilitySchemaDetails(
-            compartment_id=self.s.seed_compartment,
+            compartment_id=self.seed_compartment,
             compute_global_image_capability_schema_version_name=self._global_schema_version_name(),
             image_id=image_id,
             display_name=f"{display}-capabilities",

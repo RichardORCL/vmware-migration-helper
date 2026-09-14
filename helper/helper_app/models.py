@@ -242,6 +242,12 @@ class OciCompartment(BaseModel):
     path: str = ""
 
 
+class OciVcn(BaseModel):
+    id: str
+    name: str
+    cidr_blocks: list[str] = Field(default_factory=list)
+
+
 class OciSubnet(BaseModel):
     id: str
     name: str
@@ -269,5 +275,6 @@ class OciOptions(BaseModel):
     default_shape: str
     compartments: list[OciCompartment]
     availability_domains: list[str]
+    vcns: list[OciVcn]
     subnets: list[OciSubnet]
     shapes: list[OciShape]

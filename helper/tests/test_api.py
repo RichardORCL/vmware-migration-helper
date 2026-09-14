@@ -148,6 +148,13 @@ def test_vm_list_and_inspect(env):
 
     r = c.get("/api/oci/options")
     assert r.status_code == 200 and r.json()["helper_availability_domain"] == AD
+    opts = r.json()
+    assert [v["name"] for v in opts["vcns"]] == ["vcn-dmz", "vcn-main"]
+    assert opts["vcns"][1]["cidr_blocks"] == ["10.0.0.0/16"]
+    # subnet -> VCN association, including a VCN that lives in another compartment
+    by_subnet = {s["name"]: s for s in opts["subnets"]}
+    assert by_subnet["private"]["vcn_id"] == "ocid1.vcn.oc1..1" and by_subnet["private"]["vcn_name"] == "vcn-main"
+    assert by_subnet["app"]["vcn_name"] == "vcn-shared"
 
 
 # --------------------------------------------------------------------------- migration

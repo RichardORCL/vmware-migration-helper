@@ -255,11 +255,28 @@
     for (const c of options.compartments) sel("compartment_id").append(el("option", { value: c.id }, c.path || c.name));
     for (const ad of options.availability_domains) sel("availability_domain").append(el("option", { value: ad }, ad + (ad === options.helper_availability_domain ? " (helper)" : "")));
     sel("availability_domain").value = options.helper_availability_domain;
-    const fillSubnets = (subnets) => {
+    // VCN -> subnet: the subnet list is filtered by the selected VCN
+    let netOptions = options;
+    const fillSubnets = () => {
+      const vcnId = sel("vcn_id").value;
+      const subnets = netOptions.subnets.filter((s) => s.vcn_id === vcnId);
       sel("subnet_id").innerHTML = "";
-      for (const s of subnets) sel("subnet_id").append(el("option", { value: s.id }, `${s.vcn_name ? s.vcn_name + " / " : ""}${s.name} (${s.cidr_block})${s.prohibit_public_ip ? " private" : ""}`));
+      for (const s of subnets) sel("subnet_id").append(el("option", { value: s.id }, `${s.name} (${s.cidr_block})${s.prohibit_public_ip ? ", private" : ""}${s.availability_domain ? ", " + s.availability_domain : ""}`));
+      document.getElementById("subnet-hint").textContent = subnets.length ? "" : (vcnId ? "No subnets in this VCN within the selected compartment." : "Select a VCN first.");
     };
-    fillSubnets(options.subnets);
+    const fillNetworks = (o) => {
+      netOptions = o;
+      const vcnSel = sel("vcn_id");
+      const previous = vcnSel.value;
+      vcnSel.innerHTML = "";
+      for (const v of o.vcns) vcnSel.append(el("option", { value: v.id }, `${v.name}${v.cidr_blocks.length ? " (" + v.cidr_blocks.join(", ") + ")" : ""}`));
+      // VCNs that only show up through their subnets (VCN in another compartment)
+      for (const s of o.subnets) if (!o.vcns.some((v) => v.id === s.vcn_id) && ![...vcnSel.options].some((op) => op.value === s.vcn_id)) vcnSel.append(el("option", { value: s.vcn_id }, s.vcn_name || s.vcn_id));
+      if ([...vcnSel.options].some((op) => op.value === previous)) vcnSel.value = previous;
+      fillSubnets();
+    };
+    sel("vcn_id").addEventListener("change", fillSubnets);
+    fillNetworks(options);
     sel("shape").append(el("option", { value: "" }, `${options.default_shape} (default)`));
     for (const s of options.shapes) if (s.name !== options.default_shape) sel("shape").append(el("option", { value: s.name }, s.name));
     document.getElementById("shape-hint").textContent = `Sized to ${Math.max(1, Math.ceil(vm.num_cpu / 2))} OCPU / ${Math.max(1, Math.ceil(vm.memory_mb / 1024))} GB from the source VM.`;
@@ -269,7 +286,8 @@
     if (options.compartments.some((c) => c.id === options.helper_compartment_id)) sel("compartment_id").value = options.helper_compartment_id;
     else if (options.compartments.length) sel("compartment_id").selectedIndex = 0;
     sel("compartment_id").addEventListener("change", async () => {
-      try { const o = await api("GET", `/oci/options?compartment_id=${encodeURIComponent(sel("compartment_id").value)}`); fillSubnets(o.subnets); }
+      formError.textContent = "";
+      try { fillNetworks(await api("GET", `/oci/options?compartment_id=${encodeURIComponent(sel("compartment_id").value)}`)); }
       catch (e) { formError.textContent = e.message; }
     });
 

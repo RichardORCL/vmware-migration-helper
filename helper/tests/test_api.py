@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import threading
 import time
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -12,6 +14,7 @@ from helper_app.disk.vmdk_stream import encode_raw_bytes
 from helper_app.jobs.store import JobStore, utcnow
 from helper_app.main import create_app
 from helper_app.models import Job, JobPhase
+from helper_app.updater import Updater
 from helper_app.vsphere.inventory import vm_spec_from_vm
 
 from .fake_oci import FakeOci
@@ -55,7 +58,14 @@ class Env:
         self.settings = Settings(device_prefix=str(tmp_path / "dev" / "oraclevd"), db_path=str(tmp_path / "jobs.db"),
                                  seed_bucket="vc-oci-seed", launch_timeout_s=5, volume_timeout_s=5,
                                  image_import_timeout_s=5, min_volume_gb=1, cookie_secure=False,
-                                 vcenter_host="vc.test", disk_retry_attempts=3, max_concurrent_jobs=2)
+                                 vcenter_host="vc.test", disk_retry_attempts=3, max_concurrent_jobs=2,
+                                 update_source_dir=str(tmp_path / "src"), update_venv_dir=str(tmp_path / "venv"),
+                                 update_log_path=str(tmp_path / "update.log"))
+        self.commands: list[list[str]] = []  # commands the updater would run
+        self.command_results: dict[tuple[str, ...], tuple[int, str]] = {}
+        self.http_calls: list[str] = []
+        self.remote_head = ("bbbb2222" * 5, "2026-09-14T20:00:00Z", "Add VCN selection")
+        self.nfc_hosts: list[str] = []
         self.fake = FakeOci(self.settings.device_prefix)
         sizes = {0: 2 * MIB, 1: MIB}
         self.raws = {i: make_raw(s, seed=10 + i) for i, s in sizes.items()}
@@ -71,10 +81,50 @@ class Env:
         self.vcenter = FakeVCenterConnector(self.vms)
         self.store = store or JobStore(self.settings.db_path)
         FakeExport.instances.clear()
+        self.updater = Updater(self.settings, runner=self._run_command, http_get=self._http_get)
+
+        def export_factory(vm, nfc_host):
+            self.nfc_hosts.append(nfc_host)
+            return FakeExport(vm, payloads, fail_once=set(fail_once), block_event=block_event)
+
         self.app = create_app(
             settings=self.settings, clients=self.fake.clients(), store=self.store, vcenter=self.vcenter,
-            export_factory=lambda vm: FakeExport(vm, payloads, fail_once=set(fail_once), block_event=block_event),
+            export_factory=export_factory, updater=self.updater,
         )
+
+    # -- fake git / systemd for the updater
+    LOCAL_HEAD = "aaaa1111" * 5
+
+    def install_from_source(self):
+        (Path(self.settings.update_source_dir) / ".git").mkdir(parents=True)
+
+    def _run_command(self, args, timeout):
+        self.commands.append(list(args))
+        for prefix, result in self.command_results.items():  # test overrides, keyed by command prefix
+            if tuple(args[: len(prefix)]) == prefix:
+                return result
+        if args[0] == "git":
+            sub = args[3]
+            if sub == "symbolic-ref":
+                return 0, "main\n"
+            if sub == "remote":
+                return 0, "https://github.com/acme/vCenter-OCI.git\n"
+            if sub == "log":
+                return 0, f"{self.LOCAL_HEAD}\x002026-09-13T10:00:00+02:00\x00Fix seed compartment\n"
+            if sub == "ls-remote":
+                return 0, f"{self.remote_head[0]}\trefs/heads/main\n"
+            return 0, ""
+        if args[0] == "systemctl":  # is-active vc-oci-helper-update
+            return 3, "inactive\n"
+        if args[0] == "systemd-run":
+            return 0, ""
+        return 127, f"{args[0]}: not found"
+
+    def _http_get(self, url, headers):
+        self.http_calls.append(url)
+        sha, date, subject = self.remote_head
+        return SimpleNamespace(status_code=200, json=lambda: {"sha": sha, "commit": {"committer": {"date": date},
+                                                                                      "message": subject + "\n\nbody"}})
 
 
 @pytest.fixture
@@ -122,6 +172,116 @@ def test_login_required_and_public_endpoints(env):
     assert c.post("/api/auth/logout").status_code == 204
     assert c.get("/api/auth/me").status_code == 401
     assert env.vcenter.sessions[0].closed  # no job pinned the session, so vCenter was disconnected
+
+
+def test_login_to_another_vcenter(env):
+    c = env.client
+    me = login(c, vcenter_host="vc-dr.example.com:8443")
+    assert (me["vcenter_host"], me["vcenter_port"]) == ("vc-dr.example.com", 8443)
+    assert c.get("/api/auth/me").json()["vcenter_host"] == "vc-dr.example.com"
+    # the NFC download of a migration goes to that vCenter, not to the configured default
+    r = c.post("/api/jobs", json={"vm_moid": "vm-101", "target": target()})
+    assert r.status_code == 202, r.text
+    assert wait_phase(c, r.json()["id"], "COMPLETED", "FAILED")["phase"] == "COMPLETED"
+    assert env.nfc_hosts == ["vc-dr.example.com"]
+
+    me = login(c, vcenter_host="https://10.1.2.3/")
+    assert (me["vcenter_host"], me["vcenter_port"]) == ("10.1.2.3", 443)
+    assert login(c, vcenter_host="")["vcenter_host"] == "vc.test"  # empty -> configured default
+    r = c.post("/api/auth/login", json={**USER, "vcenter_host": "bad host;rm"})
+    assert r.status_code == 502 and "invalid vCenter server" in r.text
+
+
+def test_parse_vcenter_address():
+    from helper_app.vsphere.session import VCenterError, parse_vcenter_address
+
+    assert parse_vcenter_address("", "vc.test", 443) == ("vc.test", 443)
+    assert parse_vcenter_address(" vc1.lab ", "vc.test", 443) == ("vc1.lab", 443)
+    assert parse_vcenter_address("vc1.lab:8443", "vc.test", 443) == ("vc1.lab", 8443)
+    assert parse_vcenter_address("https://vc1.lab:9443/ui", "vc.test", 443) == ("vc1.lab", 9443)
+    assert parse_vcenter_address("[fd00::1]:444", "vc.test", 443) == ("[fd00::1]", 444)
+    for bad in ("vc1.lab:abc", "vc1.lab:0", "a b", "-x", ""):
+        with pytest.raises(VCenterError):
+            parse_vcenter_address(bad, "" if bad == "" else "vc.test", 443)
+
+
+# --------------------------------------------------------------------------- setup / self-update
+def test_setup_info_and_software_status_without_source_install(env):
+    c = env.client
+    assert c.get("/api/setup/info").status_code == 401
+    login(c)
+    info = c.get("/api/setup/info").json()
+    assert info["default_vcenter"] == "vc.test:443" and info["region"] == "eu-frankfurt-1" and info["sessions"] == 1
+    sw = c.get("/api/setup/software").json()
+    assert sw["install_method"] == "none" and sw["can_update"] is False and "not installed from source" in sw["reason"]
+    assert c.post("/api/setup/software/update", json={}).status_code == 409
+    assert not any(cmd[0] == "systemd-run" for cmd in env.commands)
+
+
+def test_software_update_from_github(env):
+    c = env.client
+    env.install_from_source()
+    login(c)
+    sw = c.get("/api/setup/software").json()
+    assert sw["install_method"] == "source" and sw["branch"] == "main"
+    assert sw["repo_url"] == "https://github.com/acme/vCenter-OCI"
+    assert sw["commit"] == env.LOCAL_HEAD and sw["latest_commit"] == env.remote_head[0]
+    assert sw["latest_subject"] == "Add VCN selection" and sw["update_available"] is True and sw["can_update"] is True
+    assert env.http_calls == ["https://api.github.com/repos/acme/vCenter-OCI/commits/main"]
+
+    # GitHub unreachable -> git ls-remote fallback (no subject/date but still a comparison)
+    env._http_get = lambda url, headers: (_ for _ in ()).throw(ConnectionError("offline"))
+    env.updater._http_get = env._http_get
+    sw = c.get("/api/setup/software").json()
+    assert sw["latest_commit"] == env.remote_head[0] and sw["update_available"] is True and sw["latest_subject"] == ""
+
+    # up to date when the remote head equals the local one
+    env.remote_head = (env.LOCAL_HEAD, "", "")
+    assert c.get("/api/setup/software").json()["update_available"] is False
+
+    r = c.post("/api/setup/software/update", json={})
+    assert r.status_code == 202, r.text
+    run = [cmd for cmd in env.commands if cmd[0] == "systemd-run"]
+    assert len(run) == 1 and "vc-oci-helper-update" in run[0]
+    script = run[0][-1]
+    src = env.settings.update_source_dir
+    assert f"git -C {src} fetch" in script.replace("'", "") and "reset --hard origin/main" in script
+    assert f"{env.settings.update_venv_dir}/bin/pip install".replace("'", "") in script.replace("'", "")
+    assert "systemctl restart vc-oci-helper" in script and "UPDATE FAILED" in script
+    # steps are chained so a failure aborts the rest
+    assert script.count(" &&\n") >= 5
+
+    # while the transient unit is active, the status says so and a second update is refused
+    env.command_results[("systemctl", "is-active")] = (0, "activating\n")
+    sw = c.get("/api/setup/software?check=false").json()
+    assert sw["update_running"] is True and sw["can_update"] is False
+    assert c.post("/api/setup/software/update", json={}).status_code == 409
+    del env.command_results[("systemctl", "is-active")]
+    # systemd refuses a duplicate unit
+    env.command_results[("systemd-run",)] = (1, "Failed to start transient service unit: Unit vc-oci-helper-update.service already exists.")
+    r = c.post("/api/setup/software/update", json={})
+    assert r.status_code == 409 and "already running" in r.text
+
+
+def test_software_update_refused_while_migrating(tmp_path, fast_retries):
+    gate = threading.Event()
+    env = Env(tmp_path, fail_once=frozenset(), block_event=gate)
+    env.install_from_source()
+    with TestClient(env.app) as c:
+        login(c)
+        r = c.post("/api/jobs", json={"vm_moid": "vm-101", "target": target()})
+        assert r.status_code == 202
+        job_id = r.json()["id"]
+        wait_until(lambda: c.get(f"/api/jobs/{job_id}").json()["disks"][0]["status"] == "COPYING", what="copying")
+        sw = c.get("/api/setup/software?check=false").json()
+        assert sw["active_jobs"] == 1 and sw["can_update"] is False and "migration(s) running" in sw["reason"]
+        assert c.post("/api/setup/software/update", json={}).status_code == 409
+        assert not any(cmd[0] == "systemd-run" for cmd in env.commands)
+        # ... unless forced
+        assert c.post("/api/setup/software/update", json={"force": True}).status_code == 202
+        assert any(cmd[0] == "systemd-run" for cmd in env.commands)
+        gate.set()
+        wait_phase(c, job_id, "COMPLETED", "FAILED")
 
 
 # --------------------------------------------------------------------------- inventory

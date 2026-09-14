@@ -61,7 +61,7 @@
     state.me = me;
     nav.hidden = !me;
     userBox.hidden = !me;
-    if (me) userBox.querySelector("[data-username]").textContent = `${me.username} @ ${me.vcenter_host}`;
+    if (me) userBox.querySelector("[data-username]").textContent = `${me.username} @ ${me.vcenter_host}${me.vcenter_port && me.vcenter_port !== 443 ? ":" + me.vcenter_port : ""}`;
   }
 
   async function showLogin() {
@@ -72,21 +72,38 @@
     const form = document.getElementById("login-form");
     const err = document.getElementById("login-error");
     const btn = document.getElementById("login-btn");
+    // recently used vCenters live in this browser only; the configured one is the default
+    const recent = recentVcenters();
+    const datalist = document.getElementById("vcenter-recent");
+    for (const h of recent) datalist.append(el("option", { value: h }));
     try {
       state.config = state.config || await api("GET", "/auth/config");
-      form.elements.vcenter.value = state.config.vcenter_host + (state.config.vcenter_port !== 443 ? ":" + state.config.vcenter_port : "");
-      if (!state.config.vcenter_host) err.textContent = "HELPER_VCENTER_HOST is not configured on the helper.";
+      const configured = state.config.vcenter_host ? state.config.vcenter_host + (state.config.vcenter_port !== 443 ? ":" + state.config.vcenter_port : "") : "";
+      if (configured && !recent.includes(configured)) datalist.append(el("option", { value: configured }));
+      form.elements.vcenter.value = recent[0] || configured;
     } catch (e) { err.textContent = e.message; }
+    if (form.elements.vcenter.value) form.elements.username.focus();
     form.addEventListener("submit", async (ev) => {
       ev.preventDefault();
       err.textContent = ""; btn.disabled = true;
+      const vcenter = form.elements.vcenter.value.trim();
       try {
-        const me = await api("POST", "/auth/login", { username: form.elements.username.value, password: form.elements.password.value });
+        const me = await api("POST", "/auth/login", { username: form.elements.username.value, password: form.elements.password.value, vcenter_host: vcenter });
+        rememberVcenter(vcenter);
         setUser(me);
         route();
       } catch (e) { err.textContent = e.message; }
       finally { btn.disabled = false; }
     });
+  }
+
+  function recentVcenters() {
+    try { return JSON.parse(localStorage.getItem("vcoci.recentVcenters") || "[]"); } catch (_) { return []; }
+  }
+  function rememberVcenter(host) {
+    if (!host) return;
+    const list = [host, ...recentVcenters().filter((h) => h !== host)].slice(0, 8);
+    try { localStorage.setItem("vcoci.recentVcenters", JSON.stringify(list)); } catch (_) { /* private mode */ }
   }
 
   document.getElementById("logout-btn").addEventListener("click", async () => {
@@ -365,6 +382,106 @@
     activePoll = pollJob(jobId, c);
   }
 
+  // --------------------------------------------------------------- setup view
+  async function setupView() {
+    app.innerHTML = "";
+    app.append(tpl("tpl-setup"));
+    const swKv = document.getElementById("sw-kv"); const swState = document.getElementById("sw-state");
+    const swErr = document.getElementById("sw-error"); const swBtn = document.getElementById("sw-update");
+    const swLog = document.getElementById("sw-log"); const swLogDetails = document.getElementById("sw-log-details");
+    const short = (sha) => (sha || "").slice(0, 10);
+    const when = (iso) => (iso ? new Date(iso).toLocaleString() : "");
+    let timer = null;
+    let watching = false; // update triggered: keep the page locked until the helper comes back
+    let lastRemote = {};  // latest_* fields survive refreshes done with check=false
+
+    const renderSoftware = (sw) => {
+      if (sw.latest_commit) lastRemote = { latest_commit: sw.latest_commit, latest_date: sw.latest_date, latest_subject: sw.latest_subject, update_available: sw.update_available };
+      else if (!sw.check_error) sw = { ...lastRemote, ...sw, latest_commit: lastRemote.latest_commit || "", latest_date: lastRemote.latest_date || "", latest_subject: lastRemote.latest_subject || "", update_available: lastRemote.update_available ?? null };
+      if (watching) sw = { ...sw, update_running: true, can_update: false, reason: "" };
+      const badge = sw.update_running ? el("span", { class: "badge warn" }, "update running")
+        : sw.update_available === true ? el("span", { class: "badge warn" }, "update available")
+        : sw.update_available === false ? el("span", { class: "badge ok" }, "up to date")
+        : el("span", { class: "badge" }, sw.install_method === "source" ? "unknown" : sw.install_method);
+      const rows = [["Installed version", `${sw.version}`], ["Status", badge]];
+      if (sw.install_method === "source") {
+        rows.push(["Installed commit", `${short(sw.commit)}${sw.commit_date ? " (" + when(sw.commit_date) + ")" : ""}${sw.commit_subject ? " - " + sw.commit_subject : ""}`]);
+        rows.push(["Latest on " + (sw.branch || "remote"), sw.latest_commit ? `${short(sw.latest_commit)}${sw.latest_date ? " (" + when(sw.latest_date) + ")" : ""}${sw.latest_subject ? " - " + sw.latest_subject : ""}` : (sw.check_error || "-")]);
+        rows.push(["Repository", sw.repo_url ? el("a", { href: sw.repo_url, target: "_blank", rel: "noopener" }, sw.repo_url) : sw.source_dir]);
+      }
+      kv(swKv, rows);
+      swErr.textContent = sw.can_update ? "" : (sw.reason || "");
+      swBtn.hidden = sw.install_method !== "source";
+      swBtn.disabled = !sw.can_update;
+      swBtn.textContent = sw.update_available === false ? "Reinstall current version" : "Update now";
+      swLogDetails.hidden = !sw.log;
+      swLog.textContent = sw.log || "";
+      if (sw.update_running) { swLogDetails.open = true; swLog.scrollTop = swLog.scrollHeight; }
+      return sw;
+    };
+
+    const loadSoftware = async (check) => {
+      swState.textContent = check ? "Checking GitHub..." : "";
+      try { const sw = renderSoftware(await api("GET", "/setup/software?check=" + (check ? "true" : "false"))); swState.textContent = ""; return sw; }
+      catch (e) { if (e.status !== 401) swErr.textContent = e.message; swState.textContent = ""; return null; }
+    };
+
+    // after the update is triggered the service restarts: watch /api/health until the commit changes,
+    // then send the user back to the login page (sessions do not survive a restart)
+    const watchRestart = (oldCommit) => {
+      const started = Date.now();
+      const tick = async () => {
+        try {
+          const r = await fetch("../api/health", { cache: "no-store" });
+          if (r.ok) {
+            const h = await r.json();
+            if (h.commit && h.commit !== oldCommit) { swState.textContent = `Updated to ${short(h.commit)}; please log in again.`; setTimeout(showLogin, 1500); return; }
+          }
+        } catch (_) { swState.textContent = "Helper is restarting..."; }
+        if (Date.now() - started > 15 * 60 * 1000) { swState.textContent = "The update is taking unusually long; check the update log or the service journal."; return; }
+        const sw = await loadSoftware(false).catch(() => null);
+        if (sw) swState.textContent = "Update running; waiting for the helper to restart...";
+        if (sw && sw.log && /UPDATE FAILED/.test(sw.log.split("update started").pop())) { watching = false; renderSoftware(sw); swState.textContent = "The update failed; see the log."; return; }
+        timer = setTimeout(tick, 3000);
+      };
+      timer = setTimeout(tick, 3000);
+    };
+
+    swBtn.addEventListener("click", async () => {
+      const sw = await loadSoftware(false);
+      if (!sw) return;
+      const msg = sw.update_available ? "Update the helper to the latest version from GitHub and restart the service?" : "Reinstall the current version and restart the service?";
+      if (!confirm(msg + "\n\nAll users will have to log in again.")) return;
+      swBtn.disabled = true; swErr.textContent = "";
+      try { const r = await api("POST", "/setup/software/update", {}); watching = true; renderSoftware(r); swState.textContent = "Update started..."; watchRestart(sw.commit); }
+      catch (e) { swErr.textContent = e.message; swBtn.disabled = false; }
+    });
+    document.getElementById("sw-check").addEventListener("click", () => loadSoftware(true));
+
+    document.getElementById("seed-cleanup").addEventListener("click", async (ev) => {
+      const out = document.getElementById("seed-result");
+      if (!confirm("Delete all seed images and their staging objects?")) return;
+      ev.target.disabled = true; out.textContent = "Deleting...";
+      try { const r = await api("DELETE", "/seed-images"); out.textContent = `Deleted ${r.deleted.length} object(s).`; }
+      catch (e) { out.textContent = e.message; } finally { ev.target.disabled = false; }
+    });
+
+    try {
+      const info = await api("GET", "/setup/info");
+      kv(document.getElementById("setup-kv"), [
+        ["Version", info.version + (info.commit ? ` (${short(info.commit)})` : "")],
+        ["Region / AD", `${info.region} / ${info.availability_domain}`],
+        ["Instance", info.instance_id], ["Compartment", info.compartment_id],
+        ["Default vCenter", info.default_vcenter || "(none)"], ["Verify vCenter TLS", info.vcenter_verify_ssl ? "yes" : "no"],
+        ["Seed image bucket", info.seed_bucket], ["Default shape", info.default_shape],
+        ["Concurrent migrations", String(info.max_concurrent_jobs)], ["Session idle timeout", `${Math.round(info.session_ttl_s / 3600)} h`],
+        ["Logged-in sessions", String(info.sessions)], ["Running migrations", String(info.active_jobs)],
+      ]);
+    } catch (e) { if (e.status !== 401) showError(e.message); return; }
+    await loadSoftware(true);
+    activePoll = () => clearTimeout(timer);
+  }
+
   // ------------------------------------------------------------------- routing
   async function route() {
     stopPolling();
@@ -377,6 +494,7 @@
     if ((m = /^#\/export\/(.+)$/.exec(hash))) return exportView(decodeURIComponent(m[1]));
     if ((m = /^#\/jobs\/(.+)$/.exec(hash))) return jobDetailView(decodeURIComponent(m[1]));
     if (hash === "#/jobs") return jobsView();
+    if (hash === "#/setup") return setupView();
     return vmsView();
   }
 

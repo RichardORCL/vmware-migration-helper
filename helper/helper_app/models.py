@@ -223,11 +223,14 @@ class LicenseUpdateRequest(BaseModel):
 class LoginRequest(BaseModel):
     username: str
     password: str
+    vcenter_host: str = ""  # defaults to HELPER_VCENTER_HOST; may be "host" or "host:port"
+    vcenter_port: Optional[int] = Field(default=None, ge=1, le=65535)
 
 
 class SessionInfo(BaseModel):
     username: str
     vcenter_host: str
+    vcenter_port: int = 443
     vcenter_version: str = ""
     created_at: datetime
     expires_at: datetime

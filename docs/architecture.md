@@ -14,11 +14,14 @@ which VM, OCI IAM (instance principal + dynamic group policy) decides what the h
 
 ## Authentication and sessions
 
-- `POST /api/auth/login` calls `SmartConnect` against `HELPER_VCENTER_HOST` with the submitted
-  user name/password. On success the helper stores the pyVmomi `ServiceInstance` in a
-  `UserSession` and sets an opaque, HttpOnly, SameSite=strict cookie (`vcoci_session`).
-- Every `/api/vms/*`, `/api/jobs/*` and `/api/oci/*` request requires that cookie; `/api/health`
-  and `/api/auth/config` are public.
+- `POST /api/auth/login` calls `SmartConnect` against the vCenter given on the login page
+  (`host[:port]`; default `HELPER_VCENTER_HOST`) with the submitted user name/password. On success
+  the helper stores the pyVmomi `ServiceInstance` together with that host in a `UserSession` and
+  sets an opaque, HttpOnly, SameSite=strict cookie (`vcoci_session`). One helper can therefore
+  serve several vCenters; each session (and the NFC download of the jobs it starts) is bound to the
+  vCenter it logged in to.
+- Every `/api/vms/*`, `/api/jobs/*`, `/api/oci/*` and `/api/setup/*` request requires that cookie;
+  `/api/health` and `/api/auth/config` are public.
 - Sessions expire after `HELPER_SESSION_TTL_S` (default 8 h) of inactivity or on logout.
 - A session that started a migration is **pinned** by the job: logout/expiry make the cookie
   unusable immediately, but the vCenter connection is only closed after the job has finished, so

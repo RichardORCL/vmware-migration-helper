@@ -15,13 +15,14 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from helper_app import __version__
-from helper_app.api import routes_auth, routes_jobs, routes_oci, routes_vms
+from helper_app.api import routes_auth, routes_jobs, routes_oci, routes_setup, routes_vms
 from helper_app.config import Settings, get_settings
 from helper_app.jobs.runner import MigrationRunner
 from helper_app.jobs.store import JobStore
 from helper_app.oci.clients import OciClients, build_clients
 from helper_app.oci.provision import Provisioner
 from helper_app.sessions import SessionStore
+from helper_app.updater import Updater
 from helper_app.vsphere.session import VCenterConnector
 
 log = logging.getLogger(__name__)
@@ -33,6 +34,7 @@ def create_app(
     store: Optional[JobStore] = None,
     vcenter: Optional[VCenterConnector] = None,
     export_factory=None,
+    updater: Optional[Updater] = None,
 ) -> FastAPI:
     settings = settings or get_settings()
 
@@ -44,6 +46,8 @@ def create_app(
         app.state.clients = clients or build_clients(settings)
         app.state.vcenter = vcenter or VCenterConnector(settings)
         app.state.sessions = SessionStore(settings.session_ttl_s)
+        app.state.updater = updater or Updater(settings)
+        app.state.commit = app.state.updater.local_state().get("commit", "")
         app.state.provisioner = Provisioner(app.state.clients, settings, app.state.store.put)
         app.state.runner = MigrationRunner(settings, app.state.store, app.state.provisioner,
                                            export_factory=export_factory)
@@ -63,11 +67,12 @@ def create_app(
     app.include_router(routes_vms.router)
     app.include_router(routes_jobs.router)
     app.include_router(routes_oci.router)
+    app.include_router(routes_setup.router)
 
     @app.get("/api/health")
     def health():
         ident = app.state.clients.identity_info
-        return {"status": "ok", "version": __version__, "instance_id": ident.instance_id,
+        return {"status": "ok", "version": __version__, "commit": app.state.commit, "instance_id": ident.instance_id,
                 "availability_domain": ident.availability_domain, "region": ident.region,
                 "vcenter_host": settings.vcenter_host}
 

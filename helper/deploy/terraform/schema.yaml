@@ -101,7 +101,7 @@ variables:
   vcenter_host:
     type: string
     title: "vCenter host"
-    description: "Host name or IP of vCenter Server as reachable from the helper subnet"
+    description: "Default vCenter Server (host name or IP as reachable from the helper subnet); users can enter another vCenter on the login page"
     required: true
 
   vcenter_port:

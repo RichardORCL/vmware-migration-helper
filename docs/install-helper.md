@@ -63,7 +63,10 @@ ssh opc@<helper-ip> curl -k -o /dev/null -w '%{http_code}\n' https://<vcenter-ho
 ```
 
 Then open `https://<helper-ip>:8443/` in a browser, accept the self-signed certificate and log in
-with your vCenter credentials. The VM list should show the inventory the account is allowed to see.
+with your vCenter credentials. The login page proposes the vCenter from the stack (`HELPER_VCENTER_HOST`)
+but accepts any other server (`host` or `host:port`) the helper can reach, so one helper serves
+several vCenters; the browser remembers the servers used last. The VM list should show the inventory
+the account is allowed to see.
 
 To replace the self-signed certificate, put your own into `/etc/vc-oci-helper/server.crt` /
 `server.key` and restart the unit.
@@ -72,9 +75,9 @@ To replace the self-signed certificate, put your own into `/etc/vc-oci-helper/se
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `HELPER_VCENTER_HOST` / `HELPER_VCENTER_PORT` | – / 443 | vCenter Server the UI logs in to |
+| `HELPER_VCENTER_HOST` / `HELPER_VCENTER_PORT` | – / 443 | Default vCenter Server offered on the login page (users may enter another one) |
 | `HELPER_VCENTER_VERIFY_SSL` | `false` | Verify the vCenter certificate |
-| `HELPER_NFC_HOST_OVERRIDE` | vCenter host | Host substituted for `*` in lease URLs (only when ESXi must be reached directly) |
+| `HELPER_NFC_HOST_OVERRIDE` | session's vCenter | Host substituted for `*` in lease URLs (only when ESXi must be reached directly) |
 | `HELPER_NFC_VERIFY_SSL` | `false` | Verify TLS on the NFC download |
 | `HELPER_NFC_CHUNK_BYTES` | `1048576` | Download chunk size |
 | `HELPER_LEASE_PROGRESS_INTERVAL_S` / `HELPER_LEASE_READY_TIMEOUT_S` | 60 / 300 | Lease keep-alive interval / time to wait for the lease |
@@ -93,10 +96,26 @@ To replace the self-signed certificate, put your own into `/etc/vc-oci-helper/se
 | `HELPER_SKIP_ZERO_GRAINS` | `true` | Do not write all-zero grains (fresh volumes read as zero) |
 | `HELPER_DB_PATH` | `/var/lib/vc-oci-helper/jobs.sqlite3` | Job database |
 | `HELPER_TLS_CERT_FILE` / `HELPER_TLS_KEY_FILE` | – | TLS material for 8443 |
+| `HELPER_UPDATE_SOURCE_DIR` / `HELPER_UPDATE_VENV_DIR` | `/opt/vc-oci/src` / `/opt/vc-oci/venv` | Git checkout and virtualenv used by the self-update |
+| `HELPER_UPDATE_SERVICE` / `HELPER_UPDATE_LOG_PATH` | `vc-oci-helper` / `/var/lib/vc-oci-helper/update.log` | systemd unit restarted after an update; update log shown in the UI |
+
+## Updating the helper
+
+The **Setup** tab compares the installed commit with the head of the branch the helper was installed
+from (`source_git_ref`, queried through the GitHub API, falling back to `git ls-remote`) and offers
+**Update now**. The update runs as a transient systemd unit (`vc-oci-helper-update`) on the VM:
+`git fetch` + `reset --hard origin/<branch>`, `pip install` of the `helper` package into the
+virtualenv, then `systemctl restart vc-oci-helper`. All web sessions end with the restart; the page
+waits for the new version and returns to the login screen. The update is refused while migrations
+are running (the restart would abort them) unless forced through the API
+(`POST /api/setup/software/update {"force": true}`). Container installations update by restarting
+the service on the VM (`ExecStartPre` pulls the image).
+
+The same thing by hand: `sudo /usr/local/sbin/vc-oci-helper-install && sudo systemctl restart vc-oci-helper`.
 
 ## Maintenance
 
-- Seed images accumulate one per firmware/OS combination. Delete them with `DELETE /api/seed-images` (logged in) or from the console (tag `vc-oci.seed=true`).
+- Seed images accumulate one per firmware/OS combination. Delete them from the *Setup* tab, with `DELETE /api/seed-images` (logged in) or from the console (tag `vc-oci.seed=true`).
 - Jobs are stored in `HELPER_DB_PATH`. A failed job leaves its OCI resources in place for inspection; *Clean up OCI resources* in the job view (`POST /api/jobs/{id}/cancel`) terminates the instance and deletes the volumes.
 - After a restart of the service, jobs that were running are marked `FAILED` (their vCenter session is gone); clean them up and start again.
 - The helper supports up to 32 attached volumes at once, which bounds `HELPER_MAX_CONCURRENT_JOBS`.

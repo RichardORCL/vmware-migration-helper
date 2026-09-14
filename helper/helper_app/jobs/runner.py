@@ -52,10 +52,10 @@ class MigrationRunner:
         self._cancel_requested: set[str] = set()
         self._lock = threading.Lock()
 
-    def _default_export_factory(self, vm) -> NfcExport:
+    def _default_export_factory(self, vm, nfc_host: str) -> NfcExport:
         return NfcExport(
             vm,
-            nfc_host=self.s.nfc_host,
+            nfc_host=nfc_host,
             verify_ssl=self.s.nfc_verify_ssl,
             progress_interval_s=self.s.lease_progress_interval_s,
             ready_timeout_s=self.s.lease_ready_timeout_s,
@@ -177,7 +177,9 @@ class MigrationRunner:
         power = str(vm.runtime.powerState)
         if power != "poweredOff":
             raise ExportError(f"VM is {power}; it must stay powered off during the export")
-        with self.export_factory(vm) as export:
+        # the NFC download goes to the vCenter this session is logged in to (lease URLs carry '*')
+        nfc_host = self.s.nfc_host_override or session.vc.host.strip("[]")
+        with self.export_factory(vm, nfc_host) as export:
             urls = match_disk_urls(job.vm.disks, export.disk_urls())
             for disk in job.disks:
                 if disk.status == DiskStatus.COPIED:

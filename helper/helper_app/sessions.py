@@ -55,7 +55,8 @@ class UserSession:
         return datetime.now(timezone.utc) + timedelta(seconds=max(0.0, self.ttl_s - self.idle_s))
 
     def info(self) -> SessionInfo:
-        return SessionInfo(username=self.username, vcenter_host=self.vc.host, vcenter_version=self.vc.version,
+        return SessionInfo(username=self.username, vcenter_host=self.vc.host,
+                           vcenter_port=getattr(self.vc, "port", 443), vcenter_version=self.vc.version,
                            created_at=self.created_at, expires_at=self.expires_at)
 
     # ------------------------------------------------------------- pinning

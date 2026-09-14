@@ -8,9 +8,11 @@ lookups and for the long running export.
 from __future__ import annotations
 
 import logging
+import re
 import ssl
 import threading
 from typing import Optional
+from urllib.parse import urlsplit
 
 from helper_app.config import Settings
 from helper_app.models import VmSummary
@@ -29,10 +31,11 @@ class VCenterAuthError(VCenterError):
 class VCenterSession:
     """A logged-in pyVmomi ``ServiceInstance`` bound to one user."""
 
-    def __init__(self, si, username: str, host: str):
+    def __init__(self, si, username: str, host: str, port: int = 443):
         self._si = si
         self.username = username
         self.host = host
+        self.port = port
         self._lock = threading.RLock()
         self._closed = False
 
@@ -91,6 +94,40 @@ class VCenterSession:
                 log.debug("disconnect for %s failed: %s", self.username, exc)
 
 
+_HOST_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9.\-]*[A-Za-z0-9])?$|^\[[0-9A-Fa-f:.]+\]$")
+
+
+def parse_vcenter_address(value: str, default_host: str, default_port: int) -> tuple[str, int]:
+    """Parse ``host``, ``host:port`` or ``https://host[:port]/`` as typed on the login page."""
+    value = (value or "").strip()
+    if not value:
+        if not default_host:
+            raise VCenterError("no vCenter server given and HELPER_VCENTER_HOST is not configured")
+        return default_host, default_port
+    if "://" in value:
+        parts = urlsplit(value)
+        host, port = parts.hostname or "", parts.port
+        if host and ":" in host:
+            host = f"[{host}]"
+    else:
+        host, port = value, None
+        if value.startswith("["):  # [ipv6]:port
+            host, _, rest = value.partition("]")
+            host += "]"
+            port = int(rest[1:]) if rest.startswith(":") and rest[1:].isdigit() else None
+        elif value.count(":") == 1:
+            host, _, p = value.partition(":")
+            if not p.isdigit():
+                raise VCenterError(f"invalid vCenter port in {value!r}")
+            port = int(p)
+    if not host or not _HOST_RE.match(host):
+        raise VCenterError(f"invalid vCenter server name {value!r}")
+    port = default_port if port is None else port
+    if not 1 <= port <= 65535:
+        raise VCenterError(f"invalid vCenter port {port}")
+    return host, port
+
+
 class VCenterConnector:
     def __init__(self, settings: Settings):
         self.s = settings
@@ -107,26 +144,25 @@ class VCenterConnector:
         ctx.verify_mode = ssl.CERT_NONE
         return ctx
 
-    def login(self, username: str, password: str) -> VCenterSession:
+    def login(self, username: str, password: str, host: str = "", port: Optional[int] = None) -> VCenterSession:
+        """Log in to ``host`` (default: the configured vCenter) and return the session."""
         from pyVim.connect import SmartConnect
         from pyVmomi import vim
 
-        if not self.s.vcenter_host:
-            raise VCenterError("HELPER_VCENTER_HOST is not configured")
+        host, port = parse_vcenter_address(host, self.s.vcenter_host, port or self.s.vcenter_port)
         if not username or not password:
             raise VCenterAuthError("user name and password are required")
         kwargs = {}
         ctx = self._ssl_context()
         if ctx is not None:
             kwargs["sslContext"] = ctx
-        log.info("vCenter login %s@%s", username, self.s.vcenter_host)
+        log.info("vCenter login %s@%s:%d", username, host, port)
         try:
-            si = SmartConnect(host=self.s.vcenter_host, port=self.s.vcenter_port, user=username, pwd=password,
-                              **kwargs)
+            si = SmartConnect(host=host.strip("[]"), port=port, user=username, pwd=password, **kwargs)
         except vim.fault.InvalidLogin as exc:
             raise VCenterAuthError("invalid vCenter user name or password") from exc
         except vim.fault.NoPermission as exc:
             raise VCenterAuthError("the account is not allowed to log in to vCenter") from exc
         except Exception as exc:  # noqa: BLE001
-            raise VCenterError(f"cannot connect to vCenter {self.s.vcenter_host}: {exc}") from exc
-        return VCenterSession(si, username, self.s.vcenter_host)
+            raise VCenterError(f"cannot connect to vCenter {host}:{port}: {exc}") from exc
+        return VCenterSession(si, username, host, port)

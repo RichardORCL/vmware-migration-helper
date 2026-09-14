@@ -41,7 +41,7 @@ variable "allowed_source_cidrs" {
 
 # ----------------------------------------------------------------------------- vCenter
 variable "vcenter_host" {
-  description = "vCenter Server host name or IP as reachable from the helper subnet (SOAP API and NFC disk download on 443)"
+  description = "Default vCenter Server host name or IP as reachable from the helper subnet (SOAP API and NFC disk download on 443); users may enter another vCenter on the login page"
   type        = string
 }
 

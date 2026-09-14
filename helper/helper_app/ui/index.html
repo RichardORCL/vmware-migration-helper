@@ -12,6 +12,7 @@
     <nav id="nav" hidden>
       <a href="#/vms" data-nav="vms">Virtual machines</a>
       <a href="#/jobs" data-nav="jobs">Jobs</a>
+      <a href="#/setup" data-nav="setup">Setup</a>
     </nav>
     <div id="user" class="user" hidden>
       <span data-username></span>
@@ -30,8 +31,10 @@
       <p class="muted">Use your vCenter credentials. The account needs read access to the inventory and
         <em>Allow disk access</em> / <em>Export</em> on the virtual machines to migrate.</p>
       <form id="login-form" class="form" autocomplete="on">
-        <label>vCenter
-          <input name="vcenter" type="text" readonly>
+        <label>vCenter server
+          <input name="vcenter" type="text" required list="vcenter-recent" placeholder="vcenter.example.com[:443]" autocapitalize="off" spellcheck="false">
+          <datalist id="vcenter-recent"></datalist>
+          <small>Host name or IP, optionally with a port. The helper must reach it on that port (and on 443 for the disk export).</small>
         </label>
         <label>User name
           <input name="username" type="text" required autofocus placeholder="administrator@vsphere.local">
@@ -142,6 +145,43 @@
       <section class="card" id="job-card" hidden>
         <h2>Migration progress</h2>
         <div id="job-view"></div>
+      </section>
+    </div>
+  </template>
+
+  <!-- ------------------------------------------------------------------ setup -->
+  <template id="tpl-setup">
+    <div class="setup">
+      <section class="card">
+        <div class="toolbar">
+          <h2>Software</h2>
+          <button class="secondary small" id="sw-check">Check again</button>
+          <span id="sw-state" class="muted"></span>
+        </div>
+        <div id="sw-kv" class="kv"></div>
+        <div class="actions">
+          <span id="sw-error" class="error"></span>
+          <button class="primary" id="sw-update" hidden>Update now</button>
+        </div>
+        <details id="sw-log-details" hidden>
+          <summary>Update log</summary>
+          <pre id="sw-log" class="log"></pre>
+        </details>
+      </section>
+
+      <section class="card">
+        <h2>Helper</h2>
+        <div id="setup-kv" class="kv"></div>
+      </section>
+
+      <section class="card">
+        <h2>Maintenance</h2>
+        <p class="muted">Seed images are tiny helper images used to launch the target instances. They can be
+          removed at any time; the next migration recreates them.</p>
+        <div class="actions">
+          <span id="seed-result" class="muted"></span>
+          <button class="secondary" id="seed-cleanup">Delete seed images</button>
+        </div>
       </section>
     </div>
   </template>

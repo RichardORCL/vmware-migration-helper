@@ -98,10 +98,11 @@ def summary_of(vm) -> VmSummary:
 
 
 class FakeVCenterSession:
-    def __init__(self, connector: "FakeVCenterConnector", username: str):
+    def __init__(self, connector: "FakeVCenterConnector", username: str, host: str = "vc.test", port: int = 443):
         self.c = connector
         self.username = username
-        self.host = "vc.test"
+        self.host = host
+        self.port = port
         self.closed = False
         self.keepalives = 0
 
@@ -139,10 +140,13 @@ class FakeVCenterConnector:
     def host(self) -> str:
         return "vc.test"
 
-    def login(self, username, password):
+    def login(self, username, password, host="", port=None):
+        from helper_app.vsphere.session import parse_vcenter_address
+
+        host, port = parse_vcenter_address(host, self.host, port or 443)
         if self.users.get(username) != password:
             raise VCenterAuthError("invalid vCenter user name or password")
-        session = FakeVCenterSession(self, username)
+        session = FakeVCenterSession(self, username, host, port)
         self.sessions.append(session)
         return session
 

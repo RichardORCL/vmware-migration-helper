@@ -16,7 +16,7 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 @router.get("/config")
 def auth_config(request: Request):
-    """Unauthenticated: tells the login page which vCenter it talks to."""
+    """Unauthenticated: tells the login page which vCenter it talks to by default."""
     settings = request.app.state.settings
     return {"vcenter_host": settings.vcenter_host, "vcenter_port": settings.vcenter_port}
 
@@ -25,7 +25,8 @@ def auth_config(request: Request):
 async def login(body: LoginRequest, request: Request, response: Response):
     st = request.app.state
     try:
-        vc = await asyncio.to_thread(st.vcenter.login, body.username, body.password)
+        vc = await asyncio.to_thread(st.vcenter.login, body.username, body.password, body.vcenter_host,
+                                     body.vcenter_port)
     except VCenterAuthError as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc))
     except VCenterError as exc:

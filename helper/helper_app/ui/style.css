@@ -41,6 +41,14 @@ h2 { font-size: 15px; margin: 0 0 8px; font-weight: 600; }
 .form label { display: block; margin-bottom: 8px; }
 .form label > select, .form label > input[type=text], .form label > input[type=password] { display: block; width: 100%; margin-top: 2px; padding: 5px 6px; border: 1px solid var(--border); border-radius: 3px; font: inherit; }
 .form input[readonly] { background: #f3f5f7; color: var(--muted); }
+.setup { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.setup .card:first-child { grid-column: 1 / -1; }
+@media (max-width: 900px) { .setup { grid-template-columns: 1fr; } }
+pre.log { background: #1b2a32; color: #d7e0e5; padding: 10px; border-radius: 3px; font: 12px/1.4 Consolas, monospace; max-height: 320px; overflow: auto; white-space: pre-wrap; }
+.badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; font-weight: 600; background: #e3eef5; color: var(--primary); }
+.badge.ok { background: #e3f5e6; color: var(--ok); }
+.badge.warn { background: #fff4d6; color: var(--warn); }
+.badge.bad { background: #fbe5e1; color: var(--danger); }
 .form small { display: block; color: var(--muted); }
 .check { display: flex; gap: 6px; align-items: center; }
 .form fieldset { border: 1px solid var(--border); border-radius: 3px; margin: 8px 0; padding: 6px 10px; }

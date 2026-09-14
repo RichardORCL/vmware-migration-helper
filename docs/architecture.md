@@ -66,8 +66,10 @@ job reaches a terminal phase. Progress is persisted every 128 MiB or 2 seconds, 
      lease to be `ready`, keep it alive with `HttpNfcLeaseProgress` every
      `HELPER_LEASE_PROGRESS_INTERVAL_S`;
    - match lease `deviceUrl`s to the VM disks (controller/bus/unit key, then `disk-N.vmdk` target
-     id, then order); rewrite the `*` host placeholder to `HELPER_NFC_HOST_OVERRIDE` or the vCenter
-     host;
+     id, then order); rewrite the `*` host placeholder to the ESXi host the VM is registered on
+     (`vm.runtime.host.name`, when the job was started with *Download the disks directly from the
+     ESXi host*), else `HELPER_NFC_HOST_OVERRIDE`, else the vCenter host; the chosen host is
+     recorded as `Job.nfc_host`;
    - per disk: HTTPS `GET` the stream-optimized VMDK in `HELPER_NFC_CHUNK_BYTES` chunks and feed it
      to `StreamOptimizedDecoder`, which inflates each grain and `pwrite()`s it at
      `lba * 512` on the attached volume (`BlockDeviceWriter`). All-zero grains are skipped

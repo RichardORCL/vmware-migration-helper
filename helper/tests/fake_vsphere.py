@@ -28,6 +28,7 @@ def make_vm(
     snapshot=None,
     folder="DC1/Prod",
     template=False,
+    host="esxi-01.test",
 ):
     d = vim.vm.device
     devices = []
@@ -82,8 +83,8 @@ def make_vm(
     boot_options = NS(efiSecureBootEnabled=secure_boot)
     config = NS(name=name, instanceUuid="5023-abcd", guestId=guest_id, guestFullName=guest_full_name,
                 firmware=firmware, hardware=hardware, bootOptions=boot_options, template=template)
-    vm = NS(_moId=moid, config=config, runtime=NS(powerState=power_state), snapshot=snapshot, name=name,
-            folder_path=folder)
+    runtime = NS(powerState=power_state, host=NS(name=host) if host else None)
+    vm = NS(_moId=moid, config=config, runtime=runtime, snapshot=snapshot, name=name, folder_path=folder)
     return vm
 
 

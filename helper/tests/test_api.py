@@ -468,6 +468,45 @@ def test_windows_requires_license_and_license_update(env):
     assert env.fake.compute.instances[job["instance_id"]].lifecycle_state == "STOPPED"
 
 
+def test_direct_esxi_download_option(env):
+    c = env.client
+    login(c)
+    # the inspection tells the UI which host the VM lives on
+    assert c.get("/api/vms/vm-101").json()["vm"]["host_name"] == "esxi-01.test"
+
+    # default: proxied by the vCenter of the session
+    r = c.post("/api/jobs", json={"vm_moid": "vm-101", "target": target()})
+    assert r.status_code == 202, r.text
+    job = wait_phase(c, r.json()["id"], "COMPLETED", "FAILED")
+    assert job["phase"] == "COMPLETED" and job["nfc_host"] == "vc.test"
+    assert env.nfc_hosts == ["vc.test"]
+
+    # per-job option: the ESXi host the VM is registered on, even when a deployment-wide override is set
+    env.settings.nfc_host_override = "nfc-override.test"
+    r = c.post("/api/jobs", json={"vm_moid": "vm-101", "target": target(nfc_direct_to_esxi=True)})
+    assert r.status_code == 202, r.text
+    job = wait_phase(c, r.json()["id"], "COMPLETED", "FAILED")
+    assert job["phase"] == "COMPLETED", job
+    assert job["nfc_host"] == "esxi-01.test" and job["target"]["nfc_direct_to_esxi"] is True
+    assert env.nfc_hosts == ["vc.test", "esxi-01.test"]
+    text = c.get(f"/api/jobs/{job['id']}/diagnostics").text
+    assert "nfc download: host=esxi-01.test direct_to_esxi=True" in text
+
+    # without the option the override applies as before
+    r = c.post("/api/jobs", json={"vm_moid": "vm-101", "target": target()})
+    assert wait_phase(c, r.json()["id"], "COMPLETED", "FAILED")["nfc_host"] == "nfc-override.test"
+    env.settings.nfc_host_override = None
+
+    # a VM vCenter does not place on a host cannot be downloaded directly: the job fails cleanly
+    env.vms["vm-nohost"] = make_vm(moid="vm-nohost", name="orphan", host=None,
+                                   disks=((2 * MIB, "pvscsi"), (MIB, "pvscsi")))
+    r = c.post("/api/jobs", json={"vm_moid": "vm-nohost", "target": target(nfc_direct_to_esxi=True)})
+    assert r.status_code == 202, r.text
+    job = wait_phase(c, r.json()["id"], "COMPLETED", "FAILED")
+    assert job["phase"] == "FAILED" and "no host" in job["error"], job
+    assert env.nfc_hosts == ["vc.test", "esxi-01.test", "nfc-override.test"]  # no lease was opened
+
+
 def test_create_job_validation(env):
     c = env.client
     login(c)

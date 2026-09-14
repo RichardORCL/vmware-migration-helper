@@ -169,6 +169,7 @@
     const rows = [
       ["Source VM", `${job.vm.name} (${job.vm.moid})`],
       ["Step", job.step || "-"],
+      ["Disk download", job.nfc_host ? `${job.nfc_host}${job.target.nfc_direct_to_esxi ? " (ESXi host, direct)" : ""}` : "-"],
       ["Instance", job.instance_id || "-"],
       ["Seed image", job.seed_image_id || "-"],
       ["Launch options", job.launch_options ? `${job.launch_options.firmware}, boot ${job.launch_options.boot_volume_type}, nic ${job.launch_options.network_type}` : "-"],
@@ -314,7 +315,8 @@
 
     kv(document.getElementById("vm-details"), [
       ["Name", vm.name], ["Guest OS", vm.guest_full_name || vm.guest_id],
-      ["Power state", vm.power_state], ["CPU / memory", `${vm.num_cpu} vCPU / ${fmtBytes(vm.memory_mb * 1024 * 1024)}`],
+      ["Power state", vm.power_state], ["ESXi host", vm.host_name || "-"],
+      ["CPU / memory", `${vm.num_cpu} vCPU / ${fmtBytes(vm.memory_mb * 1024 * 1024)}`],
       ["Firmware", vm.firmware.toUpperCase() + (vm.secure_boot ? " (secure boot)" : "")],
       ["Disks", vm.disks.map((d) => `${d.label}: ${fmtBytes(d.capacity_bytes)} on ${d.controller_type}`).join("; ")],
       ["Network", vm.nics.map((n) => `${n.label}: ${n.adapter_type}`).join("; ") || "-"],
@@ -357,6 +359,8 @@
     sel("display_name").value = vm.name;
     const isWin = isWindows(vm);
     document.getElementById("windows-fieldset").hidden = !isWin;
+    document.getElementById("esxi-host-hint").textContent = vm.host_name ? `(${vm.host_name})` : "";
+    sel("nfc_direct_to_esxi").disabled = !vm.host_name;
     if (options.compartments.some((c) => c.id === options.helper_compartment_id)) sel("compartment_id").value = options.helper_compartment_id;
     else if (options.compartments.length) sel("compartment_id").selectedIndex = 0;
     sel("compartment_id").addEventListener("change", async () => {
@@ -397,6 +401,7 @@
         compatibility_mode: fd.get("compatibility_mode") === "on",
         boot_volume_type_override: fd.get("boot_volume_type_override") || null,
         network_type_override: fd.get("network_type_override") || null,
+        nfc_direct_to_esxi: fd.get("nfc_direct_to_esxi") === "on",
       };
       if (target.availability_domain !== options.helper_availability_domain) {
         formError.textContent = "The availability domain must match the helper VM's AD."; return;

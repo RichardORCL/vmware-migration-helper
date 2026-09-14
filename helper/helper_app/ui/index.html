@@ -118,6 +118,12 @@
           </fieldset>
 
           <details>
+            <summary>Advanced: disk transfer</summary>
+            <label class="check"><input type="checkbox" name="nfc_direct_to_esxi"> Download the disks directly from the ESXi host <span id="esxi-host-hint"></span> instead of through vCenter</label>
+            <small>Usually much faster than the vCenter proxy, but the helper must reach that ESXi host on TCP 443 (same as <code>HELPER_NFC_HOST_OVERRIDE</code>, resolved per VM).</small>
+          </details>
+
+          <details>
             <summary>Advanced: firmware and device model</summary>
             <div class="kv" id="launch-preview"></div>
             <label class="check"><input type="checkbox" name="compatibility_mode"> Maximum compatibility (IDE boot volume + E1000 NIC) for guests without virtio drivers</label>

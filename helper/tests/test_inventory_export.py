@@ -20,7 +20,14 @@ def test_vm_spec_from_vm_basic():
     assert spec.disks[1].nfc_key_hint == "ParaVirtualSCSIController0:1"
     assert spec.disks[0].thin_provisioned and spec.disks[0].backing_file.endswith("web-01.vmdk")
     assert spec.nics[0].adapter_type == "vmxnet3" and spec.nics[0].network == "VM Network"
+    assert spec.host_name == "esxi-01.test"
     assert preflight(spec) == []
+
+
+def test_vm_spec_without_host():
+    # a VM that vCenter does not (currently) place on a host still inspects fine
+    assert vm_spec_from_vm(make_vm(host=None)).host_name == ""
+    assert vm_spec_from_vm(make_vm(host="  ")).host_name == ""
 
 
 def test_disk_ordering_ide_before_scsi_and_controller_types():

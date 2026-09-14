@@ -77,7 +77,7 @@ To replace the self-signed certificate, put your own into `/etc/vc-oci-helper/se
 | --- | --- | --- |
 | `HELPER_VCENTER_HOST` / `HELPER_VCENTER_PORT` | – / 443 | Default vCenter Server offered on the login page (users may enter another one) |
 | `HELPER_VCENTER_VERIFY_SSL` | `false` | Verify the vCenter certificate |
-| `HELPER_NFC_HOST_OVERRIDE` | session's vCenter | Host substituted for `*` in lease URLs (only when ESXi must be reached directly) |
+| `HELPER_NFC_HOST_OVERRIDE` | session's vCenter | Host substituted for `*` in lease URLs, for all jobs. The per-VM *Download the disks directly from the ESXi host* option in the migration dialog resolves the VM's current host instead and takes precedence |
 | `HELPER_NFC_VERIFY_SSL` | `false` | Verify TLS on the NFC download |
 | `HELPER_NFC_CHUNK_BYTES` | `1048576` | Download chunk size |
 | `HELPER_LEASE_PROGRESS_INTERVAL_S` / `HELPER_LEASE_READY_TIMEOUT_S` | 60 / 300 | Lease keep-alive interval / time to wait for the lease |

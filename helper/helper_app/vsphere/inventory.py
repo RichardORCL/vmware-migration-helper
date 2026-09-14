@@ -67,6 +67,17 @@ def _network_name(nic) -> str:
 _CONTROLLER_ORDER = {"ide": 0, "buslogic": 1, "lsilogic": 1, "lsilogicsas": 1, "pvscsi": 1, "sata": 2, "nvme": 3}
 
 
+def esxi_host_name(vm) -> str:
+    """Name of the ESXi host the VM is registered on (``vm.runtime.host.name``), '' when unknown."""
+    try:
+        host = vm.runtime.host
+    except Exception:  # noqa: BLE001 - property fetch may fail on a stale object
+        return ""
+    if host is None:
+        return ""
+    return str(getattr(host, "name", "") or "").strip()
+
+
 def vm_spec_from_vm(vm) -> VmSpec:
     from pyVmomi import vim
 
@@ -127,6 +138,7 @@ def vm_spec_from_vm(vm) -> VmSpec:
         secure_boot=bool(getattr(boot_options, "efiSecureBootEnabled", False)),
         power_state=str(vm.runtime.powerState),
         has_snapshots=vm.snapshot is not None,
+        host_name=esxi_host_name(vm),
         disks=disk_specs,
         nics=nics,
     )

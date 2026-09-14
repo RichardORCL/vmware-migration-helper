@@ -25,6 +25,7 @@ from helper_app.oci.clients import describe_error
 from helper_app.oci.provision import Provisioner
 from helper_app.sessions import UserSession
 from helper_app.vsphere.export import ExportError, NfcExport, match_disk_urls
+from helper_app.vsphere.inventory import esxi_host_name
 
 log = logging.getLogger(__name__)
 
@@ -176,13 +177,14 @@ class MigrationRunner:
         self._check_cancel(job)
 
         # 2. export
-        self._save(job, JobPhase.EXPORTING, "Opening NFC export lease")
+        self._save(job, JobPhase.EXPORTING, "Checking the source VM")
         vm = session.vc.vm(job.vm.moid)
         power = str(vm.runtime.powerState)
         if power != "poweredOff":
             raise ExportError(f"VM is {power}; it must stay powered off during the export")
-        # the NFC download goes to the vCenter this session is logged in to (lease URLs carry '*')
-        nfc_host = self.s.nfc_host_override or session.vc.host.strip("[]")
+        nfc_host = self._resolve_nfc_host(job, vm, session)
+        job.nfc_host = nfc_host
+        self._save(job, message=f"Opening NFC export lease (disk download via {nfc_host})")
         with self.export_factory(vm, nfc_host) as export:
             urls = match_disk_urls(job.vm.disks, export.disk_urls())
             for disk in job.disks:
@@ -209,6 +211,21 @@ class MigrationRunner:
         self._save(job, JobPhase.FINALIZING, "All disks copied; attaching volumes to the target instance")
         self.prov.finalize(job)
         self._save(job, message=f"Migration complete: instance {job.instance_id}")
+
+    def _resolve_nfc_host(self, job: Job, vm, session: UserSession) -> str:
+        """Host substituted for the ``*`` placeholder in the lease URLs.
+
+        Per-job *download directly from ESXi* wins: the host the VM is registered on right now (it may
+        have moved since the inspection; the inspected name is the fallback).  Otherwise the deployment
+        wide ``HELPER_NFC_HOST_OVERRIDE`` applies, and by default the download is proxied by the vCenter
+        this session is logged in to.
+        """
+        if job.target.nfc_direct_to_esxi:
+            host = esxi_host_name(vm) or job.vm.host_name
+            if not host:
+                raise ExportError("direct ESXi download requested but vCenter reports no host for the VM")
+            return host
+        return self.s.nfc_host_override or session.vc.host.strip("[]")
 
     @staticmethod
     def _record_progress(job: Job, disk: DiskState, export: NfcExport, received: int, stats: DecodeStats,

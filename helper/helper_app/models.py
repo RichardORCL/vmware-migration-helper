@@ -63,6 +63,7 @@ class VmSpec(BaseModel):
     secure_boot: bool = False
     power_state: str = "poweredOff"
     has_snapshots: bool = False
+    host_name: str = Field(default="", description="ESXi host the VM is registered on (vm.runtime.host.name)")
     disks: list[DiskSpec]
     nics: list[NicSpec] = Field(default_factory=list)
 
@@ -130,6 +131,11 @@ class OciTarget(BaseModel):
     )
     boot_volume_type_override: Optional[BootVolumeType] = None
     network_type_override: Optional[NetworkType] = None
+    nfc_direct_to_esxi: bool = Field(
+        default=False,
+        description="Download the disks from the ESXi host the VM is registered on instead of through the "
+                    "vCenter proxy (same effect as HELPER_NFC_HOST_OVERRIDE, resolved per job)",
+    )
 
 
 class LaunchOptionsSpec(BaseModel):
@@ -225,6 +231,7 @@ class Job(BaseModel):
     instance_id: Optional[str] = None
     instance_display_name: Optional[str] = None
     boot_volume_id: Optional[str] = None
+    nfc_host: Optional[str] = None  # host the disk streams were downloaded from (vCenter or ESXi)
     disks: list[DiskState] = Field(default_factory=list)
     transfer: TransferStats = Field(default_factory=TransferStats)
     created_by: str = ""

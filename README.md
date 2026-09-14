@@ -88,7 +88,8 @@ preloaded. Rebuild the zip after changing anything under `helper/deploy/terrafor
 | Flow | Port | Notes |
 | --- | --- | --- |
 | Browser -> helper | TCP 8443 | web UI + API, TLS (self-signed by default), restricted by `allowed_source_cidrs` |
-| Helper -> vCenter | TCP 443 | SOAP API and the NFC disk download (vCenter proxies ESXi; `HELPER_NFC_HOST_OVERRIDE` if you must reach ESXi directly) |
+| Helper -> vCenter | TCP 443 | SOAP API and the NFC disk download (vCenter proxies ESXi by default) |
+| Helper -> ESXi hosts | TCP 443 | Only with *Download the disks directly from the ESXi host* (per migration) or `HELPER_NFC_HOST_OVERRIDE`; bypasses the vCenter proxy, usually several times faster |
 | Helper -> OCI | TCP 443 | Compute, Block Storage, Object Storage APIs (service gateway or NAT) |
 
 ## Development

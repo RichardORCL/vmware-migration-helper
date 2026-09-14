@@ -7,7 +7,9 @@ import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import PlainTextResponse
 
+from helper_app import diagnostics
 from helper_app.api.routes_vms import inspect
 from helper_app.auth import require_session
 from helper_app.jobs.store import utcnow
@@ -64,6 +66,15 @@ async def create_job(body: CreateJobRequest, request: Request, session: UserSess
 @router.get("/{job_id}", response_model=Job)
 def get_job(job_id: str, request: Request):
     return _get_job(request, job_id)
+
+
+@router.get("/{job_id}/diagnostics", response_class=PlainTextResponse)
+async def job_diagnostics(job_id: str, request: Request):
+    """Everything needed to analyse the job (record + relevant journal lines) as plain text."""
+    st = request.app.state
+    job = _get_job(request, job_id)
+    return await asyncio.to_thread(diagnostics.collect, job, st.settings, st.clients.identity_info, st.commit,
+                                   st.command_runner)
 
 
 @router.post("/{job_id}/cancel", response_model=Job, status_code=status.HTTP_202_ACCEPTED)

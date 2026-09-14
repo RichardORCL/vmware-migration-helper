@@ -158,6 +158,27 @@
       try { await api("POST", `/jobs/${job.id}/cancel`); } catch (e) { alert(e.message); }
       finally { cancelBtn.disabled = false; }
     };
+    const copyBtn = root.querySelector("[data-copy]"); const copyState = root.querySelector("[data-copy-state]");
+    if (!copyBtn.onclick) copyBtn.onclick = async () => {
+      copyBtn.disabled = true; copyState.textContent = "Collecting...";
+      try {
+        const resp = await fetch(`../api/jobs/${encodeURIComponent(job.id)}/diagnostics`, { credentials: "same-origin", cache: "no-store" });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const text = await resp.text();
+        const diag = root.querySelector("[data-diag]"); const area = diag.querySelector("textarea");
+        area.value = text;
+        try {
+          if (!navigator.clipboard) throw new Error("clipboard API not available");
+          await navigator.clipboard.writeText(text);
+          copyState.textContent = `Copied ${text.split("\n").length} lines to the clipboard.`;
+        } catch (_) {
+          // insecure context or permission denied: show the text for manual copying
+          diag.hidden = false; diag.open = true; area.focus(); area.select();
+          copyState.textContent = "Clipboard not available; the text is selected below, press Ctrl+C.";
+        }
+      } catch (e) { copyState.textContent = "Cannot collect diagnostics: " + e.message; }
+      finally { copyBtn.disabled = false; setTimeout(() => { if (copyState.textContent.startsWith("Copied")) copyState.textContent = ""; }, 6000); }
+    };
     const licSel = root.querySelector("[data-license]"); const licBtn = root.querySelector("[data-license-btn]");
     const showLic = isWindows(job.vm) && job.instance_id && (job.phase === "COMPLETED" || job.phase === "FINALIZING");
     licSel.hidden = licBtn.hidden = !showLic;

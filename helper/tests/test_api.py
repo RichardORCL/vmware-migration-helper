@@ -90,7 +90,7 @@ class Env:
 
         self.app = create_app(
             settings=self.settings, clients=self.fake.clients(), store=self.store, vcenter=self.vcenter,
-            export_factory=export_factory, updater=self.updater,
+            export_factory=export_factory, updater=self.updater, command_runner=self._run_command,
         )
 
     # -- fake git / systemd for the updater
@@ -397,6 +397,28 @@ def test_full_migration_with_retry(env):
                                       if a.instance_id == fake.identity.instance_id) if p)
     contents = {open(p, "rb").read() for p in used_devices}
     assert env.raws[0] in contents and env.raws[1] in contents
+
+    # diagnostics bundle: job record + relevant journal lines (job id, warnings/errors with tracebacks)
+    env.command_results[("journalctl",)] = (0, "\n".join([
+        f"2026-09-14T19:00:00+0000 helper vc-oci-helper[100]: 2026-09-14 19:00:00 INFO helper_app.jobs.runner: job {job_id} [PROVISIONING] Creating seed image",
+        "2026-09-14T19:00:01+0000 helper vc-oci-helper[100]: 2026-09-14 19:00:01 INFO helper_app.sessions: session created for bob",
+        "2026-09-14T19:00:02+0000 helper vc-oci-helper[100]: 2026-09-14 19:00:02 ERROR helper_app.jobs.runner: job other failed at step seed_image",
+        "2026-09-14T19:00:02+0000 helper vc-oci-helper[100]: Traceback (most recent call last):",
+        '2026-09-14T19:00:02+0000 helper vc-oci-helper[100]:   File "runner.py", line 1, in _run',
+        "2026-09-14T19:00:02+0000 helper vc-oci-helper[100]: oci.exceptions.ServiceError: {'status': 400}",
+        "2026-09-14T19:00:03+0000 helper vc-oci-helper[100]: 2026-09-14 19:00:03 INFO helper_app.api: GET /api/jobs",
+    ]))
+    r = c.get(f"/api/jobs/{job_id}/diagnostics")
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/plain")
+    text = r.text
+    assert f"job {job_id}: phase=COMPLETED" in text and "helper: version" in text
+    assert '"phase": "COMPLETED"' in text  # JSON record
+    assert "disk 1" in text and "attempts=2" in text
+    assert "Creating seed image" in text and "Traceback" in text and "ServiceError" in text
+    assert "session created for bob" not in text and "GET /api/jobs" not in text
+    journal_cmd = next(cmd for cmd in env.commands if cmd[0] == "journalctl")
+    assert journal_cmd[1:3] == ["-u", "vc-oci-helper"] and "--since" in journal_cmd
+    assert c.get("/api/jobs/nope/diagnostics").status_code == 404
 
     jobs = c.get("/api/jobs", params={"vm_moid": "vm-101"}).json()
     assert jobs[0]["id"] == job_id

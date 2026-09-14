@@ -46,6 +46,7 @@ h2 { font-size: 15px; margin: 0 0 8px; font-weight: 600; }
 .setup .card:nth-child(2) { grid-row: span 2; }
 code { font-family: Consolas, monospace; font-size: 12px; background: #eef1f3; padding: 0 3px; border-radius: 2px; }
 @media (max-width: 900px) { .setup { grid-template-columns: 1fr; } }
+textarea.diag { width: 100%; margin-top: 6px; font: 12px/1.4 Consolas, monospace; border: 1px solid var(--border); border-radius: 3px; padding: 8px; white-space: pre; }
 pre.log { background: #1b2a32; color: #d7e0e5; padding: 10px; border-radius: 3px; font: 12px/1.4 Consolas, monospace; max-height: 320px; overflow: auto; white-space: pre-wrap; }
 .badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; font-weight: 600; background: #e3eef5; color: var(--primary); }
 .badge.ok { background: #e3f5e6; color: var(--ok); }

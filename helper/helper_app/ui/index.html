@@ -214,6 +214,8 @@
       <div class="kv" data-oci></div>
       <div class="actions">
         <span class="error" data-error></span>
+        <span class="muted" data-copy-state></span>
+        <button class="secondary" data-copy title="Copy the job record, error and relevant helper log lines to the clipboard">Copy diagnostics</button>
         <button class="secondary" data-cancel>Cancel</button>
         <select data-license hidden>
           <option value="BRING_YOUR_OWN_LICENSE">BYOL</option>
@@ -221,6 +223,10 @@
         </select>
         <button class="secondary" data-license-btn hidden>Change license type</button>
       </div>
+      <details data-diag hidden>
+        <summary>Diagnostics text (select all and copy if the clipboard is not available)</summary>
+        <textarea class="diag" readonly rows="16"></textarea>
+      </details>
     </div>
   </template>
 

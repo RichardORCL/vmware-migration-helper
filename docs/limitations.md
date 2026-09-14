@@ -19,6 +19,7 @@
 
 | Symptom | Check |
 | --- | --- |
+| Any failed job | *Copy diagnostics* in the job view (`GET /api/jobs/{id}/diagnostics`) collects the job record, the error and the relevant service journal lines as text for a bug report. For OCI `InvalidParameter` errors, enable *Log OCI API requests* on the Setup page and retry. |
 | Login fails with *cannot connect to vCenter* | From the helper: `curl -k https://<vcenter>/sdk`; routing/VPN, NSG egress, `HELPER_VCENTER_HOST`/`PORT`; `HELPER_VCENTER_VERIFY_SSL=false` for VMCA certificates. |
 | Login fails with *invalid user name or password* | Use the vCenter SSO form (`user@vsphere.local` or `DOMAIN\user`); the account must be allowed to log in to vCenter. |
 | VM list is empty / a VM is missing | vCenter RBAC: the account needs read access to the VM; templates are hidden. Click *Refresh* (the list is cached for 30 s per session). |

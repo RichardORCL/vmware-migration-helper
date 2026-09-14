@@ -22,7 +22,7 @@ from helper_app.jobs.store import JobStore
 from helper_app.oci.clients import OciClients, build_clients
 from helper_app.oci.provision import Provisioner
 from helper_app.sessions import SessionStore
-from helper_app.updater import Updater
+from helper_app.updater import Runner, Updater, _default_runner
 from helper_app.vsphere.session import VCenterConnector
 
 log = logging.getLogger(__name__)
@@ -35,6 +35,7 @@ def create_app(
     vcenter: Optional[VCenterConnector] = None,
     export_factory=None,
     updater: Optional[Updater] = None,
+    command_runner: Runner = _default_runner,
 ) -> FastAPI:
     settings = settings or get_settings()
 
@@ -50,7 +51,8 @@ def create_app(
         logging_config.apply(settings)  # the SDK clients exist now; enable their request loggers if asked
         app.state.vcenter = vcenter or VCenterConnector(settings)
         app.state.sessions = SessionStore(settings.session_ttl_s)
-        app.state.updater = updater or Updater(settings)
+        app.state.command_runner = command_runner  # runs git/systemctl/journalctl (injectable for tests)
+        app.state.updater = updater or Updater(settings, runner=command_runner)
         app.state.commit = app.state.updater.local_state().get("commit", "")
         app.state.provisioner = Provisioner(app.state.clients, settings, app.state.store.put)
         app.state.runner = MigrationRunner(settings, app.state.store, app.state.provisioner,

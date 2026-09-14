@@ -175,6 +175,23 @@
       </section>
 
       <section class="card">
+        <h2>Logging</h2>
+        <form id="log-form" class="form" autocomplete="off">
+          <label>Helper log level
+            <select name="log_level"></select>
+            <small>Level of the helper's own messages in the service journal (<code>journalctl -u vc-oci-helper -f</code>).</small>
+          </label>
+          <label class="check"><input type="checkbox" name="oci_log_requests"> Log OCI API requests and responses</label>
+          <small>Dumps every OCI SDK call including headers and bodies. Very verbose; use it to analyse
+            <em>InvalidParameter</em> and similar errors, then switch it off again.</small>
+          <div class="actions">
+            <span id="log-result" class="muted"></span>
+            <button type="submit" class="primary" id="log-save">Save</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="card">
         <h2>Maintenance</h2>
         <p class="muted">Seed images are tiny helper images used to launch the target instances. They can be
           removed at any time; the next migration recreates them.</p>

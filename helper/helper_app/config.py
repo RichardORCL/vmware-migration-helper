@@ -40,9 +40,10 @@ class Settings(BaseSettings):
     lease_ready_timeout_s: int = 300
     disk_retry_attempts: int = 3
 
-    # Logging
+    # Logging (both adjustable from the Setup page; changes persist in runtime_settings_path)
     log_level: str = "INFO"
     oci_log_requests: bool = False  # log every OCI SDK request/response (bodies included) at DEBUG
+    runtime_settings_path: str = "/var/lib/vc-oci-helper/runtime-settings.json"
 
     # OCI authentication: instance principals on the helper VM, config file for development
     oci_auth: Literal["instance_principal", "config_file", "mock"] = "instance_principal"

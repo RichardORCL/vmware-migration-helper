@@ -60,7 +60,8 @@ class Env:
                                  image_import_timeout_s=5, min_volume_gb=1, cookie_secure=False,
                                  vcenter_host="vc.test", disk_retry_attempts=3, max_concurrent_jobs=2,
                                  update_source_dir=str(tmp_path / "src"), update_venv_dir=str(tmp_path / "venv"),
-                                 update_log_path=str(tmp_path / "update.log"))
+                                 update_log_path=str(tmp_path / "update.log"),
+                                 runtime_settings_path=str(tmp_path / "runtime-settings.json"))
         self.commands: list[list[str]] = []  # commands the updater would run
         self.command_results: dict[tuple[str, ...], tuple[int, str]] = {}
         self.http_calls: list[str] = []
@@ -203,6 +204,52 @@ def test_parse_vcenter_address():
     for bad in ("vc1.lab:abc", "vc1.lab:0", "a b", "-x", ""):
         with pytest.raises(VCenterError):
             parse_vcenter_address(bad, "" if bad == "" else "vc.test", 443)
+
+
+# --------------------------------------------------------------------------- setup / logging
+def test_logging_settings_apply_and_persist(tmp_path, fast_retries):
+    import http.client
+    import json
+    import logging
+
+    root = logging.getLogger()
+    saved_level, saved_debug = root.level, http.client.HTTPConnection.debuglevel
+    oci_client_logger = logging.getLogger("oci.base_client.12345")  # what the SDK creates per client
+    oci_client_logger.disabled = True
+    try:
+        env = Env(tmp_path)
+        with TestClient(env.app) as c:
+            assert c.get("/api/setup/logging").status_code == 401
+            login(c)
+            lg = c.get("/api/setup/logging").json()
+            assert lg["log_level"] == "INFO" and lg["oci_log_requests"] is False and lg["persisted"] is False
+            assert lg["levels"] == ["DEBUG", "INFO", "WARNING", "ERROR"]
+
+            assert c.put("/api/setup/logging", json={"log_level": "TRACE", "oci_log_requests": False}).status_code == 422
+            r = c.put("/api/setup/logging", json={"log_level": "DEBUG", "oci_log_requests": True})
+            assert r.status_code == 200, r.text
+            assert r.json()["persisted"] is True and r.json()["warning"] == ""
+            assert root.level == logging.DEBUG
+            assert http.client.HTTPConnection.debuglevel == 1
+            assert oci_client_logger.disabled is False and oci_client_logger.level == logging.DEBUG
+            assert json.loads(Path(env.settings.runtime_settings_path).read_text()) == {"log_level": "DEBUG", "oci_log_requests": True}
+
+            r = c.put("/api/setup/logging", json={"log_level": "WARNING", "oci_log_requests": False})
+            assert r.json()["log_level"] == "WARNING" and root.level == logging.WARNING
+            assert http.client.HTTPConnection.debuglevel == 0 and oci_client_logger.disabled is True
+
+        # the persisted choice overrides the environment on the next start
+        env2 = Env(tmp_path)
+        assert env2.settings.log_level == "INFO"
+        with TestClient(env2.app) as c:
+            login(c)
+            lg = c.get("/api/setup/logging").json()
+            assert lg["log_level"] == "WARNING" and lg["persisted"] is True
+            assert root.level == logging.WARNING
+    finally:
+        root.setLevel(saved_level)
+        http.client.HTTPConnection.debuglevel = saved_debug
+        logging.getLogger("oci").setLevel(logging.NOTSET)
 
 
 # --------------------------------------------------------------------------- setup / self-update

@@ -14,7 +14,7 @@ from fastapi import FastAPI
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from helper_app import __version__
+from helper_app import __version__, logging_config
 from helper_app.api import routes_auth, routes_jobs, routes_oci, routes_setup, routes_vms
 from helper_app.config import Settings, get_settings
 from helper_app.jobs.runner import MigrationRunner
@@ -40,14 +40,14 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO),
-                            format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-        if settings.oci_log_requests:  # HELPER_OCI_LOG_REQUESTS=true: full request/response dump of the OCI SDK
-            logging.getLogger("oci").setLevel(logging.DEBUG)
-            logging.getLogger("oci.base_client").setLevel(logging.DEBUG)
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+        logging_config.configure_stdout()
+        logging_config.load_overrides(settings)  # Setup page changes from a previous run
+        logging_config.apply(settings)
         app.state.settings = settings
         app.state.store = store or JobStore(settings.db_path)
         app.state.clients = clients or build_clients(settings)
+        logging_config.apply(settings)  # the SDK clients exist now; enable their request loggers if asked
         app.state.vcenter = vcenter or VCenterConnector(settings)
         app.state.sessions = SessionStore(settings.session_ttl_s)
         app.state.updater = updater or Updater(settings)

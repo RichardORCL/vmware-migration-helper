@@ -7,8 +7,9 @@ import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 
-from helper_app import __version__
+from helper_app import __version__, logging_config
 from helper_app.auth import require_session
+from helper_app.logging_config import LoggingSettings, LoggingStatus
 from helper_app.updater import SoftwareStatus, UpdateError
 
 router = APIRouter(prefix="/api/setup", tags=["setup"], dependencies=[Depends(require_session)])
@@ -44,6 +45,16 @@ def setup_info(request: Request):
         "sessions": len(st.sessions),
         "active_jobs": _active_jobs(request),
     }
+
+
+@router.get("/logging", response_model=LoggingStatus)
+def get_logging(request: Request):
+    return logging_config.current(request.app.state.settings)
+
+
+@router.put("/logging", response_model=LoggingStatus)
+def put_logging(body: LoggingSettings, request: Request):
+    return logging_config.update(request.app.state.settings, body)
 
 
 @router.get("/software", response_model=SoftwareStatus)

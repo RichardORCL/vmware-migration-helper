@@ -458,6 +458,28 @@
     });
     document.getElementById("sw-check").addEventListener("click", () => loadSoftware(true));
 
+    // logging: applies immediately, persisted on the helper
+    const logForm = document.getElementById("log-form"); const logResult = document.getElementById("log-result");
+    const renderLogging = (lg) => {
+      const sel = logForm.elements.log_level;
+      sel.innerHTML = "";
+      for (const l of lg.levels) sel.append(el("option", { value: l }, l));
+      sel.value = lg.log_level;
+      logForm.elements.oci_log_requests.checked = lg.oci_log_requests;
+      logResult.textContent = lg.warning || (lg.persisted ? "" : "Defaults from the environment; not changed yet.");
+      logResult.className = lg.warning ? "error" : "muted";
+    };
+    logForm.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const btn = document.getElementById("log-save"); btn.disabled = true;
+      try {
+        const lg = await api("PUT", "/setup/logging", { log_level: logForm.elements.log_level.value, oci_log_requests: logForm.elements.oci_log_requests.checked });
+        renderLogging(lg);
+        if (!lg.warning) logResult.textContent = "Saved and applied.";
+      } catch (e) { logResult.textContent = e.message; logResult.className = "error"; }
+      finally { btn.disabled = false; }
+    });
+
     document.getElementById("seed-cleanup").addEventListener("click", async (ev) => {
       const out = document.getElementById("seed-result");
       if (!confirm("Delete all seed images and their staging objects?")) return;
@@ -467,7 +489,8 @@
     });
 
     try {
-      const info = await api("GET", "/setup/info");
+      const [info, lg] = await Promise.all([api("GET", "/setup/info"), api("GET", "/setup/logging")]);
+      renderLogging(lg);
       kv(document.getElementById("setup-kv"), [
         ["Version", info.version + (info.commit ? ` (${short(info.commit)})` : "")],
         ["Region / AD", `${info.region} / ${info.availability_domain}`],

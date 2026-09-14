@@ -96,8 +96,9 @@ To replace the self-signed certificate, put your own into `/etc/vc-oci-helper/se
 | `HELPER_SKIP_ZERO_GRAINS` | `true` | Do not write all-zero grains (fresh volumes read as zero) |
 | `HELPER_DB_PATH` | `/var/lib/vc-oci-helper/jobs.sqlite3` | Job database |
 | `HELPER_TLS_CERT_FILE` / `HELPER_TLS_KEY_FILE` | – | TLS material for 8443 |
-| `HELPER_LOG_LEVEL` | `INFO` | Helper log level (`journalctl -u vc-oci-helper`) |
-| `HELPER_OCI_LOG_REQUESTS` | `false` | Dump every OCI SDK request/response including bodies (for analysing `InvalidParameter` errors) |
+| `HELPER_LOG_LEVEL` | `INFO` | Helper log level (`journalctl -u vc-oci-helper`); changeable on the *Setup* page |
+| `HELPER_OCI_LOG_REQUESTS` | `false` | Dump every OCI SDK request/response including bodies (for analysing `InvalidParameter` errors); changeable on the *Setup* page |
+| `HELPER_RUNTIME_SETTINGS_PATH` | `/var/lib/vc-oci-helper/runtime-settings.json` | Where *Setup* page changes (logging) are persisted; they override the environment on start |
 | `HELPER_UPDATE_SOURCE_DIR` / `HELPER_UPDATE_VENV_DIR` | `/opt/vc-oci/src` / `/opt/vc-oci/venv` | Git checkout and virtualenv used by the self-update |
 | `HELPER_UPDATE_SERVICE` / `HELPER_UPDATE_LOG_PATH` | `vc-oci-helper` / `/var/lib/vc-oci-helper/update.log` | systemd unit restarted after an update; update log shown in the UI |
 

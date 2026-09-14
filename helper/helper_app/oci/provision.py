@@ -55,6 +55,31 @@ class Provisioner:
     def helper_id(self) -> str:
         return self.c.identity_info.instance_id
 
+    def _free_hostname_label(self, subnet_id: str, display: str) -> str | None:
+        """DNS labels are unique per subnet; a clash makes the launch fail asynchronously ("Hostname ... is
+        already used in subnet"), so pick ``name``, ``name-2``, ``name-3``, ... against the subnet's private IPs.
+        Falls back to the plain label when the subnet cannot be listed."""
+        import oci
+
+        base = _hostname_label(display)
+        if not base:
+            return None
+        try:
+            ips = oci.pagination.list_call_get_all_results(self.c.network.list_private_ips, subnet_id=subnet_id).data
+        except Exception as exc:  # noqa: BLE001
+            log.warning("cannot list private IPs of subnet %s to check the hostname label: %s", subnet_id, exc)
+            return base
+        taken = {ip.hostname_label.lower() for ip in ips if getattr(ip, "hostname_label", None)}
+        if base not in taken:
+            return base
+        for n in range(2, 1000):
+            suffix = f"-{n}"
+            candidate = base[: 63 - len(suffix)].rstrip("-") + suffix
+            if candidate not in taken:
+                log.info("hostname label %s is already used in subnet %s; using %s", base, subnet_id, candidate)
+                return candidate
+        return None
+
     # ------------------------------------------------------------------ prepare
     def prepare(self, job: Job, check_cancel: Callable[[], None] | None = None) -> Job:
         """``check_cancel`` is called before every step and may raise to abort provisioning."""
@@ -110,7 +135,7 @@ class Provisioner:
                     subnet_id=target.subnet_id,
                     assign_public_ip=target.assign_public_ip,
                     display_name=display,
-                    hostname_label=_hostname_label(display),
+                    hostname_label=self._free_hostname_label(target.subnet_id, display),
                 ),
                 source_details=M.InstanceSourceViaImageDetails(
                     source_type="image",
@@ -140,8 +165,13 @@ class Provisioner:
             job.instance_id = instance.id
             job.instance_display_name = instance.display_name
             self.save(job)
-            self.c.wait_for(lambda: self.c.compute.get_instance(job.instance_id), "lifecycle_state",
-                            ["RUNNING"], self.s.launch_timeout_s, what="target instance")
+            try:
+                self.c.wait_for(lambda: self.c.compute.get_instance(job.instance_id), "lifecycle_state",
+                                ["RUNNING"], self.s.launch_timeout_s, what="target instance")
+            except OciError as exc:
+                # a launch that fails asynchronously (VNIC, capacity, ...) only explains itself on its work request
+                reason = self.c.work_request_errors(target.compartment_id, job.instance_id)
+                raise OciError(f"{exc}; {reason}" if reason else str(exc)) from exc
 
         # 3. stop it (hard stop: the placeholder image has no OS to react to ACPI)
         inst = self.c.compute.get_instance(job.instance_id).data

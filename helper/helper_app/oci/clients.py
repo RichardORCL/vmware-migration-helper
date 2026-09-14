@@ -113,6 +113,23 @@ class OciClients:
             time.sleep(self.poll_interval_s)
 
 
+    # ------------------------------------------------------------ diagnostics
+    def work_request_errors(self, compartment_id: str, resource_id: str) -> str:
+        """Errors OCI recorded on the work requests of a resource, e.g. why an instance went TERMINATING
+        right after launch.  Never raises: this is only used to enrich an error that already happened."""
+        if self.work_requests is None:
+            return ""
+        try:
+            requests = self.work_requests.list_work_requests(compartment_id, resource_id=resource_id).data or []
+            parts = []
+            for wr in requests:
+                for err in self.work_requests.list_work_request_errors(wr.id).data or []:
+                    parts.append(f"{wr.operation_type or 'work request'}: {err.message}")
+            return "; ".join(parts)
+        except Exception as exc:  # noqa: BLE001
+            return f"(could not read the work requests of {resource_id}: {describe_error(exc)})"
+
+
 def build_clients(settings: Settings) -> OciClients:
     import oci
 

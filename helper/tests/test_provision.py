@@ -192,6 +192,64 @@ def test_seed_import_failure_explains_work_request(env):
         prov.prepare(job3)
 
 
+def test_hostname_label_avoids_existing_dns_names_in_subnet(env):
+    """DNS labels are unique per subnet.  A VM whose name is already used by another instance in the target
+    subnet must get a free label instead of an asynchronous 'Hostname ... is already used' launch failure."""
+    from types import SimpleNamespace as NS
+
+    settings, fake, store, prov = env
+    fake.network.private_ips += [
+        NS(hostname_label="app-server-01", subnet_id="ocid1.subnet.oc1..1", vnic_id="v1"),   # existing instance
+        NS(hostname_label="app-server-01-2", subnet_id="ocid1.subnet.oc1..1", vnic_id="v2"),
+        NS(hostname_label="app-server-01", subnet_id="ocid1.subnet.oc1..2", vnic_id="v3"),   # other subnet: no clash
+    ]
+    job = make_job(make_vm(), make_target())
+    store.put(job)
+    prov.prepare(job)
+    assert fake.compute.launch_details[0].create_vnic_details.hostname_label == "app-server-01-3"
+    assert fake.compute.instances[job.instance_id].lifecycle_state == "STOPPED"
+
+    # a second copy of the same VM into the same subnet gets the next free label
+    job2 = make_job(make_vm(), make_target())
+    job2.id = "job0002"
+    store.put(job2)
+    prov.prepare(job2)
+    assert fake.compute.launch_details[1].create_vnic_details.hostname_label == "app-server-01-4"
+
+    # the other subnet is untouched by those launches
+    job3 = make_job(make_vm(), make_target(subnet_id="ocid1.subnet.oc1..2"))
+    job3.id = "job0003"
+    store.put(job3)
+    prov.prepare(job3)
+    assert fake.compute.launch_details[2].create_vnic_details.hostname_label == "app-server-01-2"
+
+
+def test_hostname_label_suffix_respects_63_chars(env):
+    from types import SimpleNamespace as NS
+
+    settings, fake, store, prov = env
+    long_name = "x" * 70
+    fake.network.private_ips.append(NS(hostname_label="x" * 63, subnet_id="ocid1.subnet.oc1..1", vnic_id="v"))
+    job = make_job(make_vm(), make_target(display_name=long_name))
+    store.put(job)
+    prov.prepare(job)
+    label = fake.compute.launch_details[0].create_vnic_details.hostname_label
+    assert label == "x" * 61 + "-2" and len(label) == 63
+
+
+def test_launch_failure_reports_work_request_error(env):
+    """An instance that OCI terminates right after launch (capacity, VNIC, ...) explains itself only on its work
+    request; that reason must end up in the job error."""
+    settings, fake, store, prov = env
+    fake.launch_outcome = "TERMINATING"
+    fake.launch_errors = [("OutOfCapacity", "Out of host capacity.")]
+    job = make_job(make_vm(), make_target())
+    store.put(job)
+    with pytest.raises(OciError, match="entered state TERMINATING.*LaunchInstance: Out of host capacity"):
+        prov.prepare(job)
+    assert job.instance_id  # recorded, so cleanup can terminate it
+
+
 def test_prepare_cancel_hook_aborts_between_steps(env):
     settings, fake, store, prov = env
     job = make_job(make_vm(), make_target())

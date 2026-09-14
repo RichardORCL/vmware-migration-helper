@@ -72,7 +72,20 @@ class FakeCompute:
                   launch_options=details.launch_options, licensing_configs=details.licensing_configs,
                   shape=details.shape, shape_config=details.shape_config)
         self.instances[iid] = inst
-        self.pending_transitions[iid] = "RUNNING"
+        vnic = details.create_vnic_details
+        label = getattr(vnic, "hostname_label", None)
+        if label and label in self.f.network.hostnames_in_subnet(vnic.subnet_id):
+            # real OCI accepts the launch and fails it asynchronously via the work request
+            self.pending_transitions[iid] = "TERMINATING"
+            self.f.work_requests.add("LaunchInstance", details.compartment_id, iid, [
+                ("InvalidParameter", "A problem occurred while preparing the instance's VNIC. (Error returned by "
+                 f"CreateVnic operation in VcnInternalService service.(400, InvalidParameter, false) Hostname {label} "
+                 f"is already used in subnet {vnic.subnet_id}")])
+            return Resp(inst)
+        self.pending_transitions[iid] = self.f.launch_outcome
+        self.f.work_requests.add("LaunchInstance", details.compartment_id, iid, list(self.f.launch_errors))
+        if label:
+            self.f.network.private_ips.append(NS(hostname_label=label, subnet_id=vnic.subnet_id, vnic_id=oid("vnic")))
         bv_id = oid("bootvolume")
         self.f.blockstorage.boot_volumes[bv_id] = NS(id=bv_id, lifecycle_state="AVAILABLE",
                                                      size_in_gbs=details.source_details.boot_volume_size_in_gbs,
@@ -193,8 +206,8 @@ class FakeCompute:
                  object_name=src.object_name)
         self.images[iid] = img
         self.pending_transitions[iid] = self.f.import_outcome
-        wr_id = oid("coreservicesworkrequest")
-        self.f.work_requests.requests[wr_id] = (self.f.import_errors, self.f.import_logs)
+        wr_id = self.f.work_requests.add("CreateImage", details.compartment_id, iid, self.f.import_errors,
+                                         self.f.import_logs)
         return Resp(img, headers={"opc-work-request-id": wr_id})
 
     def get_image(self, iid):
@@ -280,7 +293,23 @@ class FakeObjectStorage:
 class FakeWorkRequests:
     def __init__(self):
         self.requests: dict[str, tuple[list, list]] = {}  # id -> (errors, log entries)
+        self.by_resource: dict[str, list[NS]] = {}  # resource id -> work request summaries
         self.error: Optional[Exception] = None  # raised on every lookup when set (e.g. missing policy)
+
+    def add(self, operation: str, compartment_id: str, resource_id: str, errors: list, logs: list = ()) -> str:
+        wr_id = oid("coreservicesworkrequest")
+        self.requests[wr_id] = (list(errors), list(logs))
+        self.by_resource.setdefault(resource_id, []).append(
+            NS(id=wr_id, operation_type=operation, compartment_id=compartment_id,
+               status="FAILED" if errors else "SUCCEEDED"))
+        return wr_id
+
+    def list_work_requests(self, compartment_id, resource_id=None, **kw):
+        if self.error:
+            raise self.error
+        if resource_id:
+            return Resp([w for w in self.by_resource.get(resource_id, []) if w.compartment_id == compartment_id])
+        return Resp([w for ws in self.by_resource.values() for w in ws if w.compartment_id == compartment_id])
 
     def list_work_request_errors(self, work_request_id, **kw):
         if self.error:
@@ -315,6 +344,16 @@ class FakeNetwork:
         "ocid1.vcn.oc1..shared": NS(id="ocid1.vcn.oc1..shared", display_name="vcn-shared", cidr_blocks=["172.16.0.0/16"]),
     }
 
+    def __init__(self):
+        # private IPs (with DNS labels) already present in the subnets; launches add to this
+        self.private_ips: list[NS] = []
+
+    def hostnames_in_subnet(self, subnet_id: str) -> set[str]:
+        return {ip.hostname_label for ip in self.private_ips if ip.subnet_id == subnet_id and ip.hostname_label}
+
+    def list_private_ips(self, subnet_id=None, **kw):
+        return Resp([ip for ip in self.private_ips if subnet_id is None or ip.subnet_id == subnet_id])
+
     def list_vcns(self, compartment_id, **kw):
         # vcn-shared lives in another compartment; only its subnet is visible here
         return Resp([v for k, v in self.vcns.items() if k != "ocid1.vcn.oc1..shared"])
@@ -347,6 +386,9 @@ class FakeOci:
         self.import_outcome = "AVAILABLE"
         self.import_errors: list[tuple[str, str]] = []
         self.import_logs: list[str] = []
+        # instance launch outcome (state reached after PROVISIONING) and work request errors
+        self.launch_outcome = "RUNNING"
+        self.launch_errors: list[tuple[str, str]] = []
         self.work_requests = FakeWorkRequests()
         self.blockstorage = FakeBlockstorage()
         self.compute = FakeCompute(self)

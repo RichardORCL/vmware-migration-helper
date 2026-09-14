@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vc-oci-helper"
+version = "0.2.0"
+description = "vCenter to OCI migration helper: web UI, NFC export from vCenter and block copy onto OCI volumes"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "pydantic>=2.5",
+    "pydantic-settings>=2.1",
+    "httpx>=0.26",
+    "oci>=2.120",
+    "pyvmomi>=8.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "ruff>=0.3"]
+
+[project.scripts]
+vc-oci-helper = "helper_app.main:run"
+
+[tool.setuptools.packages.find]
+include = ["helper_app*"]
+
+[tool.setuptools.package-data]
+helper_app = ["ui/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

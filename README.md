@@ -1,0 +1,110 @@
+# vCenter to OCI migration helper
+
+Migrate powered-off VMware virtual machines from vCenter to Oracle Cloud Infrastructure compute
+instances - **without VDDK, without an OVA download and without temporary storage**.
+
+Everything runs on a single helper VM in OCI. You log in to its web UI with your vCenter
+credentials, pick a VM, choose the OCI target and start. The helper:
+
+1. registers a tiny *seed* custom image for the VM's firmware (BIOS/UEFI) and operating system
+   (reused for later VMs with the same combination), launches the target instance from it with the
+   right launch options (boot volume type, NIC type, Windows licensing), stops it and detaches its
+   boot volume;
+2. creates the data volumes and attaches boot and data volumes to itself;
+3. opens an `HttpNfcLease` (the mechanism behind *Export OVF*) on vCenter and streams each disk as a
+   stream-optimized VMDK straight from vCenter, decoding the compressed grains on the fly and
+   `pwrite()`-ing them at their offsets on the attached OCI volumes;
+4. detaches the volumes from itself, attaches them to the target instance and starts it.
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant H as Helper VM (OCI)
+    participant VC as vCenter / ESXi
+    participant OCI as OCI APIs
+    B->>H: log in with vCenter credentials
+    H->>VC: SmartConnect (per-user session)
+    B->>H: list VMs, inspect, start migration
+    H->>OCI: seed image, LaunchInstance, stop, detach boot volume, create + attach volumes
+    H->>VC: ExportVm -> HttpNfcLease
+    loop each disk
+        VC-->>H: stream-optimized VMDK (HTTPS)
+        H->>H: decode grains -> pwrite(/dev/oracleoci/oraclevdX)
+    end
+    H->>OCI: detach from helper, attach to target, start
+    B->>H: poll job progress
+```
+
+Details: [docs/architecture.md](docs/architecture.md), [docs/os-mapping.md](docs/os-mapping.md),
+[docs/limitations.md](docs/limitations.md).
+
+## Repository layout
+
+```
+helper/
+  helper_app/
+    main.py            FastAPI app: web UI at /ui, REST API at /api
+    config.py          HELPER_* settings (vCenter, NFC, sessions, OCI, job execution)
+    models.py          VmSpec / OciTarget / Job / API payloads
+    sessions.py        web sessions bound to per-user vCenter connections (pinned by running jobs)
+    auth.py            cookie-based session dependency
+    api/               routes_auth, routes_vms, routes_jobs, routes_oci
+    vsphere/           session (pyVmomi login), inventory (VM list, VmSpec, preflight), export (NFC lease)
+    disk/              stream-optimized VMDK decoder/encoder, positional block-device writer
+    oci/               mapping (guest OS / launch options / shape), seed images, provisioning
+    jobs/              SQLite job store, MigrationRunner
+    ui/                vanilla JS single-page UI (login, VM table, export dialog, jobs)
+  deploy/terraform/    Resource Manager stack / Terraform for the helper VM (+ cloud-init)
+  Dockerfile
+  tests/               fakes for OCI, vCenter and NFC; end-to-end tests
+docs/
+```
+
+## Deploy to Oracle Cloud
+
+[![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=https://github.com/RichardORCL/vmware-migration-helper/raw/main/vc-oci-helper-stack.zip)
+
+The button opens *Create stack* in Resource Manager with the committed `vc-oci-helper-stack.zip`
+preloaded. Rebuild the zip after changing anything under `helper/deploy/terraform` with
+`helper/deploy/package_stack.sh` (or `package_stack.ps1`).
+
+## Quick start
+
+1. **Deploy the helper** in OCI with the Resource Manager stack (button above, or
+   `helper/deploy/terraform` locally; see [docs/install-helper.md](docs/install-helper.md)). You
+   provide the vCenter host, the subnet (must route to vCenter over your VPN/FastConnect) and the
+   CIDRs of the administrators' browsers.
+2. **Open the web UI** at `https://<helper-ip>:8443/`, accept the self-signed certificate and log in
+   with a vCenter account that can read the inventory and export the VMs
+   (`VirtualMachine.Provisioning.ExportOVF` / *Allow disk access*).
+3. **Migrate**: power off the VM in vCenter, click *Migrate* in the VM list, choose compartment,
+   subnet, shape and (for Windows) the license type, and follow the progress in the *Jobs* view.
+
+### Networking
+
+| Flow | Port | Notes |
+| --- | --- | --- |
+| Browser -> helper | TCP 8443 | web UI + API, TLS (self-signed by default), restricted by `allowed_source_cidrs` |
+| Helper -> vCenter | TCP 443 | SOAP API and the NFC disk download (vCenter proxies ESXi; `HELPER_NFC_HOST_OVERRIDE` if you must reach ESXi directly) |
+| Helper -> OCI | TCP 443 | Compute, Block Storage, Object Storage APIs (service gateway or NAT) |
+
+## Development
+
+```bash
+python -m venv .venv && . .venv/bin/activate
+pip install -e "./helper[dev]"
+cd helper && pytest && ruff check .
+```
+
+Run locally against OCI with a config-file profile (the vCenter part needs a reachable vCenter):
+
+```bash
+HELPER_OCI_AUTH=config_file HELPER_INSTANCE_ID=ocid1.instance... HELPER_COMPARTMENT_ID=... \
+HELPER_AVAILABILITY_DOMAIN=... HELPER_REGION=eu-frankfurt-1 HELPER_TENANCY_ID=... \
+HELPER_VCENTER_HOST=vcenter.example.com HELPER_COOKIE_SECURE=false HELPER_DB_PATH=./jobs.db \
+vc-oci-helper
+```
+
+The test-suite exercises the complete pipeline against in-memory fakes of the OCI SDK, vCenter and
+the NFC download, including a simulated mid-stream failure with retry, cancellation and a logout
+during a running export.

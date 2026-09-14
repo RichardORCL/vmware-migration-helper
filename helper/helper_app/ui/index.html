@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>vCenter to OCI migration</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">vCenter <span class="arrow">&rarr;</span> OCI migration</div>
+    <nav id="nav" hidden>
+      <a href="#/vms" data-nav="vms">Virtual machines</a>
+      <a href="#/jobs" data-nav="jobs">Jobs</a>
+    </nav>
+    <div id="user" class="user" hidden>
+      <span data-username></span>
+      <button class="secondary small" id="logout-btn">Log out</button>
+    </div>
+  </header>
+
+  <main id="app" class="app">
+    <div class="loading">Loading...</div>
+  </main>
+
+  <!-- ------------------------------------------------------------------ login -->
+  <template id="tpl-login">
+    <section class="card login">
+      <h2>Log in to vCenter</h2>
+      <p class="muted">Use your vCenter credentials. The account needs read access to the inventory and
+        <em>Allow disk access</em> / <em>Export</em> on the virtual machines to migrate.</p>
+      <form id="login-form" class="form" autocomplete="on">
+        <label>vCenter
+          <input name="vcenter" type="text" readonly>
+        </label>
+        <label>User name
+          <input name="username" type="text" required autofocus placeholder="administrator@vsphere.local">
+        </label>
+        <label>Password
+          <input name="password" type="password" required>
+        </label>
+        <div class="actions">
+          <span id="login-error" class="error"></span>
+          <button type="submit" class="primary" id="login-btn">Log in</button>
+        </div>
+      </form>
+    </section>
+  </template>
+
+  <!-- ------------------------------------------------------------------ VM list -->
+  <template id="tpl-vms">
+    <section class="card">
+      <div class="toolbar">
+        <h2>Virtual machines</h2>
+        <input id="vm-filter" type="search" placeholder="Filter by name, folder or guest OS">
+        <label class="check"><input type="checkbox" id="vm-off-only"> powered off only</label>
+        <button class="secondary small" id="vm-refresh">Refresh</button>
+        <span id="vm-count" class="muted"></span>
+      </div>
+      <div id="vm-error" class="error"></div>
+      <table class="vms">
+        <thead>
+          <tr><th>Name</th><th>Folder</th><th>Power</th><th>Guest OS</th><th>vCPU / memory</th><th>Disks</th><th>Last job</th><th></th></tr>
+        </thead>
+        <tbody id="vm-rows"></tbody>
+      </table>
+    </section>
+  </template>
+
+  <!-- ------------------------------------------------------------------ export -->
+  <template id="tpl-export">
+    <div class="export">
+      <section class="card" id="vm-card">
+        <div class="toolbar">
+          <h2>Source virtual machine</h2>
+          <a href="#/vms" class="muted">&larr; back to the list</a>
+        </div>
+        <div id="vm-details" class="kv"></div>
+        <ul id="vm-problems" class="problems"></ul>
+        <ul id="vm-warnings" class="warnings"></ul>
+      </section>
+
+      <section class="card" id="target-card">
+        <h2>OCI target</h2>
+        <form id="target-form" class="form" autocomplete="off">
+          <label>Compartment
+            <select name="compartment_id" required></select>
+          </label>
+          <label>Availability domain
+            <select name="availability_domain" required></select>
+            <small>Must match the helper VM's availability domain (boot volumes are AD-local).</small>
+          </label>
+          <label>Subnet
+            <select name="subnet_id" required></select>
+          </label>
+          <label>Shape
+            <select name="shape"></select>
+            <small id="shape-hint"></small>
+          </label>
+          <label>Instance name
+            <input name="display_name" type="text" maxlength="255">
+          </label>
+          <label class="check"><input type="checkbox" name="assign_public_ip"> Assign a public IP</label>
+          <label class="check"><input type="checkbox" name="start_after_migration" checked> Start the instance when the copy completes</label>
+
+          <fieldset id="windows-fieldset" hidden>
+            <legend>Windows licensing</legend>
+            <label class="check"><input type="radio" name="windows_license_type" value="BRING_YOUR_OWN_LICENSE" checked> Bring your own license (BYOL)</label>
+            <label class="check"><input type="radio" name="windows_license_type" value="OCI_PROVIDED"> OCI provided license</label>
+            <small>The instance is registered as Windows in OCI; the license type can be changed later.</small>
+          </fieldset>
+
+          <details>
+            <summary>Advanced: firmware and device model</summary>
+            <div class="kv" id="launch-preview"></div>
+            <label class="check"><input type="checkbox" name="compatibility_mode"> Maximum compatibility (IDE boot volume + E1000 NIC) for guests without virtio drivers</label>
+            <label>Boot volume type override
+              <select name="boot_volume_type_override">
+                <option value="">(automatic)</option>
+                <option>PARAVIRTUALIZED</option><option>SCSI</option><option>IDE</option><option>ISCSI</option>
+              </select>
+            </label>
+            <label>Network type override
+              <select name="network_type_override">
+                <option value="">(automatic)</option>
+                <option>PARAVIRTUALIZED</option><option>E1000</option><option>VFIO</option>
+              </select>
+            </label>
+          </details>
+
+          <div class="actions">
+            <span id="form-error" class="error"></span>
+            <button type="submit" id="submit-btn" class="primary">Start migration</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="card" id="job-card" hidden>
+        <h2>Migration progress</h2>
+        <div id="job-view"></div>
+      </section>
+    </div>
+  </template>
+
+  <!-- ------------------------------------------------------------------ job view -->
+  <template id="tpl-job">
+    <div class="job">
+      <div class="job-head">
+        <span class="phase" data-phase></span>
+        <span class="msg" data-message></span>
+      </div>
+      <div class="disks" data-disks></div>
+      <div class="kv" data-oci></div>
+      <div class="actions">
+        <span class="error" data-error></span>
+        <button class="secondary" data-cancel>Cancel</button>
+        <select data-license hidden>
+          <option value="BRING_YOUR_OWN_LICENSE">BYOL</option>
+          <option value="OCI_PROVIDED">OCI provided</option>
+        </select>
+        <button class="secondary" data-license-btn hidden>Change license type</button>
+      </div>
+    </div>
+  </template>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,118 @@
+import pytest
+from helper_app.models import BootVolumeType, DiskSpec, Firmware, NetworkType, NicSpec, OciTarget, VmSpec
+from helper_app.oci import mapping as m
+
+
+def vm(**kw) -> VmSpec:
+    base = dict(
+        moid="vm-1",
+        name="test",
+        num_cpu=4,
+        memory_mb=8192,
+        guest_id="oracleLinux9_64Guest",
+        guest_full_name="Oracle Linux 9 (64-bit)",
+        firmware=Firmware.EFI,
+        disks=[DiskSpec(index=0, label="Hard disk 1", device_key=2000, capacity_bytes=40 * 1024**3, controller_type="pvscsi")],
+        nics=[NicSpec(label="Network adapter 1", adapter_type="vmxnet3")],
+    )
+    base.update(kw)
+    return VmSpec(**base)
+
+
+def target(**kw) -> OciTarget:
+    base = dict(compartment_id="c", availability_domain="ad", subnet_id="s")
+    base.update(kw)
+    return OciTarget(**base)
+
+
+@pytest.mark.parametrize(
+    "guest_id,full,os,version,family",
+    [
+        ("oracleLinux9_64Guest", "", "Oracle Linux", "9", "linux"),
+        ("oracleLinux8_64Guest", "", "Oracle Linux", "8", "linux"),
+        ("rhel8_64Guest", "", "Red Hat Enterprise Linux", "8", "linux"),
+        ("centos7_64Guest", "", "CentOS", "7", "linux"),
+        ("ubuntu64Guest", "Ubuntu Linux (64-bit)", "Ubuntu", "22.04", "linux"),
+        ("ubuntu64Guest", "Ubuntu 24.04 LTS", "Ubuntu", "24.04", "linux"),
+        ("debian12_64Guest", "", "Debian", "12", "linux"),
+        ("windows2019srv_64Guest", "", "Windows", "Server 2019 Standard", "windows"),
+        ("windows2022srvNext_64Guest", "", "Windows", "Server 2022 Standard", "windows"),
+        ("windows9Server64Guest", "Microsoft Windows Server 2016 (64-bit)", "Windows", "Server 2016 Standard", "windows"),
+        ("windows9_64Guest", "Microsoft Windows 10 (64-bit)", "Windows", "10 Enterprise", "windows"),
+        ("otherGuest64", "Other 5.x Linux (64-bit)", "Custom Linux", "5", "linux"),
+        ("other3xLinux64Guest", "Other 3.x or later Linux (64-bit)", "Custom Linux", "3", "linux"),
+    ],
+)
+def test_map_guest_os(guest_id, full, os, version, family):
+    meta = m.map_guest_os(guest_id, full)
+    assert (meta.operating_system, meta.operating_system_version, meta.family) == (os, version, family)
+
+
+def test_windows_from_full_name_only():
+    meta = m.map_guest_os("otherGuest", "Microsoft Windows Server 2012 R2 (64-bit)")
+    assert meta.operating_system == "Windows"
+    assert meta.operating_system_version == "Server 2012 R2 Standard"
+
+
+def test_launch_options_defaults():
+    lo = m.map_launch_options(vm(), target())
+    assert lo.firmware == "UEFI_64"
+    assert lo.boot_volume_type == BootVolumeType.PARAVIRTUALIZED
+    assert lo.network_type == NetworkType.PARAVIRTUALIZED
+    assert lo.is_consistent_volume_naming_enabled
+
+
+def test_launch_options_bios_ide_e1000():
+    v = vm(
+        firmware=Firmware.BIOS,
+        disks=[DiskSpec(index=0, label="d", device_key=1, capacity_bytes=10, controller_type="ide")],
+        nics=[NicSpec(label="n", adapter_type="e1000")],
+    )
+    lo = m.map_launch_options(v, target())
+    assert lo.firmware == "BIOS"
+    assert lo.boot_volume_type == BootVolumeType.IDE
+    assert lo.network_type == NetworkType.E1000
+
+
+def test_launch_options_lsi_maps_to_scsi_and_mixed_nics_para():
+    v = vm(
+        disks=[DiskSpec(index=0, label="d", device_key=1, capacity_bytes=10, controller_type="lsilogicsas")],
+        nics=[NicSpec(label="n", adapter_type="e1000"), NicSpec(label="n2", adapter_type="vmxnet3")],
+    )
+    lo = m.map_launch_options(v, target())
+    assert lo.boot_volume_type == BootVolumeType.SCSI
+    assert lo.network_type == NetworkType.PARAVIRTUALIZED
+
+
+def test_launch_options_compat_mode_and_overrides():
+    lo = m.map_launch_options(vm(), target(compatibility_mode=True))
+    assert (lo.boot_volume_type, lo.network_type) == (BootVolumeType.IDE, NetworkType.E1000)
+    lo = m.map_launch_options(
+        vm(), target(compatibility_mode=True, boot_volume_type_override=BootVolumeType.SCSI,
+                     network_type_override=NetworkType.VFIO)
+    )
+    assert (lo.boot_volume_type, lo.network_type) == (BootVolumeType.SCSI, NetworkType.VFIO)
+
+
+def test_map_shape():
+    s = m.map_shape(vm(num_cpu=4, memory_mb=8192), target(), "VM.Standard.E5.Flex")
+    assert s == m.ShapeConfig("VM.Standard.E5.Flex", 2.0, 8.0)
+    s = m.map_shape(vm(num_cpu=1, memory_mb=512), target(shape="VM.Standard.E4.Flex"), "x")
+    assert s == m.ShapeConfig("VM.Standard.E4.Flex", 1.0, 1.0)
+    # memory clamped to 64 GB per OCPU
+    s = m.map_shape(vm(num_cpu=2, memory_mb=256 * 1024), target(), "x")
+    assert s.memory_gb == 64.0
+    # odd vCPU count rounds up
+    assert m.map_shape(vm(num_cpu=3, memory_mb=4096), target(), "x").ocpus == 2.0
+
+
+def test_volume_size_gb():
+    assert m.volume_size_gb(10 * 1024**3) == 50
+    assert m.volume_size_gb(50 * 1024**3) == 50
+    assert m.volume_size_gb(50 * 1024**3 + 1) == 51
+    assert m.volume_size_gb(200 * 1024**3, min_volume_gb=100) == 200
+
+
+def test_seed_tags():
+    tags = m.seed_image_tags(m.map_guest_os("windows2022srvNext_64Guest"), "UEFI_64")
+    assert tags == {"vc-oci.seed": "true", "vc-oci.firmware": "UEFI_64", "vc-oci.os": "windows-server-2022-standard"}

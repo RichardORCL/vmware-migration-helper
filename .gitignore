@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+*.sqlite3*
+helper/.env
+helper/data/
+helper/certs/
+helper/deploy/terraform/.terraform/
+helper/deploy/terraform/*.tfstate*
+helper/deploy/terraform/terraform.tfvars
+helper/deploy/terraform/.terraform.lock.hcl
+certs/

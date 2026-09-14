@@ -1,0 +1,298 @@
+"""End-to-end: web API + migration runner against fake OCI, fake vCenter and fake NFC export."""
+
+from __future__ import annotations
+
+import threading
+import time
+
+import pytest
+from fastapi.testclient import TestClient
+from helper_app.config import Settings
+from helper_app.disk.vmdk_stream import encode_raw_bytes
+from helper_app.jobs.store import JobStore, utcnow
+from helper_app.main import create_app
+from helper_app.models import Job, JobPhase
+from helper_app.vsphere.inventory import vm_spec_from_vm
+
+from .fake_oci import FakeOci
+from .fake_vsphere import FakeExport, FakeVCenterConnector, make_vm
+from .test_vmdk_stream import make_raw
+
+MIB = 1024**2
+AD = "Uocm:EU-FRANKFURT-1-AD-1"
+USER = {"username": "admin@vsphere.local", "password": "secret"}
+
+
+def wait_phase(client, job_id, *phases, timeout=30):
+    deadline = time.time() + timeout
+    job = None
+    while time.time() < deadline:
+        job = client.get(f"/api/jobs/{job_id}").json()
+        if job.get("phase") in phases:
+            return job
+        time.sleep(0.05)
+    raise AssertionError(f"job did not reach {phases}: {job}")
+
+
+def wait_until(pred, timeout=10, what="condition"):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if pred():
+            return
+        time.sleep(0.02)
+    raise AssertionError(f"timed out waiting for {what}")
+
+
+def target(**kw):
+    base = {"compartment_id": "ocid1.compartment.oc1..migr", "availability_domain": AD,
+            "subnet_id": "ocid1.subnet.oc1..1"}
+    base.update(kw)
+    return base
+
+
+class Env:
+    def __init__(self, tmp_path, fail_once=frozenset({1}), block_event=None, store=None):
+        self.settings = Settings(device_prefix=str(tmp_path / "dev" / "oraclevd"), db_path=str(tmp_path / "jobs.db"),
+                                 seed_bucket="vc-oci-seed", launch_timeout_s=5, volume_timeout_s=5,
+                                 image_import_timeout_s=5, min_volume_gb=1, cookie_secure=False,
+                                 vcenter_host="vc.test", disk_retry_attempts=3, max_concurrent_jobs=2)
+        self.fake = FakeOci(self.settings.device_prefix)
+        sizes = {0: 2 * MIB, 1: MIB}
+        self.raws = {i: make_raw(s, seed=10 + i) for i, s in sizes.items()}
+        payloads = {i: encode_raw_bytes(r) for i, r in self.raws.items()}
+        self.vms = {
+            "vm-101": make_vm(moid="vm-101", disks=((sizes[0], "pvscsi"), (sizes[1], "pvscsi"))),
+            "vm-202": make_vm(moid="vm-202", name="win-01", guest_id="windows2022srvNext_64Guest",
+                              guest_full_name="Microsoft Windows Server 2022 (64-bit)", firmware="bios",
+                              disks=((sizes[0], "lsilogic"),), nics=("e1000",), folder="DC1/Windows"),
+            "vm-on": make_vm(moid="vm-on", name="running", power_state="poweredOn"),
+            "vm-tpl": make_vm(moid="vm-tpl", name="golden", template=True),
+        }
+        self.vcenter = FakeVCenterConnector(self.vms)
+        self.store = store or JobStore(self.settings.db_path)
+        FakeExport.instances.clear()
+        self.app = create_app(
+            settings=self.settings, clients=self.fake.clients(), store=self.store, vcenter=self.vcenter,
+            export_factory=lambda vm: FakeExport(vm, payloads, fail_once=set(fail_once), block_event=block_event),
+        )
+
+
+@pytest.fixture
+def fast_retries():
+    import helper_app.jobs.runner as runner_mod
+
+    orig_sleep = runner_mod.time.sleep
+    runner_mod.time.sleep = lambda s: orig_sleep(min(s, 0.05))
+    try:
+        yield
+    finally:
+        runner_mod.time.sleep = orig_sleep
+
+
+@pytest.fixture
+def env(tmp_path, fast_retries):
+    e = Env(tmp_path)
+    with TestClient(e.app) as client:
+        e.client = client
+        yield e
+
+
+def login(client, **overrides):
+    r = client.post("/api/auth/login", json={**USER, **overrides})
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+# --------------------------------------------------------------------------- auth
+def test_login_required_and_public_endpoints(env):
+    c = env.client
+    assert c.get("/api/health").status_code == 200
+    assert c.get("/api/health").json()["vcenter_host"] == "vc.test"
+    assert c.get("/api/auth/config").json() == {"vcenter_host": "vc.test", "vcenter_port": 443}
+    assert c.get("/ui/").status_code == 200
+    assert c.get("/", follow_redirects=False).status_code == 307
+    for path in ("/api/vms", "/api/jobs", "/api/oci/options", "/api/auth/me"):
+        assert c.get(path).status_code == 401, path
+
+    assert c.post("/api/auth/login", json={**USER, "password": "wrong"}).status_code == 401
+    me = login(c)
+    assert me["username"] == USER["username"] and me["vcenter_host"] == "vc.test"
+    assert c.get("/api/auth/me").json()["username"] == USER["username"]
+
+    assert c.post("/api/auth/logout").status_code == 204
+    assert c.get("/api/auth/me").status_code == 401
+    assert env.vcenter.sessions[0].closed  # no job pinned the session, so vCenter was disconnected
+
+
+# --------------------------------------------------------------------------- inventory
+def test_vm_list_and_inspect(env):
+    c = env.client
+    login(c)
+    vms = c.get("/api/vms").json()
+    assert {v["moid"] for v in vms} == {"vm-101", "vm-on", "vm-202"}  # templates hidden
+    web = next(v for v in vms if v["moid"] == "vm-101")
+    assert web["folder"] == "DC1/Prod" and web["num_disks"] == 2 and web["power_state"] == "poweredOff"
+    assert web["disk_capacity_bytes"] == 3 * MIB
+    # cached per session, refreshed on demand
+    c.get("/api/vms")
+    assert env.vcenter.list_calls == 1
+    c.get("/api/vms?refresh=true")
+    assert env.vcenter.list_calls == 2
+
+    r = c.get("/api/vms/vm-101")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["can_export"] is True and body["vm"]["name"] == "web-01"
+    assert c.get("/api/vms/vm-on").json()["can_export"] is False
+    assert c.get("/api/vms/vm-nope").status_code == 404
+
+    r = c.get("/api/oci/options")
+    assert r.status_code == 200 and r.json()["helper_availability_domain"] == AD
+
+
+# --------------------------------------------------------------------------- migration
+def test_full_migration_with_retry(env):
+    c = env.client
+    login(c)
+    r = c.post("/api/jobs", json={"vm_moid": "vm-101", "target": target()})
+    assert r.status_code == 202, r.text
+    job_id = r.json()["id"]
+    assert r.json()["created_by"] == USER["username"]
+    # a second job for the same VM is refused while the first is active
+    assert c.post("/api/jobs", json={"vm_moid": "vm-101", "target": target()}).status_code == 409
+
+    job = wait_phase(c, job_id, "COMPLETED", "FAILED")
+    assert job["phase"] == "COMPLETED", job
+    assert [d["status"] for d in job["disks"]] == ["COPIED", "COPIED"]
+    assert job["disks"][0]["attempts"] == 1
+    assert job["disks"][1]["attempts"] == 2  # simulated NFC failure then success
+    assert job["launch_options"]["firmware"] == "UEFI_64"
+    assert all(d["device"] is None for d in job["disks"])  # detached from the helper again
+
+    export = FakeExport.instances[-1]
+    assert export.completed and not export.aborted
+
+    fake = env.fake
+    inst = fake.compute.instances[job["instance_id"]]
+    assert inst.lifecycle_state == "RUNNING"
+    target_atts = [a for a in fake.compute.vol_attachments.values()
+                   if a.instance_id == job["instance_id"] and a.lifecycle_state == "ATTACHED"]
+    assert len(target_atts) == 1
+    # the helper wrote the raw disk content onto its "devices" (files under tmp)
+    used_devices = sorted(p for p in (a.device for a in fake.compute.vol_attachments.values()
+                                      if a.instance_id == fake.identity.instance_id) if p)
+    contents = {open(p, "rb").read() for p in used_devices}
+    assert env.raws[0] in contents and env.raws[1] in contents
+
+    jobs = c.get("/api/jobs", params={"vm_moid": "vm-101"}).json()
+    assert jobs[0]["id"] == job_id
+    assert c.get("/api/jobs").json()[0]["id"] == job_id
+    assert c.post(f"/api/jobs/{job_id}/cancel").status_code == 409  # already completed
+    # the vCenter session is released but stays open for the still logged-in user
+    assert not env.vcenter.sessions[0].closed
+
+
+def test_windows_requires_license_and_license_update(env):
+    c = env.client
+    login(c)
+    r = c.post("/api/jobs", json={"vm_moid": "vm-202", "target": target()})
+    assert r.status_code == 400 and "license" in r.text
+    r = c.post("/api/jobs", json={"vm_moid": "vm-202",
+                                  "target": target(windows_license_type="BRING_YOUR_OWN_LICENSE",
+                                                   start_after_migration=False)})
+    assert r.status_code == 202, r.text
+    job = wait_phase(c, r.json()["id"], "COMPLETED", "FAILED")
+    assert job["phase"] == "COMPLETED", job
+    lo = job["launch_options"]
+    assert (lo["firmware"], lo["boot_volume_type"], lo["network_type"]) == ("BIOS", "SCSI", "E1000")
+    ld = [d for d in env.fake.compute.launch_details if d.display_name == "win-01"][0]
+    assert ld.licensing_configs[0].license_type == "BRING_YOUR_OWN_LICENSE"
+    r = c.post(f"/api/jobs/{job['id']}/licensing", json={"license_type": "OCI_PROVIDED"})
+    assert r.status_code == 200, r.text
+    assert r.json()["licensing_configs"][0]["license_type"] == "OCI_PROVIDED"
+    assert c.get(f"/api/jobs/{job['id']}").json()["target"]["windows_license_type"] == "OCI_PROVIDED"
+    assert env.fake.compute.instances[job["instance_id"]].lifecycle_state == "STOPPED"
+
+
+def test_create_job_validation(env):
+    c = env.client
+    login(c)
+    r = c.post("/api/jobs", json={"vm_moid": "vm-on", "target": target()})
+    assert r.status_code == 400 and "powered off" in r.text
+    r = c.post("/api/jobs", json={"vm_moid": "vm-101", "target": target(availability_domain="Uocm:EU-FRANKFURT-1-AD-2")})
+    assert r.status_code == 400 and "availability domain" in r.text
+    assert c.post("/api/jobs", json={"vm_moid": "vm-nope", "target": target()}).status_code == 404
+    assert c.get("/api/jobs/nope").status_code == 404
+    # license change needs a Windows job with an instance
+    r = c.post("/api/jobs", json={"vm_moid": "vm-101", "target": target()})
+    job = wait_phase(c, r.json()["id"], "COMPLETED", "FAILED")
+    assert c.post(f"/api/jobs/{job['id']}/licensing", json={"license_type": "OCI_PROVIDED"}).status_code == 400
+
+
+def test_cancel_during_copy_cleans_up(tmp_path, fast_retries):
+    gate = threading.Event()
+    env = Env(tmp_path, fail_once=frozenset(), block_event=gate)
+    with TestClient(env.app) as c:
+        login(c)
+        r = c.post("/api/jobs", json={"vm_moid": "vm-101", "target": target()})
+        job_id = r.json()["id"]
+        # wait until the copy of disk 0 is in progress (blocked on the gate)
+        wait_until(lambda: c.get(f"/api/jobs/{job_id}").json()["disks"][0]["status"] == "COPYING", what="copying")
+        assert c.post(f"/api/jobs/{job_id}/cancel").status_code == 202
+        gate.set()
+        job = wait_phase(c, job_id, "CANCELLED", "COMPLETED", "FAILED")
+        assert job["phase"] == "CANCELLED", job
+        assert job["instance_id"] in env.fake.compute.terminated
+        assert set(env.fake.blockstorage.deleted) == {d["volume_id"] for d in job["disks"]}
+        assert FakeExport.instances[-1].aborted
+        # helper attachments were detached during cleanup
+        helper_atts = [a for a in env.fake.compute.vol_attachments.values()
+                       if a.instance_id == env.fake.identity.instance_id]
+        assert all(a.lifecycle_state == "DETACHED" for a in helper_atts)
+
+
+def test_logout_keeps_vcenter_session_alive_for_running_job(tmp_path, fast_retries):
+    gate = threading.Event()
+    env = Env(tmp_path, fail_once=frozenset(), block_event=gate)
+    with TestClient(env.app) as c:
+        login(c)
+        r = c.post("/api/jobs", json={"vm_moid": "vm-101", "target": target()})
+        job_id = r.json()["id"]
+        wait_until(lambda: c.get(f"/api/jobs/{job_id}").json()["disks"][0]["status"] == "COPYING", what="copying")
+        vc_session = env.vcenter.sessions[0]
+        assert c.post("/api/auth/logout").status_code == 204
+        assert c.get("/api/jobs").status_code == 401
+        assert not vc_session.closed  # pinned by the running job
+
+        gate.set()
+        login(c)  # new UI session to observe the job
+        job = wait_phase(c, job_id, "COMPLETED", "FAILED")
+        assert job["phase"] == "COMPLETED", job
+        wait_until(lambda: vc_session.closed, what="vCenter session closed after the job released it")
+
+
+def test_interrupted_jobs_fail_on_restart_and_can_be_cleaned_up(tmp_path, fast_retries):
+    store = JobStore(str(tmp_path / "jobs.db"))
+    now = utcnow()
+    spec = vm_spec_from_vm(make_vm(moid="vm-101"))
+    stale = Job(id="stale1", phase=JobPhase.EXPORTING, vm=spec,
+                target=target(), created_at=now, updated_at=now)
+    store.put(stale)
+    env = Env(tmp_path, store=store)
+    with TestClient(env.app) as c:
+        login(c)
+        job = c.get("/api/jobs/stale1").json()
+        assert job["phase"] == "FAILED" and "restarted" in job["error"]
+        assert c.post("/api/jobs/stale1/cancel").status_code == 202
+        job = wait_phase(c, "stale1", "CANCELLED")
+        assert "nothing to clean up" in job["message"]
+        assert c.post("/api/jobs/stale1/cancel").status_code == 409
+
+
+def test_seed_image_cleanup_endpoint(env):
+    c = env.client
+    login(c)
+    r = c.post("/api/jobs", json={"vm_moid": "vm-101", "target": target()})
+    wait_phase(c, r.json()["id"], "COMPLETED", "FAILED")
+    r = c.delete("/api/seed-images")
+    assert r.status_code == 200 and len(r.json()["deleted"]) == 1

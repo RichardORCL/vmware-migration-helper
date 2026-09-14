@@ -1,0 +1,273 @@
+title: "vCenter to OCI migration helper"
+description: >
+  Deploys the migration helper VM: an Oracle Linux 9 instance running the web UI and migration
+  engine that exports powered-off VMs from vCenter and recreates them as OCI compute instances,
+  plus a network security group, the seed image bucket and the IAM resources (dynamic group,
+  policy, tag namespace) it needs.
+schemaVersion: 1.1.0
+version: "0.2.0"
+locale: "en"
+
+variableGroups:
+  - title: "Placement"
+    variables:
+      - compartment_ocid
+      - availability_domain
+      - vcn_ocid
+      - subnet_ocid
+      - assign_public_ip
+      - allowed_source_cidrs
+  - title: "vCenter"
+    variables:
+      - vcenter_host
+      - vcenter_port
+      - vcenter_verify_ssl
+  - title: "Helper instance"
+    variables:
+      - helper_display_name
+      - helper_shape
+      - helper_ocpus
+      - helper_memory_gb
+      - ssh_public_key
+  - title: "Helper service"
+    variables:
+      - install_method
+      - source_git_url
+      - source_git_ref
+      - container_image
+      - container_registry_auth
+      - seed_bucket_name
+      - default_target_shape
+      - max_concurrent_jobs
+  - title: "IAM"
+    variables:
+      - create_iam
+      - policy_scope_compartment_ocid
+  - title: "Hidden"
+    visible: false
+    variables:
+      - tenancy_ocid
+      - region
+
+variables:
+  compartment_ocid:
+    type: oci:identity:compartment:id
+    title: "Compartment"
+    description: "Compartment for the helper VM, the seed bucket and seed images"
+    required: true
+
+  availability_domain:
+    type: oci:identity:availabilitydomain:name
+    title: "Availability domain"
+    description: "Migrated instances can only be created in this AD"
+    required: true
+    dependsOn:
+      compartmentId: ${compartment_ocid}
+
+  vcn_ocid:
+    type: oci:core:vcn:id
+    title: "VCN"
+    required: true
+    dependsOn:
+      compartmentId: ${compartment_ocid}
+
+  subnet_ocid:
+    type: oci:core:subnet:id
+    title: "Subnet"
+    description: "Must route to vCenter (VPN/FastConnect) and be reachable from the administrators' browsers"
+    required: true
+    dependsOn:
+      compartmentId: ${compartment_ocid}
+      vcnId: ${vcn_ocid}
+      hidePublicSubnet: false
+      hidePrivateSubnet: false
+
+  assign_public_ip:
+    type: boolean
+    title: "Assign a public IP"
+    default: false
+
+  allowed_source_cidrs:
+    type: array
+    items:
+      type: string
+      pattern: "^([0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2}$"
+    title: "Allowed source CIDRs"
+    description: "Networks allowed to reach the web UI (8443) and SSH (22), typically the administrators' networks"
+    required: true
+    minItems: 1
+    uniqueItems: true
+
+  vcenter_host:
+    type: string
+    title: "vCenter host"
+    description: "Host name or IP of vCenter Server as reachable from the helper subnet"
+    required: true
+
+  vcenter_port:
+    type: number
+    title: "vCenter HTTPS port"
+    default: 443
+
+  vcenter_verify_ssl:
+    type: boolean
+    title: "Verify the vCenter certificate"
+    description: "Disable for self-signed vCenter certificates"
+    default: false
+
+  helper_display_name:
+    type: string
+    title: "Instance name"
+    default: "vc-oci-helper"
+    pattern: "^[a-zA-Z][a-zA-Z0-9-]{0,62}$"
+
+  helper_shape:
+    type: oci:core:instanceshape:name
+    title: "Shape"
+    default: "VM.Standard.E5.Flex"
+    dependsOn:
+      compartmentId: ${compartment_ocid}
+      availabilityDomain: ${availability_domain}
+
+  helper_ocpus:
+    type: number
+    title: "OCPUs"
+    default: 2
+    minimum: 1
+    maximum: 16
+
+  helper_memory_gb:
+    type: number
+    title: "Memory (GB)"
+    default: 16
+    minimum: 4
+    maximum: 256
+
+  ssh_public_key:
+    type: oci:core:ssh:publickey
+    title: "SSH public key"
+    required: true
+
+  install_method:
+    type: enum
+    title: "Installation method"
+    description: "'source' clones the repository and installs with pip (no registry needed); 'container' pulls an image with podman"
+    enum:
+      - source
+      - container
+    default: source
+    required: true
+
+  source_git_url:
+    type: string
+    title: "Git repository URL"
+    description: "HTTPS URL of the helper repository (must be reachable from the helper VM)"
+    default: "https://github.com/RichardORCL/vmware-migration-helper.git"
+    visible:
+      eq:
+        - ${install_method}
+        - source
+    required: true
+
+  source_git_ref:
+    type: string
+    title: "Git branch / tag / commit"
+    default: "main"
+    visible:
+      eq:
+        - ${install_method}
+        - source
+
+  container_image:
+    type: string
+    title: "Container image"
+    description: "e.g. fra.ocir.io/<namespace>/vc-oci-helper:latest"
+    visible:
+      eq:
+        - ${install_method}
+        - container
+    required: true
+
+  container_registry_auth:
+    type: password
+    title: "Registry credentials (user:password)"
+    description: "Leave empty for public images"
+    visible:
+      eq:
+        - ${install_method}
+        - container
+
+  seed_bucket_name:
+    type: string
+    title: "Seed image bucket"
+    default: "vc-oci-seed-images"
+    pattern: "^[a-zA-Z0-9_.-]{1,256}$"
+
+  default_target_shape:
+    type: string
+    title: "Default shape for migrated instances"
+    default: "VM.Standard.E5.Flex"
+
+  max_concurrent_jobs:
+    type: number
+    title: "Parallel migrations"
+    default: 2
+    minimum: 1
+    maximum: 8
+
+  create_iam:
+    type: boolean
+    title: "Create IAM resources"
+    description: "Dynamic group, policy and the vc-oci tag namespace (requires administrator rights in the tenancy root)"
+    default: true
+
+  policy_scope_compartment_ocid:
+    type: oci:identity:compartment:id
+    title: "Limit target compartment"
+    description: "Restrict where the helper may create instances and volumes (empty = whole tenancy)"
+    visible: ${create_iam}
+
+  tenancy_ocid:
+    type: string
+  region:
+    type: string
+
+outputGroups:
+  - title: "Get started"
+    outputs:
+      - helper_ui_url
+      - vcenter_host
+      - availability_domain
+      - next_steps
+  - title: "Resources"
+    outputs:
+      - helper_instance_id
+      - helper_private_ip
+      - helper_public_ip
+      - seed_bucket
+
+outputs:
+  helper_ui_url:
+    type: link
+    title: "Migration helper web UI"
+  vcenter_host:
+    type: string
+    title: "vCenter"
+  availability_domain:
+    type: string
+    title: "Availability domain for migrated instances"
+  next_steps:
+    type: string
+    title: "Next steps"
+  helper_instance_id:
+    type: ocid
+    title: "Helper instance"
+  helper_private_ip:
+    type: string
+    title: "Private IP"
+  helper_public_ip:
+    type: string
+    title: "Public IP"
+  seed_bucket:
+    type: string
+    title: "Seed image bucket"

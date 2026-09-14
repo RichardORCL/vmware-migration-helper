@@ -1,0 +1,30 @@
+# Local `terraform apply` (Resource Manager injects tenancy_ocid / region / compartment_ocid itself).
+tenancy_ocid         = "ocid1.tenancy.oc1..aaaa"
+region               = "eu-frankfurt-1"
+compartment_ocid     = "ocid1.compartment.oc1..aaaa"
+availability_domain  = "Uocm:EU-FRANKFURT-1-AD-1"
+vcn_ocid             = "ocid1.vcn.oc1.eu-frankfurt-1.aaaa"
+subnet_ocid          = "ocid1.subnet.oc1.eu-frankfurt-1.aaaa"
+assign_public_ip     = false
+allowed_source_cidrs = ["10.20.0.0/16"] # administrators' networks reaching the web UI (VPN/FastConnect)
+ssh_public_key       = "ssh-ed25519 AAAA... admin@example.com"
+
+# vCenter as reachable from the helper subnet (SOAP API and NFC disk download on 443)
+vcenter_host       = "vcenter.example.com"
+vcenter_port       = 443
+vcenter_verify_ssl = false
+
+# Installation: from GitHub (default) ...
+install_method = "source"
+source_git_url = "https://github.com/RichardORCL/vmware-migration-helper.git"
+source_git_ref = "main"
+# ... or from a container image
+# install_method          = "container"
+# container_image         = "fra.ocir.io/<namespace>/vc-oci-helper:latest"
+# container_registry_auth = "<namespace>/oracleidentitycloudservice/user@example.com:<auth-token>"
+
+# max_concurrent_jobs = 2
+
+# IAM: set create_iam = false if an administrator already created the dynamic group/policy/tag namespace
+create_iam = true
+# policy_scope_compartment_ocid = "ocid1.compartment.oc1..migrations"

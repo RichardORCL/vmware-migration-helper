@@ -1,0 +1,308 @@
+"""In-memory stand-in for the OCI SDK clients used by the helper."""
+
+from __future__ import annotations
+
+import itertools
+from pathlib import Path
+from types import SimpleNamespace as NS
+from typing import Optional
+
+import oci
+from helper_app.oci.clients import HelperIdentity, OciClients
+
+_ids = itertools.count(1)
+
+
+def oid(kind: str) -> str:
+    return f"ocid1.{kind}.oc1..{next(_ids):06d}"
+
+
+class Resp:
+    def __init__(self, data, headers=None):
+        self.data = data
+        self.has_next_page = False
+        self.next_page = None
+        self.headers = headers or {}
+        self.status = 200
+        self.request = None
+
+
+class FakeCompute:
+    def __init__(self, fake: "FakeOci"):
+        self.f = fake
+        self.instances: dict[str, NS] = {}
+        self.boot_attachments: dict[str, NS] = {}
+        self.vol_attachments: dict[str, NS] = {}
+        self.images: dict[str, NS] = {}
+        self.capability_schemas: list = []
+        self.launch_details: list = []
+        self.actions: list[tuple[str, str]] = []
+        self.updates: list = []
+        self.terminated: list[str] = []
+        self.pending_transitions: dict[str, str] = {}
+
+    # instances -----------------------------------------------------------
+    def launch_instance(self, details):
+        self.launch_details.append(details)
+        iid = oid("instance")
+        inst = NS(id=iid, display_name=details.display_name, lifecycle_state="PROVISIONING",
+                  availability_domain=details.availability_domain, compartment_id=details.compartment_id,
+                  launch_options=details.launch_options, licensing_configs=details.licensing_configs,
+                  shape=details.shape, shape_config=details.shape_config)
+        self.instances[iid] = inst
+        self.pending_transitions[iid] = "RUNNING"
+        bv_id = oid("bootvolume")
+        self.f.blockstorage.boot_volumes[bv_id] = NS(id=bv_id, lifecycle_state="AVAILABLE",
+                                                     size_in_gbs=details.source_details.boot_volume_size_in_gbs,
+                                                     image_id=details.source_details.image_id)
+        att_id = oid("bootvolumeattachment")
+        self.boot_attachments[att_id] = NS(id=att_id, boot_volume_id=bv_id, instance_id=iid,
+                                           lifecycle_state="ATTACHED")
+        return Resp(inst)
+
+    def get_instance(self, iid):
+        inst = self.instances[iid]
+        nxt = self.pending_transitions.pop(iid, None)
+        if nxt:
+            inst.lifecycle_state = nxt
+        return Resp(inst)
+
+    def instance_action(self, iid, action):
+        self.actions.append((iid, action))
+        inst = self.instances[iid]
+        if action == "STOP":
+            inst.lifecycle_state = "STOPPING"
+            self.pending_transitions[iid] = "STOPPED"
+        elif action == "START":
+            inst.lifecycle_state = "STARTING"
+            self.pending_transitions[iid] = "RUNNING"
+        return Resp(inst)
+
+    def update_instance(self, iid, details):
+        self.updates.append((iid, details))
+        inst = self.instances[iid]
+        if details.licensing_configs is not None:
+            inst.licensing_configs = details.licensing_configs
+        return Resp(inst)
+
+    def terminate_instance(self, iid, preserve_boot_volume=False):
+        self.terminated.append(iid)
+        self.instances[iid].lifecycle_state = "TERMINATED"
+        return Resp(None)
+
+    def list_instance_devices(self, instance_id, is_available=None, **kw):
+        used = {a.device for a in self.vol_attachments.values()
+                if a.instance_id == instance_id and a.lifecycle_state in ("ATTACHED", "ATTACHING")}
+        devs = []
+        for i in range(1, 32):
+            name = f"{self.f.device_prefix}{_letters(i)}"
+            avail = name not in used
+            if is_available is None or avail == is_available:
+                devs.append(NS(name=name, is_available=avail))
+        return Resp(devs)
+
+    def list_shapes(self, compartment_id, availability_domain=None, **kw):
+        return Resp([
+            NS(shape="VM.Standard.E5.Flex", is_flexible=True, ocpus=1, memory_in_gbs=16,
+               ocpu_options=NS(min=1, max=94), memory_options=NS(min_in_g_bs=1, max_in_g_bs=1049)),
+            NS(shape="VM.Standard2.1", is_flexible=False, ocpus=1, memory_in_gbs=15, ocpu_options=None,
+               memory_options=None),
+        ])
+
+    # boot volumes --------------------------------------------------------
+    def list_boot_volume_attachments(self, availability_domain, compartment_id, instance_id=None, **kw):
+        atts = [a for a in self.boot_attachments.values() if instance_id is None or a.instance_id == instance_id]
+        return Resp(atts)
+
+    def detach_boot_volume(self, att_id):
+        self.boot_attachments[att_id].lifecycle_state = "DETACHED"
+        return Resp(None)
+
+    def get_boot_volume_attachment(self, att_id):
+        return Resp(self.boot_attachments[att_id])
+
+    def attach_boot_volume(self, details):
+        att_id = oid("bootvolumeattachment")
+        att = NS(id=att_id, boot_volume_id=details.boot_volume_id, instance_id=details.instance_id,
+                 lifecycle_state="ATTACHED")
+        self.boot_attachments[att_id] = att
+        return Resp(att)
+
+    # block volume attachments -------------------------------------------
+    def attach_volume(self, details):
+        att_id = oid("volumeattachment")
+        device = getattr(details, "device", None)
+        att = NS(id=att_id, volume_id=details.volume_id, instance_id=details.instance_id, device=device,
+                 attachment_type=details.type, lifecycle_state="ATTACHED")
+        self.vol_attachments[att_id] = att
+        if device and details.instance_id == self.f.identity.instance_id:
+            # simulate the device node appearing on the helper
+            p = Path(device)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.touch()
+        return Resp(att)
+
+    def get_volume_attachment(self, att_id):
+        return Resp(self.vol_attachments[att_id])
+
+    def detach_volume(self, att_id):
+        self.vol_attachments[att_id].lifecycle_state = "DETACHED"
+        return Resp(None)
+
+    # images --------------------------------------------------------------
+    def list_images(self, compartment_id, lifecycle_state=None, **kw):
+        imgs = [i for i in self.images.values() if i.compartment_id == compartment_id
+                and (lifecycle_state is None or i.lifecycle_state == lifecycle_state)]
+        return Resp(imgs)
+
+    def create_image(self, details):
+        iid = oid("image")
+        src = details.image_source_details
+        img = NS(id=iid, display_name=details.display_name, compartment_id=details.compartment_id,
+                 lifecycle_state="IMPORTING", freeform_tags=dict(details.freeform_tags or {}),
+                 launch_mode=details.launch_mode, operating_system=src.operating_system,
+                 operating_system_version=src.operating_system_version, source_image_type=src.source_image_type,
+                 object_name=src.object_name)
+        self.images[iid] = img
+        self.pending_transitions[iid] = "AVAILABLE"
+        return Resp(img)
+
+    def get_image(self, iid):
+        img = self.images[iid]
+        nxt = self.pending_transitions.pop(iid, None)
+        if nxt:
+            img.lifecycle_state = nxt
+        return Resp(img)
+
+    def delete_image(self, iid):
+        self.images[iid].lifecycle_state = "DELETED"
+        return Resp(None)
+
+    def list_compute_global_image_capability_schemas(self, **kw):
+        return Resp([NS(id=oid("globalschema"), current_version_name="v1.0")])
+
+    def list_compute_global_image_capability_schema_versions(self, schema_id, **kw):
+        return Resp([NS(name="v1.0")])
+
+    def create_compute_image_capability_schema(self, details):
+        self.capability_schemas.append(details)
+        return Resp(NS(id=oid("capschema"), image_id=details.image_id, schema_data=details.schema_data))
+
+
+class FakeBlockstorage:
+    def __init__(self):
+        self.volumes: dict[str, NS] = {}
+        self.boot_volumes: dict[str, NS] = {}
+        self.deleted: list[str] = []
+
+    def create_volume(self, details):
+        vid = oid("volume")
+        vol = NS(id=vid, display_name=details.display_name, size_in_gbs=details.size_in_gbs,
+                 lifecycle_state="AVAILABLE", availability_domain=details.availability_domain,
+                 compartment_id=details.compartment_id, freeform_tags=details.freeform_tags)
+        self.volumes[vid] = vol
+        return Resp(vol)
+
+    def get_volume(self, vid):
+        return Resp(self.volumes[vid])
+
+    def delete_volume(self, vid):
+        self.deleted.append(vid)
+        return Resp(None)
+
+    def delete_boot_volume(self, vid):
+        self.deleted.append(vid)
+        return Resp(None)
+
+
+class FakeObjectStorage:
+    def __init__(self, bucket_exists=False):
+        self.buckets: set[str] = {"vc-oci-seed"} if bucket_exists else set()
+        self.objects: dict[str, bytes] = {}
+        self.deleted: list[str] = []
+
+    def get_namespace(self, **kw):
+        return Resp("testnamespace")
+
+    def get_bucket(self, namespace, bucket, **kw):
+        if bucket not in self.buckets:
+            raise oci.exceptions.ServiceError(404, "BucketNotFound", {}, "bucket not found")
+        return Resp(NS(name=bucket))
+
+    def create_bucket(self, namespace, details, **kw):
+        self.buckets.add(details.name)
+        return Resp(NS(name=details.name))
+
+    def put_object(self, namespace, bucket, name, body, **kw):
+        assert bucket in self.buckets
+        self.objects[name] = bytes(body)
+        return Resp(None)
+
+    def delete_object(self, namespace, bucket, name, **kw):
+        self.objects.pop(name, None)
+        self.deleted.append(name)
+        return Resp(None)
+
+
+class FakeIdentity:
+    def __init__(self, tenancy_id: str):
+        self.tenancy_id = tenancy_id
+
+    def get_compartment(self, cid):
+        return Resp(NS(id=cid, name="root", compartment_id=None))
+
+    def list_compartments(self, compartment_id, **kw):
+        return Resp([
+            NS(id="ocid1.compartment.oc1..prod", name="prod", compartment_id=compartment_id),
+            NS(id="ocid1.compartment.oc1..migr", name="migrations", compartment_id="ocid1.compartment.oc1..prod"),
+        ])
+
+    def list_availability_domains(self, compartment_id, **kw):
+        return Resp([NS(name="Uocm:EU-FRANKFURT-1-AD-1"), NS(name="Uocm:EU-FRANKFURT-1-AD-2")])
+
+
+class FakeNetwork:
+    def list_vcns(self, compartment_id, **kw):
+        return Resp([NS(id="ocid1.vcn.oc1..1", display_name="vcn-main")])
+
+    def list_subnets(self, compartment_id, **kw):
+        return Resp([NS(id="ocid1.subnet.oc1..1", display_name="private", vcn_id="ocid1.vcn.oc1..1",
+                        cidr_block="10.0.1.0/24", availability_domain=None, prohibit_public_ip_on_vnic=True)])
+
+
+class FakeOci:
+    def __init__(self, device_prefix: str, identity: Optional[HelperIdentity] = None, bucket_exists=False):
+        self.device_prefix = device_prefix
+        self.identity = identity or HelperIdentity(
+            instance_id="ocid1.instance.oc1..helper",
+            compartment_id="ocid1.compartment.oc1..helper",
+            availability_domain="Uocm:EU-FRANKFURT-1-AD-1",
+            region="eu-frankfurt-1",
+            tenancy_id="ocid1.tenancy.oc1..test",
+        )
+        self.blockstorage = FakeBlockstorage()
+        self.compute = FakeCompute(self)
+        self.object_storage = FakeObjectStorage(bucket_exists)
+        self.identity_client = FakeIdentity(self.identity.tenancy_id)
+        self.network = FakeNetwork()
+
+    def clients(self) -> OciClients:
+        return OciClients(
+            compute=self.compute,
+            blockstorage=self.blockstorage,
+            network=self.network,
+            identity=self.identity_client,
+            object_storage=self.object_storage,
+            identity_info=self.identity,
+            poll_interval_s=0.0,
+        )
+
+
+def _letters(i: int) -> str:
+    # i=1 -> b, ..., z, aa, ab, ...
+    s = ""
+    while True:
+        s = chr(ord("a") + i % 26) + s
+        i = i // 26 - 1
+        if i < 0:
+            return s

@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 from typing import Any, Callable
 
 from helper_app.config import Settings
+from helper_app.disk.devices import DeviceScanner, scan_block_devices, wait_for_new_device
 from helper_app.models import DiskState, DiskStatus, Job, JobPhase, WindowsLicenseType
 from helper_app.oci.clients import OciClients, OciError
 from helper_app.oci.mapping import (
@@ -36,11 +38,16 @@ class Provisioner:
         settings: Settings,
         save: Callable[[Job], Job],
         seed_service: SeedImageService | None = None,
+        scan_devices: DeviceScanner = scan_block_devices,
     ):
         self.c = clients
         self.s = settings
         self.save = save
         self.seeds = seed_service or SeedImageService(clients, settings)
+        self.scan_devices = scan_devices
+        # boot volumes are attached without a device path and identified by "which disk appeared", so only
+        # one such attachment may be in flight at a time even with concurrent jobs
+        self._attach_lock = threading.Lock()
 
     # ------------------------------------------------------------------ helpers
     def _step(self, job: Job, step: str, message: str = "", check: Callable[[], None] | None = None) -> None:
@@ -222,27 +229,49 @@ class Provisioner:
         for disk in job.disks:
             if disk.helper_attachment_id and disk.device:
                 continue
-            device = self._pick_free_device(job)
-            step("attach_to_helper", f"Attaching disk {disk.index} volume to helper as {device}")
-            att = self.c.compute.attach_volume(
-                M.AttachParavirtualizedVolumeDetails(
-                    type="paravirtualized",
-                    instance_id=self.helper_id,
-                    volume_id=disk.volume_id,
-                    device=device,
-                    display_name=f"vc-oci-{job.id[:8]}-disk{disk.index}",
-                )
-            ).data
-            disk.helper_attachment_id = att.id
-            self.save(job)
-            att = self.c.wait_for(lambda aid=att.id: self.c.compute.get_volume_attachment(aid), "lifecycle_state",
-                                  ["ATTACHED"], self.s.volume_timeout_s, what=f"helper attachment disk {disk.index}")
-            disk.device = att.device or device
+            if disk.is_boot:
+                # OCI refuses a device path for a boot volume attached as a data volume
+                # ("the specified device attribute ... is invalid"); find the disk by its appearance instead
+                step("attach_to_helper", f"Attaching disk {disk.index} (boot volume) to helper")
+                self._attach_boot_volume_to_helper(job, disk)
+            else:
+                device = self._pick_free_device(job)
+                step("attach_to_helper", f"Attaching disk {disk.index} volume to helper as {device}")
+                att = self._attach_to_helper(job, disk, device)
+                disk.device = att.device or device
             disk.status = DiskStatus.ATTACHED
             self.save(job)
 
         step("ready", "Volumes attached to helper; ready to receive disk streams")
         return job
+
+    def _attach_to_helper(self, job: Job, disk: DiskState, device: str | None) -> Any:
+        import oci.core.models as M
+
+        att = self.c.compute.attach_volume(
+            M.AttachParavirtualizedVolumeDetails(
+                type="paravirtualized",
+                instance_id=self.helper_id,
+                volume_id=disk.volume_id,
+                device=device,
+                display_name=f"vc-oci-{job.id[:8]}-disk{disk.index}",
+            )
+        ).data
+        disk.helper_attachment_id = att.id
+        self.save(job)
+        return self.c.wait_for(lambda: self.c.compute.get_volume_attachment(att.id), "lifecycle_state",
+                               ["ATTACHED"], self.s.volume_timeout_s, what=f"helper attachment disk {disk.index}")
+
+    def _attach_boot_volume_to_helper(self, job: Job, disk: DiskState) -> None:
+        expected = disk.size_gb * 1024**3
+        with self._attach_lock:
+            before = self.scan_devices()
+            self._attach_to_helper(job, disk, None)
+            try:
+                disk.device = wait_for_new_device(before, expected, self.s.volume_timeout_s, self.scan_devices)
+            except RuntimeError as exc:
+                raise OciError(f"boot volume attached to the helper but its disk was not found: {exc}") from exc
+        log.info("job %s: boot volume %s appeared on the helper as %s", job.id, disk.volume_id, disk.device)
 
     def _pick_free_device(self, job: Job) -> str:
         used = {d.device for d in job.disks if d.device}

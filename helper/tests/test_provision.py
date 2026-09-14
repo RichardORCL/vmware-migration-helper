@@ -59,7 +59,8 @@ def env(tmp_path):
     fake = FakeOci(settings.device_prefix)
     clients = fake.clients()
     store = JobStore(settings.db_path)
-    prov = Provisioner(clients, settings, store.put, SeedImageService(clients, settings))
+    prov = Provisioner(clients, settings, store.put, SeedImageService(clients, settings),
+                       scan_devices=fake.scan_devices)
     return settings, fake, store, prov
 
 
@@ -111,7 +112,9 @@ def test_prepare_linux_two_disks(env):
     helper_atts = [a for a in fake.compute.vol_attachments.values() if a.instance_id == fake.identity.instance_id]
     assert {a.volume_id for a in helper_atts} == {job.disks[0].volume_id, job.disks[1].volume_id}
     assert all(a.attachment_type == "paravirtualized" for a in helper_atts)
-    assert job.disks[0].device.endswith("oraclevdb") and job.disks[1].device.endswith("oraclevdc")
+    # boot volume: no device path allowed, so it is found as the disk that appeared; data volume: consistent path
+    assert helper_atts[0].device is None and job.disks[0].device.endswith("sdb")
+    assert job.disks[1].device.endswith("oraclevdb")
     assert all(d.status == DiskStatus.ATTACHED for d in job.disks)
     assert [d.label for d in job.disks] == ["Hard disk 1", "Hard disk 2"]
     # store mirrors the in-memory job

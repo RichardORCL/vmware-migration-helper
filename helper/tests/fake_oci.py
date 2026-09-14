@@ -167,21 +167,35 @@ class FakeCompute:
     def attach_volume(self, details):
         att_id = oid("volumeattachment")
         device = getattr(details, "device", None)
+        is_boot = details.volume_id in self.f.blockstorage.boot_volumes
+        if is_boot and device:
+            raise service_error(400, "InvalidParameter",
+                                f"The volume cannot be attached to the instance {details.instance_id} because the "
+                                f"specified device attribute {device} is invalid.", "attach_volume")
         att = NS(id=att_id, volume_id=details.volume_id, instance_id=details.instance_id, device=device,
-                 attachment_type=details.type, lifecycle_state="ATTACHED")
+                 attachment_type=details.type, lifecycle_state="ATTACHED", fake_disk=None)
         self.vol_attachments[att_id] = att
-        if device and details.instance_id == self.f.identity.instance_id:
-            # simulate the device node appearing on the helper
-            p = Path(device)
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.touch()
+        if details.instance_id == self.f.identity.instance_id:
+            # simulate the disk appearing on the helper: at the consistent path, or as the next /dev/sdX
+            if device:
+                path = Path(device)
+            else:
+                size = self.f.volume_size_gb(details.volume_id) * 1024**3
+                path = Path(self.f.device_prefix).parent / f"sd{_letters(len(self.f.block_devices))}"
+                self.f.block_devices[str(path)] = size
+                att.fake_disk = str(path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch()
         return Resp(att)
 
     def get_volume_attachment(self, att_id):
         return Resp(self.vol_attachments[att_id])
 
     def detach_volume(self, att_id):
-        self.vol_attachments[att_id].lifecycle_state = "DETACHED"
+        att = self.vol_attachments[att_id]
+        att.lifecycle_state = "DETACHED"
+        if att.fake_disk:
+            self.f.block_devices.pop(att.fake_disk, None)
         return Resp(None)
 
     # images --------------------------------------------------------------
@@ -389,12 +403,21 @@ class FakeOci:
         # instance launch outcome (state reached after PROVISIONING) and work request errors
         self.launch_outcome = "RUNNING"
         self.launch_errors: list[tuple[str, str]] = []
+        # whole disks visible on the helper (what /sys/block would list): its own boot disk to begin with
+        self.block_devices: dict[str, int] = {"/dev/sda": 50 * 1024**3}
         self.work_requests = FakeWorkRequests()
         self.blockstorage = FakeBlockstorage()
         self.compute = FakeCompute(self)
         self.object_storage = FakeObjectStorage(bucket_exists)
         self.identity_client = FakeIdentity(self.identity.tenancy_id)
         self.network = FakeNetwork()
+
+    def scan_devices(self) -> dict[str, int]:
+        return dict(self.block_devices)
+
+    def volume_size_gb(self, volume_id: str) -> int:
+        vol = self.blockstorage.boot_volumes.get(volume_id) or self.blockstorage.volumes[volume_id]
+        return vol.size_in_gbs
 
     def clients(self) -> OciClients:
         return OciClients(

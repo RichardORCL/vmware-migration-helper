@@ -91,6 +91,7 @@ class Env:
         self.app = create_app(
             settings=self.settings, clients=self.fake.clients(), store=self.store, vcenter=self.vcenter,
             export_factory=export_factory, updater=self.updater, command_runner=self._run_command,
+            scan_devices=self.fake.scan_devices,
         )
 
     # -- fake git / systemd for the updater
@@ -392,9 +393,12 @@ def test_full_migration_with_retry(env):
     target_atts = [a for a in fake.compute.vol_attachments.values()
                    if a.instance_id == job["instance_id"] and a.lifecycle_state == "ATTACHED"]
     assert len(target_atts) == 1
-    # the helper wrote the raw disk content onto its "devices" (files under tmp)
-    used_devices = sorted(p for p in (a.device for a in fake.compute.vol_attachments.values()
-                                      if a.instance_id == fake.identity.instance_id) if p)
+    # the helper wrote the raw disk content onto its "devices" (files under tmp): the boot volume shows up as
+    # a plain /dev/sdX (no device path allowed), the data volume at its consistent path
+    helper_atts = [a for a in fake.compute.vol_attachments.values() if a.instance_id == fake.identity.instance_id]
+    used_devices = sorted(a.device or a.fake_disk for a in helper_atts)
+    assert any(Path(p).name.startswith("sd") for p in used_devices)
+    assert any("oraclevdb" in p for p in used_devices)
     contents = {open(p, "rb").read() for p in used_devices}
     assert env.raws[0] in contents and env.raws[1] in contents
 

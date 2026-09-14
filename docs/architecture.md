@@ -46,7 +46,10 @@ which VM, OCI IAM (instance principal + dynamic group policy) decides what the h
      `licensingConfigs` (Windows) and a boot volume sized for disk 0; stop it; detach its boot
      volume;
    - create one block volume per additional disk; attach boot + data volumes to the helper
-     (paravirtualized, consistent device names `/dev/oracleoci/oraclevd*`).
+     (paravirtualized). Data volumes get consistent device names (`/dev/oracleoci/oraclevd*`); OCI
+     does not allow a device path for a boot volume attached as a data volume, so the helper
+     snapshots `/sys/block`, attaches, and takes the one new disk of the expected size (serialised
+     across jobs).
    - A pending cancellation is honoured between provisioning steps.
 2. **EXPORTING**
    - re-check the VM is powered off, `vm.ExportVm()` on the user's vCenter session, wait for the

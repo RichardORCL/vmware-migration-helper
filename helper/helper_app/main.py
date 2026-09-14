@@ -17,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from helper_app import __version__, logging_config
 from helper_app.api import routes_auth, routes_jobs, routes_oci, routes_setup, routes_vms
 from helper_app.config import Settings, get_settings
+from helper_app.disk.devices import DeviceScanner, scan_block_devices
 from helper_app.jobs.runner import MigrationRunner
 from helper_app.jobs.store import JobStore
 from helper_app.oci.clients import OciClients, build_clients
@@ -36,6 +37,7 @@ def create_app(
     export_factory=None,
     updater: Optional[Updater] = None,
     command_runner: Runner = _default_runner,
+    scan_devices: DeviceScanner = scan_block_devices,
 ) -> FastAPI:
     settings = settings or get_settings()
 
@@ -54,7 +56,8 @@ def create_app(
         app.state.command_runner = command_runner  # runs git/systemctl/journalctl (injectable for tests)
         app.state.updater = updater or Updater(settings, runner=command_runner)
         app.state.commit = app.state.updater.local_state().get("commit", "")
-        app.state.provisioner = Provisioner(app.state.clients, settings, app.state.store.put)
+        app.state.provisioner = Provisioner(app.state.clients, settings, app.state.store.put,
+                                            scan_devices=scan_devices)
         app.state.runner = MigrationRunner(settings, app.state.store, app.state.provisioner,
                                            export_factory=export_factory)
         app.state.runner.fail_stale_jobs()

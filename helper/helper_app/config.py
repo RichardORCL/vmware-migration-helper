@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     nfc_host_override: Optional[str] = None  # host substituted for '*' in lease URLs; default: session's vCenter
     nfc_verify_ssl: bool = False
     nfc_chunk_bytes: int = 1024 * 1024
+    nfc_pipeline_depth: int = 8  # chunks buffered between download and decode/write when a job opts in
     lease_progress_interval_s: int = 60
     lease_ready_timeout_s: int = 300
     disk_retry_attempts: int = 3

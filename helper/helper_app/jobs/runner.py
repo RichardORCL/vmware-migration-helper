@@ -16,6 +16,7 @@ from typing import Callable, Optional
 import httpx
 
 from helper_app.config import Settings
+from helper_app.disk.pipeline import PipelinedDecoder
 from helper_app.disk.vmdk_stream import DecodeStats, StreamOptimizedDecoder, VmdkFormatError
 from helper_app.disk.writer import BlockDeviceWriter
 from helper_app.jobs.progress import RateMeter
@@ -261,26 +262,33 @@ class MigrationRunner:
                 raise ExportError(f"cannot open {disk.device}: {exc}") from exc
             meter = RateMeter()
             written_before = sum(d.bytes_written for d in job.disks if d is not disk)  # other disks' share
+            pipeline: Optional[PipelinedDecoder] = None
             try:
                 writer.ensure_size(disk.capacity_bytes)
                 decoder = StreamOptimizedDecoder(writer.write_at, expected_capacity_bytes=disk.capacity_bytes,
                                                  skip_zero_grains=self.s.skip_zero_grains)
+                # optional: inflate + pwrite on a worker thread so the NFC socket is drained meanwhile
+                sink: StreamOptimizedDecoder | PipelinedDecoder = decoder
+                if job.target.pipelined_decode:
+                    pipeline = PipelinedDecoder(decoder, depth=self.s.nfc_pipeline_depth,
+                                                name=f"vmdk-decode-{job.id[:8]}-{disk.index}")
+                    sink = pipeline
                 received = 0
                 last_saved = 0
                 last_saved_at = time.monotonic()
                 for chunk in export.iter_disk(url):
                     self._check_cancel(job)
-                    decoder.feed(chunk)
+                    sink.feed(chunk)
                     received += len(chunk)
                     job.transfer.bytes_received += len(chunk)
                     meter.add(len(chunk))
                     now = time.monotonic()
                     if received - last_saved >= PROGRESS_SAVE_BYTES or now - last_saved_at >= PROGRESS_SAVE_SECONDS:
                         last_saved, last_saved_at = received, now
-                        self._record_progress(job, disk, export, received, decoder.stats, meter.rate(),
+                        self._record_progress(job, disk, export, received, sink.stats, meter.rate(),
                                               written_before)
                         self.store.put(job)
-                stats = decoder.finish()
+                stats = sink.finish()
                 self._record_progress(job, disk, export, received, stats, meter.rate(), written_before)
                 disk.percent = 100
                 disk.throughput_bps = 0.0
@@ -302,5 +310,7 @@ class MigrationRunner:
                 if attempt < self.s.disk_retry_attempts:
                     time.sleep(min(30, 5 * attempt))
             finally:
+                if pipeline is not None:
+                    pipeline.abort()  # no-op after a clean finish; stops the worker before the fd goes away
                 writer.close()
         raise ExportError(f"{label} failed after {disk.attempts} attempts: {last_error}")

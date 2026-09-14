@@ -522,6 +522,26 @@ def test_volume_performance_option(env):
     assert env.fake.blockstorage.volumes[job["disks"][1]["volume_id"]].vpus_per_gb == 20
 
 
+def test_pipelined_decode_option(env):
+    c = env.client
+    login(c)
+    r = c.post("/api/jobs", json={"vm_moid": "vm-101", "target": target(pipelined_decode=True)})
+    assert r.status_code == 202, r.text
+    job = wait_phase(c, r.json()["id"], "COMPLETED", "FAILED")
+    assert job["phase"] == "COMPLETED", job
+    assert job["target"]["pipelined_decode"] is True
+    # the simulated mid-stream failure on disk 1 aborted the pipeline and the retry decoded from scratch
+    assert [d["attempts"] for d in job["disks"]] == [1, 2]
+    assert all(d["status"] == "COPIED" for d in job["disks"])
+    fake = env.fake
+    helper_atts = [a for a in fake.compute.vol_attachments.values() if a.instance_id == fake.identity.instance_id]
+    contents = {open(a.device or a.fake_disk, "rb").read() for a in helper_atts}
+    assert env.raws[0] in contents and env.raws[1] in contents  # bytes on the volumes are identical
+    assert "pipelined_decode=True" in c.get(f"/api/jobs/{job['id']}/diagnostics").text
+    # no decode worker left behind
+    assert not [t for t in threading.enumerate() if t.name.startswith("vmdk-decode")]
+
+
 def test_create_job_validation(env):
     c = env.client
     login(c)

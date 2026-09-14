@@ -73,8 +73,12 @@ job reaches a terminal phase. Progress is persisted every 128 MiB or 2 seconds, 
    - per disk: HTTPS `GET` the stream-optimized VMDK in `HELPER_NFC_CHUNK_BYTES` chunks and feed it
      to `StreamOptimizedDecoder`, which inflates each grain and `pwrite()`s it at
      `lba * 512` on the attached volume (`BlockDeviceWriter`). All-zero grains are skipped
-     (`HELPER_SKIP_ZERO_GRAINS`, fresh volumes read as zero). A failure restarts the disk from the
-     beginning, up to `HELPER_DISK_RETRY_ATTEMPTS` times; the lease is completed or aborted on exit.
+     (`HELPER_SKIP_ZERO_GRAINS`, fresh volumes read as zero). With *Decode and write on a separate
+     thread* (`OciTarget.pipelined_decode`) the decoder runs behind a bounded queue of
+     `HELPER_NFC_PIPELINE_DEPTH` chunks (`PipelinedDecoder`), so the socket keeps being read while
+     grains are inflated and written; decoder/writer errors are re-raised on the download thread
+     with their original type. A failure restarts the disk from the beginning, up to
+     `HELPER_DISK_RETRY_ATTEMPTS` times; the lease is completed or aborted on exit.
 3. **FINALIZING** (`Provisioner.finalize`)
    - detach all volumes from the helper, attach the boot volume and the data volumes (in order)
      to the target instance, start it unless *start after migration* is off.

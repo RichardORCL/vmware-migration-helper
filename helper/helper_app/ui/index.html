@@ -121,6 +121,8 @@
             <summary>Advanced: disk transfer</summary>
             <label class="check"><input type="checkbox" name="nfc_direct_to_esxi"> Download the disks directly from the ESXi host <span id="esxi-host-hint"></span> instead of through vCenter</label>
             <small>Usually much faster than the vCenter proxy, but the helper must reach that ESXi host on TCP 443 (same as <code>HELPER_NFC_HOST_OVERRIDE</code>, resolved per VM).</small>
+            <label class="check"><input type="checkbox" name="pipelined_decode"> Decode and write on a separate thread (keep downloading while grains are inflated and written)</label>
+            <small>Overlaps the network read with decompression and the volume write instead of doing them one after another. Buffers a few chunks in memory (<code>HELPER_NFC_PIPELINE_DEPTH</code>).</small>
             <label>Volume performance (VPU/GB)
               <select name="volume_vpus_per_gb">
                 <option value="10" selected>10 - Balanced (default)</option>

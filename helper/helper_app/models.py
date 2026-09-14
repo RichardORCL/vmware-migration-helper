@@ -136,6 +136,11 @@ class OciTarget(BaseModel):
         description="Download the disks from the ESXi host the VM is registered on instead of through the "
                     "vCenter proxy (same effect as HELPER_NFC_HOST_OVERRIDE, resolved per job)",
     )
+    pipelined_decode: bool = Field(
+        default=False,
+        description="Decode and write the VMDK stream on a separate thread (bounded queue of "
+                    "HELPER_NFC_PIPELINE_DEPTH chunks) so the download is not stalled by inflate/pwrite",
+    )
     volume_vpus_per_gb: Literal[10, 20, 30] = Field(
         default=10,
         description="Volume performance units per GB for the boot and block volumes created for the VM: "

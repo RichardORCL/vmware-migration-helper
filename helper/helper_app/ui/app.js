@@ -169,7 +169,7 @@
     const rows = [
       ["Source VM", `${job.vm.name} (${job.vm.moid})`],
       ["Step", job.step || "-"],
-      ["Disk download", job.nfc_host ? `${job.nfc_host}${job.target.nfc_direct_to_esxi ? " (ESXi host, direct)" : ""}` : "-"],
+      ["Disk download", job.nfc_host ? `${job.nfc_host}${job.target.nfc_direct_to_esxi ? " (ESXi host, direct)" : ""}${job.target.pipelined_decode ? ", pipelined decode/write" : ""}` : "-"],
       ["Instance", job.instance_id || "-"],
       ["Seed image", job.seed_image_id || "-"],
       ["Launch options", job.launch_options ? `${job.launch_options.firmware}, boot ${job.launch_options.boot_volume_type}, nic ${job.launch_options.network_type}` : "-"],
@@ -402,6 +402,7 @@
         boot_volume_type_override: fd.get("boot_volume_type_override") || null,
         network_type_override: fd.get("network_type_override") || null,
         nfc_direct_to_esxi: fd.get("nfc_direct_to_esxi") === "on",
+        pipelined_decode: fd.get("pipelined_decode") === "on",
         volume_vpus_per_gb: Number(fd.get("volume_vpus_per_gb") || 10),
       };
       if (target.availability_domain !== options.helper_availability_domain) {

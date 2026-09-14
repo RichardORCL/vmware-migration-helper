@@ -16,7 +16,7 @@ from helper_app.oci.clients import OciError
 from helper_app.oci.provision import Provisioner
 from helper_app.oci.seed_image import SeedImageService
 
-from .fake_oci import FakeOci
+from .fake_oci import FakeOci, service_error
 
 GIB = 1024**3
 
@@ -151,6 +151,45 @@ def test_prepare_rejects_other_ad(env):
     store.put(job)
     with pytest.raises(OciError, match="availability domain"):
         prov.prepare(job)
+
+
+def test_seed_import_failure_explains_work_request(env):
+    """OCI deletes an image whose import failed; the reason lives on the work request, so it is copied into the
+    job error (or, when OCI recorded nothing, the usual cause: the import service cannot create a PAR)."""
+    settings, fake, store, prov = env
+    fake.import_outcome = "DELETED"
+    fake.import_errors = [("InternalError", "An internal error occurred. reference ID: abc")]
+    fake.import_logs = ["Downloading image from Object Storage.", "Converting image."]
+    job = make_job(make_vm(), make_target())
+    store.put(job)
+    with pytest.raises(OciError) as exc:
+        prov.prepare(job)
+    msg = str(exc.value)
+    assert "entered state DELETED" in msg
+    assert "import work request ocid1.coreservicesworkrequest" in msg
+    assert "OCI error InternalError: An internal error occurred" in msg
+    assert "import log: Downloading image from Object Storage. / Converting image." in msg
+    assert "PAR_MANAGE" not in msg
+    img = next(iter(fake.compute.images.values()))
+    assert fake.object_storage.deleted == [img.object_name]  # placeholder removed even on failure
+
+    # silent failure (what a missing PAR_MANAGE permission looks like) -> policy hint naming the bucket
+    fake.import_errors, fake.import_logs = [], []
+    job2 = make_job(make_vm(), make_target())
+    job2.id = "job0002"
+    store.put(job2)
+    with pytest.raises(OciError, match="PAR_MANAGE") as exc2:
+        prov.prepare(job2)
+    assert f"target.bucket.name = '{settings.seed_bucket}'" in str(exc2.value)
+
+    # the explanation must never mask the failure itself (e.g. no 'read work-requests' permission)
+    fake.work_requests.error = service_error(404, "NotAuthorizedOrNotFound", "Authorization failed",
+                                             "list_work_request_errors")
+    job3 = make_job(make_vm(), make_target())
+    job3.id = "job0003"
+    store.put(job3)
+    with pytest.raises(OciError, match="entered state DELETED.*could not read it: OCI list_work_request_errors"):
+        prov.prepare(job3)
 
 
 def test_prepare_cancel_hook_aborts_between_steps(env):

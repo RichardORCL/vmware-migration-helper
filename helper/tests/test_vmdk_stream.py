@@ -140,6 +140,43 @@ def test_corrupt_grain_rejected():
         dec.feed(bytes(encoded))
 
 
+def test_grain_marker_wire_layout_matches_spec():
+    """Marker = {uint64 val; uint32 size; union {uint32 type; uint8 data[0]}}: a grain's deflate stream
+    starts at byte 12, where a metadata marker keeps its type.  Encoder and decoder must both follow the
+    spec (not merely agree with each other), or ESXi exports fail to decode and OCI rejects our VMDKs."""
+    import zlib
+
+    grain = vs.DEFAULT_GRAIN_SECTORS * vs.SECTOR
+    payload = bytes(range(256)) * (grain // 256)
+
+    # encoder: first grain marker sits at sector `overhead`; bytes 12.. are the zlib stream (0x78 header)
+    encoded = vs.encode_raw_bytes(payload)
+    marker = encoded[vs.DEFAULT_OVERHEAD_SECTORS * vs.SECTOR :]
+    lba, size = struct.unpack_from("<QI", marker, 0)
+    assert (lba, marker[12]) == (0, 0x78)
+    assert zlib.decompress(marker[12 : 12 + size]) == payload
+
+    # decoder: hand-built spec-conformant stream (grain at LBA 128 followed by GT/GD/footer/EOS)
+    comp = zlib.compress(payload)
+    header = vs.SparseExtentHeader(version=3, flags=vs.FLAG_NEWLINE_VALID | vs.FLAG_COMPRESSED | vs.FLAG_MARKERS,
+                                   capacity_sectors=2 * vs.DEFAULT_GRAIN_SECTORS, grain_sectors=vs.DEFAULT_GRAIN_SECTORS,
+                                   descriptor_offset=1, descriptor_sectors=1, gtes_per_gt=512, rgd_offset=0,
+                                   gd_offset=vs.GD_AT_END, overhead_sectors=128, unclean_shutdown=False,
+                                   compress_algorithm=1)
+    stream = header.pack() + b"\0" * (127 * vs.SECTOR)
+    body = struct.pack("<QI", vs.DEFAULT_GRAIN_SECTORS, len(comp)) + comp
+    stream += body.ljust((len(body) + vs.SECTOR - 1) // vs.SECTOR * vs.SECTOR, b"\0")
+    stream += struct.pack("<QII", 4, 0, vs.MARKER_GT).ljust(vs.SECTOR, b"\0") + b"\0" * 4 * vs.SECTOR
+    stream += struct.pack("<QII", 1, 0, vs.MARKER_GD).ljust(vs.SECTOR, b"\0") + b"\0" * vs.SECTOR
+    stream += struct.pack("<QII", 1, 0, vs.MARKER_FOOTER).ljust(vs.SECTOR, b"\0") + header.pack()
+    stream += struct.pack("<QII", 0, 0, vs.MARKER_EOS).ljust(vs.SECTOR, b"\0")
+    sink = MemSink(2 * grain)
+    dec = vs.StreamOptimizedDecoder(sink.write_at)
+    dec.feed(stream)
+    dec.finish()
+    assert bytes(sink.buf) == b"\0" * grain + payload
+
+
 def test_block_device_writer_on_regular_file(tmp_path):
     raw = make_raw(1024 * 1024, seed=42)
     encoded = vs.encode_raw_bytes(raw)

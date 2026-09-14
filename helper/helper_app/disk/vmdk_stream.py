@@ -7,8 +7,12 @@ export via an ``HttpNfcLease``.  It is designed to be consumed sequentially:
     sectors 1..n        embedded text descriptor
     ...                 padding up to ``overHead`` sectors
     overHead..          sequence of *markers*:
-                          grain marker     : val=LBA, size=compressed length, data follows in-line
+                          grain marker     : val=LBA, size=compressed length, data follows in-line at byte 12
                           metadata marker  : size=0, type in {GT, GD, FOOTER, EOS}, val=#sectors that follow
+
+The marker is ``struct { uint64 val; uint32 size; union { uint32 type; uint8 data[0]; } }``:
+the ``type`` field and the first data byte share offset 12.  A grain marker therefore has no
+type field; its deflate stream starts right after ``size``.
     end                 FOOTER (copy of header with the real gdOffset) then EOS
 
 Because every grain carries its own LBA, the decoder can write blocks straight
@@ -28,8 +32,10 @@ from typing import BinaryIO, Callable, Iterable, Iterator, Optional
 SECTOR = 512
 VMDK_MAGIC = 0x564D444B  # 'KDMV' little-endian
 HEADER_STRUCT = struct.Struct("<IIIQQQQIQQQB4sH433s")
-MARKER_STRUCT = struct.Struct("<QII")
+MARKER_STRUCT = struct.Struct("<QII")  # metadata marker: val, size (=0), type
+GRAIN_MARKER_STRUCT = struct.Struct("<QI")  # grain marker: lba, size; compressed data follows immediately
 assert HEADER_STRUCT.size == SECTOR
+assert GRAIN_MARKER_STRUCT.size == 12
 
 FLAG_NEWLINE_VALID = 0x1
 FLAG_COMPRESSED = 0x10000
@@ -262,10 +268,11 @@ class StreamOptimizedDecoder:
             return False
         val, size, mtype = MARKER_STRUCT.unpack_from(self._buf, 0)
         if size > 0:
-            total = _round_up(MARKER_STRUCT.size + size, SECTOR)
+            # grain marker: the deflate stream starts at byte 12 (where a metadata marker keeps its type)
+            total = _round_up(GRAIN_MARKER_STRUCT.size + size, SECTOR)
             if len(self._buf) < total:
                 return False
-            compressed = bytes(self._buf[MARKER_STRUCT.size : MARKER_STRUCT.size + size])
+            compressed = bytes(self._buf[GRAIN_MARKER_STRUCT.size : GRAIN_MARKER_STRUCT.size + size])
             del self._buf[:total]
             self._emit_grain(val, compressed)
             return True
@@ -414,7 +421,7 @@ def encode_stream_optimized(
         comp = zlib.compress(data, compress_level)
         sector_pos = written // SECTOR
         gt_entries[lba // grain_sectors] = sector_pos
-        body = MARKER_STRUCT.pack(lba, len(comp), 0) + comp
+        body = GRAIN_MARKER_STRUCT.pack(lba, len(comp)) + comp
         emit(body.ljust(_round_up(len(body), SECTOR), b"\0"))
 
     gt_sectors = gtes * 4 // SECTOR

@@ -183,8 +183,10 @@ class FakeCompute:
                  operating_system_version=src.operating_system_version, source_image_type=src.source_image_type,
                  object_name=src.object_name)
         self.images[iid] = img
-        self.pending_transitions[iid] = "AVAILABLE"
-        return Resp(img)
+        self.pending_transitions[iid] = self.f.import_outcome
+        wr_id = oid("coreservicesworkrequest")
+        self.f.work_requests.requests[wr_id] = (self.f.import_errors, self.f.import_logs)
+        return Resp(img, headers={"opc-work-request-id": wr_id})
 
     def get_image(self, iid):
         img = self.images[iid]
@@ -265,6 +267,20 @@ class FakeObjectStorage:
         return Resp(None)
 
 
+class FakeWorkRequests:
+    def __init__(self):
+        self.requests: dict[str, tuple[list, list]] = {}  # id -> (errors, log entries)
+        self.error: Optional[Exception] = None  # raised on every lookup when set (e.g. missing policy)
+
+    def list_work_request_errors(self, work_request_id, **kw):
+        if self.error:
+            raise self.error
+        return Resp([NS(code=c, message=m) for c, m in self.requests[work_request_id][0]])
+
+    def list_work_request_logs(self, work_request_id, **kw):
+        return Resp([NS(message=m) for m in self.requests[work_request_id][1]])
+
+
 class FakeIdentity:
     def __init__(self, tenancy_id: str):
         self.tenancy_id = tenancy_id
@@ -317,6 +333,11 @@ class FakeOci:
             region="eu-frankfurt-1",
             tenancy_id="ocid1.tenancy.oc1..test",
         )
+        # image import outcome: state the image reaches, plus what OCI records on the work request
+        self.import_outcome = "AVAILABLE"
+        self.import_errors: list[tuple[str, str]] = []
+        self.import_logs: list[str] = []
+        self.work_requests = FakeWorkRequests()
         self.blockstorage = FakeBlockstorage()
         self.compute = FakeCompute(self)
         self.object_storage = FakeObjectStorage(bucket_exists)
@@ -332,6 +353,7 @@ class FakeOci:
             object_storage=self.object_storage,
             identity_info=self.identity,
             poll_interval_s=0.0,
+            work_requests=self.work_requests,
         )
 
 

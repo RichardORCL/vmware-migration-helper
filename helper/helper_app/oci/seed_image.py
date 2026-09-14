@@ -18,7 +18,7 @@ from typing import Any, Optional
 from helper_app.config import Settings
 from helper_app.disk.vmdk_stream import encode_empty_disk
 from helper_app.models import LaunchOptionsSpec
-from helper_app.oci.clients import OciClients, OciError
+from helper_app.oci.clients import OciClients, OciError, describe_error
 from helper_app.oci.mapping import OsMetadata, seed_image_tags
 
 log = logging.getLogger(__name__)
@@ -100,16 +100,22 @@ class SeedImageService:
                     operating_system_version=os_meta.operating_system_version,
                 ),
             )
-            image = self.c.compute.create_image(details).data
-            log.info("importing seed image %s (%s)", image.id, display)
-            self.c.wait_for(
-                lambda: self.c.compute.get_image(image.id),
-                "lifecycle_state",
-                ["AVAILABLE"],
-                self.s.image_import_timeout_s,
-                failure_states=("DELETED", "DISABLED"),
-                what=f"seed image {display}",
-            )
+            resp = self.c.compute.create_image(details)
+            image = resp.data
+            work_request_id = (getattr(resp, "headers", None) or {}).get("opc-work-request-id", "")
+            log.info("importing seed image %s (%s), work request %s", image.id, display, work_request_id or "-")
+            try:
+                self.c.wait_for(
+                    lambda: self.c.compute.get_image(image.id),
+                    "lifecycle_state",
+                    ["AVAILABLE"],
+                    self.s.image_import_timeout_s,
+                    failure_states=("DELETED", "DISABLED"),
+                    what=f"seed image {display}",
+                )
+            except OciError as exc:
+                # OCI deletes an image whose import failed; the reason only exists on the work request
+                raise OciError(f"{exc}; {self._import_failure_detail(work_request_id)}") from exc
             self._apply_capability_schema(image.id, firmware, launch_options, display, tags, launch_mode)
             return image.id
         finally:
@@ -133,6 +139,33 @@ class SeedImageService:
         return deleted
 
     # ----------------------------------------------------------------- private
+    def _import_failure_detail(self, work_request_id: str) -> str:
+        """Errors and log of the CreateImage work request, or the usual cause when OCI recorded nothing."""
+        if not work_request_id:
+            return "OCI returned no work request id for the import"
+        parts = [f"import work request {work_request_id}"]
+        if self.c.work_requests is None:
+            parts.append("(work request client not configured)")
+            return "; ".join(parts)
+        try:
+            errors = list(self.c.work_requests.list_work_request_errors(work_request_id).data or [])
+            logs = list(self.c.work_requests.list_work_request_logs(work_request_id).data or [])
+        except Exception as exc:  # noqa: BLE001 - diagnostics must not mask the real failure
+            parts.append(f"(could not read it: {describe_error(exc)}; check it in the OCI console)")
+            return "; ".join(parts)
+        parts += [f"OCI error {e.code}: {e.message}" for e in errors]
+        if logs:
+            parts.append("import log: " + " / ".join(entry.message for entry in logs))
+        if not errors and not logs:
+            parts.append(
+                "OCI recorded no import log or error, which usually means the image import service could not "
+                f"read the placeholder from bucket '{self.s.seed_bucket}': it fetches the object through a "
+                "pre-authenticated request created as the helper, so the helper's policy needs "
+                f"\"manage buckets ... where all {{target.bucket.name = '{self.s.seed_bucket}', "
+                "request.permission = 'PAR_MANAGE'}\" (see docs/limitations.md)"
+            )
+        return "; ".join(parts)
+
     def _ensure_bucket(self, namespace: str, create_bucket_details_cls) -> None:
         import oci
 

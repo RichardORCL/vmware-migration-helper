@@ -25,6 +25,7 @@
 | VM list is empty / a VM is missing | vCenter RBAC: the account needs read access to the VM; templates are hidden. Click *Refresh* (the list is cached for 30 s per session). |
 | `the availability domain must be the helper's` | Choose the helper's AD in the dialog. |
 | Seed image stuck in `IMPORTING` | Object Storage policy / bucket; `HELPER_IMAGE_IMPORT_TIMEOUT_S`. |
+| `seed image ... entered state DELETED` (import failed) | The error lists the import work request and its OCI-side errors/log. No entries at all usually means the import service could not read the placeholder: it creates a pre-authenticated request on the seed bucket as the helper, so the helper's policy needs `manage buckets ... where all {target.bucket.name = '<seed bucket>', request.permission = 'PAR_MANAGE'}` (stacks deployed before 0.3.1: re-apply the stack or add the statement by hand; the Audit log shows `CreatePar 404` from `Oracle-JavaSDK` during the import). |
 | `cannot open /dev/oracleoci/oraclevdX` | Helper container needs `--privileged` and `/dev` mounted; instance must use consistent device naming. |
 | `NFC lease did not become ready` / `GET ... returned HTTP 4xx` | The account lacks `VirtualMachine.Provisioning.ExportOVF`; or the NFC URL host is unreachable from the helper (set `HELPER_NFC_HOST_OVERRIDE` only if lease URLs point at ESXi hosts you can reach). |
 | `invalid VMDK stream` / `bad magic` | Something other than a stream-optimized VMDK was returned (a login page or error body); check the lease URL host and proxies between the helper and vCenter. |

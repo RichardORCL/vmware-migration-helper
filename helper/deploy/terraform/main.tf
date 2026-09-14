@@ -137,8 +137,12 @@ resource "oci_identity_policy" "helper" {
     # seed custom images and their capability schemas (global schemas are readable by any authenticated principal)
     "Allow dynamic-group ${local.dynamic_group} to manage instance-images in compartment id ${var.compartment_ocid}",
     "Allow dynamic-group ${local.dynamic_group} to manage compute-image-capability-schema in compartment id ${var.compartment_ocid}",
+    "Allow dynamic-group ${local.dynamic_group} to read work-requests in compartment id ${var.compartment_ocid}",
     "Allow dynamic-group ${local.dynamic_group} to manage objects in compartment id ${var.compartment_ocid} where target.bucket.name = '${var.seed_bucket_name}'",
     "Allow dynamic-group ${local.dynamic_group} to read buckets in compartment id ${var.compartment_ocid}",
+    # the image import service reads the placeholder through a pre-authenticated request it creates on the
+    # caller's behalf; without PAR_MANAGE on the bucket the import fails silently and the image is deleted
+    "Allow dynamic-group ${local.dynamic_group} to manage buckets in compartment id ${var.compartment_ocid} where all {target.bucket.name = '${var.seed_bucket_name}', request.permission = 'PAR_MANAGE'}",
     "Allow dynamic-group ${local.dynamic_group} to read objectstorage-namespaces in tenancy",
   ]
   depends_on = [oci_identity_dynamic_group.helper]

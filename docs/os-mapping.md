@@ -55,3 +55,7 @@ selected flex shape (`HELPER_DEFAULT_SHAPE`, default `VM.Standard.E5.Flex`).
 
 Boot volume size = disk 0 capacity rounded up to GB, minimum 50 GB. Each additional disk becomes a
 block volume with the same rule. Extra space stays unpartitioned inside the guest.
+
+All volumes of a migration are created with the performance tier chosen under *Advanced: disk
+transfer* (`volume_vpus_per_gb`): 10 VPU/GB (Balanced, default), 20 (Higher Performance) or 30
+(Ultra High Performance). The tier can be changed in OCI after the migration.

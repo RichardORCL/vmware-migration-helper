@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, computed_field
 
@@ -135,6 +135,11 @@ class OciTarget(BaseModel):
         default=False,
         description="Download the disks from the ESXi host the VM is registered on instead of through the "
                     "vCenter proxy (same effect as HELPER_NFC_HOST_OVERRIDE, resolved per job)",
+    )
+    volume_vpus_per_gb: Literal[10, 20, 30] = Field(
+        default=10,
+        description="Volume performance units per GB for the boot and block volumes created for the VM: "
+                    "10 = Balanced, 20 = Higher Performance, 30 = Ultra High Performance",
     )
 
 

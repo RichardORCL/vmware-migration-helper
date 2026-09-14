@@ -162,6 +162,7 @@ class Provisioner:
                     source_type="image",
                     image_id=job.seed_image_id,
                     boot_volume_size_in_gbs=job.disks[0].size_gb,
+                    boot_volume_vpus_per_gb=target.volume_vpus_per_gb,
                 ),
                 launch_options=M.LaunchOptions(
                     firmware=launch_options.firmware,
@@ -224,13 +225,15 @@ class Provisioner:
         for disk in job.disks[1:]:
             if disk.volume_id:
                 continue
-            step("create_volume", f"Creating {disk.size_gb} GB block volume for disk {disk.index}")
+            step("create_volume", f"Creating {disk.size_gb} GB block volume for disk {disk.index} "
+                                  f"({target.volume_vpus_per_gb} VPU/GB)")
             vol = self.c.blockstorage.create_volume(
                 M.CreateVolumeDetails(
                     availability_domain=target.availability_domain,
                     compartment_id=target.compartment_id,
                     display_name=f"{job.instance_display_name or vm.name}-disk{disk.index}",
                     size_in_gbs=disk.size_gb,
+                    vpus_per_gb=target.volume_vpus_per_gb,
                     freeform_tags={"vc-oci-job": job.id, "vc-oci-disk-index": str(disk.index)},
                 )
             ).data

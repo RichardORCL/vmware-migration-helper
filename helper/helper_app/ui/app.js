@@ -402,6 +402,7 @@
         boot_volume_type_override: fd.get("boot_volume_type_override") || null,
         network_type_override: fd.get("network_type_override") || null,
         nfc_direct_to_esxi: fd.get("nfc_direct_to_esxi") === "on",
+        volume_vpus_per_gb: Number(fd.get("volume_vpus_per_gb") || 10),
       };
       if (target.availability_domain !== options.helper_availability_domain) {
         formError.textContent = "The availability domain must match the helper VM's AD."; return;

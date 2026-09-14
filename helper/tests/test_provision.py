@@ -96,6 +96,8 @@ def test_prepare_linux_two_disks(env):
     ld = fake.compute.launch_details[0]
     assert ld.source_details.image_id == job.seed_image_id
     assert ld.source_details.boot_volume_size_in_gbs == 50
+    assert ld.source_details.boot_volume_vpus_per_gb == 10  # Balanced tier by default
+    assert fake.blockstorage.volumes[job.disks[1].volume_id].vpus_per_gb == 10
     assert ld.launch_options.firmware == "UEFI_64"
     assert ld.launch_options.boot_volume_type == "PARAVIRTUALIZED"
     assert ld.launch_options.network_type == "PARAVIRTUALIZED"
@@ -119,6 +121,24 @@ def test_prepare_linux_two_disks(env):
     assert [d.label for d in job.disks] == ["Hard disk 1", "Hard disk 2"]
     # store mirrors the in-memory job
     assert store.get(job.id).step == "ready"
+
+
+@pytest.mark.parametrize("vpus", [20, 30])
+def test_prepare_applies_volume_performance_to_boot_and_data_volumes(env, vpus):
+    settings, fake, store, prov = env
+    job = make_job(make_vm(disks=3), make_target(volume_vpus_per_gb=vpus))
+    store.put(job)
+    prov.prepare(job)
+
+    assert fake.compute.launch_details[0].source_details.boot_volume_vpus_per_gb == vpus
+    data_volumes = [fake.blockstorage.volumes[d.volume_id] for d in job.disks[1:]]
+    assert len(data_volumes) == 2 and all(v.vpus_per_gb == vpus for v in data_volumes)
+
+
+def test_volume_performance_must_be_a_supported_tier():
+    for bad in (0, 15, 40):
+        with pytest.raises(ValueError):
+            make_target(volume_vpus_per_gb=bad)
 
 
 def test_prepare_windows_bios_licensing_and_seed_reuse(env):

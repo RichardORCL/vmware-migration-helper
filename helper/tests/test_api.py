@@ -507,6 +507,21 @@ def test_direct_esxi_download_option(env):
     assert env.nfc_hosts == ["vc.test", "esxi-01.test", "nfc-override.test"]  # no lease was opened
 
 
+def test_volume_performance_option(env):
+    c = env.client
+    login(c)
+    # only the Balanced / Higher / Ultra High tiers are offered
+    r = c.post("/api/jobs", json={"vm_moid": "vm-101", "target": target(volume_vpus_per_gb=15)})
+    assert r.status_code == 422, r.text
+
+    r = c.post("/api/jobs", json={"vm_moid": "vm-101", "target": target(volume_vpus_per_gb=20)})
+    assert r.status_code == 202, r.text
+    job = wait_phase(c, r.json()["id"], "COMPLETED", "FAILED")
+    assert job["phase"] == "COMPLETED" and job["target"]["volume_vpus_per_gb"] == 20
+    assert env.fake.compute.launch_details[-1].source_details.boot_volume_vpus_per_gb == 20
+    assert env.fake.blockstorage.volumes[job["disks"][1]["volume_id"]].vpus_per_gb == 20
+
+
 def test_create_job_validation(env):
     c = env.client
     login(c)

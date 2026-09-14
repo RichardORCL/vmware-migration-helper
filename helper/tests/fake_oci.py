@@ -266,6 +266,7 @@ class FakeBlockstorage:
         check_volume_size(details.size_in_gbs, "create_volume", "Volume")
         vid = oid("volume")
         vol = NS(id=vid, display_name=details.display_name, size_in_gbs=details.size_in_gbs,
+                 vpus_per_gb=details.vpus_per_gb if details.vpus_per_gb is not None else 10,
                  lifecycle_state="AVAILABLE", availability_domain=details.availability_domain,
                  compartment_id=details.compartment_id, freeform_tags=details.freeform_tags)
         self.volumes[vid] = vol

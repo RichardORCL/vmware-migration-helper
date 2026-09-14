@@ -121,6 +121,14 @@
             <summary>Advanced: disk transfer</summary>
             <label class="check"><input type="checkbox" name="nfc_direct_to_esxi"> Download the disks directly from the ESXi host <span id="esxi-host-hint"></span> instead of through vCenter</label>
             <small>Usually much faster than the vCenter proxy, but the helper must reach that ESXi host on TCP 443 (same as <code>HELPER_NFC_HOST_OVERRIDE</code>, resolved per VM).</small>
+            <label>Volume performance (VPU/GB)
+              <select name="volume_vpus_per_gb">
+                <option value="10" selected>10 - Balanced (default)</option>
+                <option value="20">20 - Higher Performance</option>
+                <option value="30">30 - Ultra High Performance</option>
+              </select>
+              <small>Applied to the boot volume and every block volume created for this VM. A higher tier speeds up the copy and can be lowered in OCI afterwards.</small>
+            </label>
           </details>
 
           <details>

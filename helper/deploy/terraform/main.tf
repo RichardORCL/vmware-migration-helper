@@ -5,6 +5,10 @@ terraform {
       source  = "oracle/oci"
       version = ">= 5.0"
     }
+    time = {
+      source  = "hashicorp/time"
+      version = ">= 0.9"
+    }
   }
 }
 
@@ -140,6 +144,15 @@ resource "oci_identity_policy" "helper" {
   depends_on = [oci_identity_dynamic_group.helper]
 }
 
+# IAM objects are created in the home region and replicated asynchronously. Launching the instance
+# with the freshly created defined tag right away fails with "TagNamespace vc-oci does not exists",
+# so give the replication time to reach the Compute service in the target region.
+resource "time_sleep" "iam_propagation" {
+  count           = var.create_iam ? 1 : 0
+  create_duration = "120s"
+  depends_on      = [oci_identity_tag.role, oci_identity_policy.helper]
+}
+
 # ---------------------------------------------------------------------------- helper instance
 resource "oci_core_instance" "helper" {
   availability_domain = var.availability_domain
@@ -207,5 +220,5 @@ resource "oci_core_instance" "helper" {
     ignore_changes = [source_details[0].source_id, metadata]
   }
 
-  depends_on = [oci_identity_policy.helper, oci_identity_tag.role]
+  depends_on = [oci_identity_policy.helper, oci_identity_tag.role, time_sleep.iam_propagation]
 }

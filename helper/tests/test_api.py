@@ -73,7 +73,7 @@ class Env:
         payloads = {i: encode_raw_bytes(r) for i, r in self.raws.items()}
         self.vms = {
             "vm-101": make_vm(moid="vm-101", disks=((sizes[0], "pvscsi"), (sizes[1], "pvscsi"))),
-            "vm-202": make_vm(moid="vm-202", name="win-01", guest_id="windows2022srvNext_64Guest",
+            "vm-202": make_vm(moid="vm-202", name="win-01", guest_id="windows2019srvNext_64Guest",
                               guest_full_name="Microsoft Windows Server 2022 (64-bit)", firmware="bios",
                               disks=((sizes[0], "lsilogic"),), nics=("e1000",), folder="DC1/Windows"),
             "vm-on": make_vm(moid="vm-on", name="running", power_state="poweredOn"),

@@ -13,12 +13,20 @@ Implemented in `helper/helper_app/oci/mapping.py`.
 | `ubuntu64Guest` | Ubuntu | from `guestFullName` (e.g. 24.04), else 22.04 |
 | `debianN_64Guest` | Debian | N |
 | `slesN_64Guest` | SUSE Linux Enterprise Server | N |
+| any Windows guest whose `guestFullName` says `Server 20xx [R2]` | Windows | Server 20xx [R2] Standard (the year vCenter shows for the source VM) |
+| `windows2022srvNext_64Guest` | Windows | Server 2025 Standard |
 | `windows2025srv*` / `2022srv*` / `2019srv*` | Windows | Server 2025/2022/2019 Standard |
+| `windows2019srvNext_64Guest` | Windows | Server 2022 Standard |
 | `windows9Server64Guest` | Windows | Server 2016 Standard |
 | `windows8Server64Guest` | Windows | Server 2012 R2 Standard |
 | `windows9_64Guest` / `windows11_64Guest` | Windows | 10 Enterprise / 11 Enterprise |
-| other `windows*` | Windows | derived from `guestFullName`, else Server 2019 Standard |
+| other `windows*` | Windows | Server 2019 Standard |
 | anything else | Custom Linux | first number in `guestFullName` |
+
+vSphere identifies a new Windows Server release as `<previous>srvNext` until the next major vSphere
+release: `windows2019srvNext_64Guest` is Windows Server 2022 (vSphere 7.0 U2+) and
+`windows2022srvNext_64Guest` is Windows Server 2025 (vSphere 8.0 U2+). Because that encoding is easy to
+misread, the release year in `guestFullName` takes precedence over the `guestId` table.
 
 Windows detection also looks at `guestFullName`, so `otherGuest` VMs running Windows are still
 registered as Windows (and require a license type).

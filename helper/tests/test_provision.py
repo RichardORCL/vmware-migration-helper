@@ -27,7 +27,7 @@ def make_vm(windows=False, firmware=Firmware.EFI, disks=2) -> VmSpec:
         name="app-server-01",
         num_cpu=4,
         memory_mb=16384,
-        guest_id="windows2022srvNext_64Guest" if windows else "oracleLinux8_64Guest",
+        guest_id="windows2019srvNext_64Guest" if windows else "oracleLinux8_64Guest",
         guest_full_name="Microsoft Windows Server 2022 (64-bit)" if windows else "Oracle Linux 8 (64-bit)",
         firmware=firmware,
         disks=[

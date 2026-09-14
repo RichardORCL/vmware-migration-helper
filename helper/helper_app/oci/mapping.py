@@ -33,9 +33,13 @@ class OsMetadata:
 
 
 # vSphere guestId (lowercase, without the trailing "guest") -> (OS, version)
+# NB: VMware names a new server release "<previous>srvNext" until the next major vSphere release, so
+#     windows2019srvNext = Windows Server 2022 (vSphere 7.0 U2+) and windows2022srvNext = Server 2025 (8.0 U2+).
 _WINDOWS_VERSIONS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"windows2025srv"), "Server 2025 Standard"),
+    (re.compile(r"windows2022srvnext"), "Server 2025 Standard"),
     (re.compile(r"windows2022srv"), "Server 2022 Standard"),
+    (re.compile(r"windows2019srvnext"), "Server 2022 Standard"),
     (re.compile(r"windows2019srv"), "Server 2019 Standard"),
     (re.compile(r"windows9srv|windows9server"), "Server 2016 Standard"),
     (re.compile(r"windows8srv|windows8server"), "Server 2012 R2 Standard"),
@@ -69,13 +73,15 @@ def map_guest_os(guest_id: str, guest_full_name: str = "") -> OsMetadata:
     full = (guest_full_name or "").lower()
 
     if gid.startswith("windows") or "windows" in full:
-        for pattern, version in _WINDOWS_VERSIONS:
-            if pattern.search(gid):
-                return OsMetadata("Windows", version, "windows")
+        # The release year vCenter displays (guestFullName) is unambiguous; the guestId encoding is not
+        # (e.g. windows2019srvNext is Server 2022), so the full name wins when it names a server release.
         m = re.search(r"server\s+(20\d\d)(\s*r2)?", full)
         if m:
             ver = f"Server {m.group(1)}{' R2' if m.group(2) else ''} Standard"
             return OsMetadata("Windows", ver, "windows")
+        for pattern, version in _WINDOWS_VERSIONS:
+            if pattern.search(gid):
+                return OsMetadata("Windows", version, "windows")
         return OsMetadata("Windows", "Server 2019 Standard", "windows")
 
     for pattern, os_name, fixed in _LINUX_RULES:

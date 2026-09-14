@@ -36,7 +36,14 @@ def target(**kw) -> OciTarget:
         ("ubuntu64Guest", "Ubuntu 24.04 LTS", "Ubuntu", "24.04", "linux"),
         ("debian12_64Guest", "", "Debian", "12", "linux"),
         ("windows2019srv_64Guest", "", "Windows", "Server 2019 Standard", "windows"),
-        ("windows2022srvNext_64Guest", "", "Windows", "Server 2022 Standard", "windows"),
+        ("windows2019srv_64Guest", "Microsoft Windows Server 2019 (64-bit)", "Windows", "Server 2019 Standard", "windows"),
+        # vSphere identifies Windows Server 2022 as "2019srvNext" (7.0 U2+) and Server 2025 as "2022srvNext" (8.0 U2+)
+        ("windows2019srvNext_64Guest", "", "Windows", "Server 2022 Standard", "windows"),
+        ("windows2019srvNext_64Guest", "Microsoft Windows Server 2022 (64-bit)", "Windows", "Server 2022 Standard", "windows"),
+        ("windows2022srvNext_64Guest", "", "Windows", "Server 2025 Standard", "windows"),
+        ("windows2022srvNext_64Guest", "Microsoft Windows Server 2025 (64-bit)", "Windows", "Server 2025 Standard", "windows"),
+        # the year shown by vCenter (guestFullName) wins over the guestId encoding
+        ("windows9Server64Guest", "Microsoft Windows Server 2022 (64-bit)", "Windows", "Server 2022 Standard", "windows"),
         ("windows9Server64Guest", "Microsoft Windows Server 2016 (64-bit)", "Windows", "Server 2016 Standard", "windows"),
         ("windows9_64Guest", "Microsoft Windows 10 (64-bit)", "Windows", "10 Enterprise", "windows"),
         ("otherGuest64", "Other 5.x Linux (64-bit)", "Custom Linux", "5", "linux"),
@@ -114,5 +121,5 @@ def test_volume_size_gb():
 
 
 def test_seed_tags():
-    tags = m.seed_image_tags(m.map_guest_os("windows2022srvNext_64Guest"), "UEFI_64")
+    tags = m.seed_image_tags(m.map_guest_os("windows2019srvNext_64Guest"), "UEFI_64")
     assert tags == {"vc-oci-seed": "true", "vc-oci-firmware": "UEFI_64", "vc-oci-os": "windows-server-2022-standard"}

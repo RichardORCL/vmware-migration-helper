@@ -48,6 +48,10 @@ def journal_excerpt(job: Job, service: str, run: Runner = _default_runner) -> st
     return "\n".join(keep) or "(no matching journal lines)"
 
 
+def _num(v) -> str:
+    return "-" if v is None else f"{v:.0f}"
+
+
 def collect(job: Job, settings: Settings, ident: HelperIdentity, commit: str,
             run: Runner = _default_runner, now: Callable[[], datetime] = lambda: datetime.now(timezone.utc)) -> str:
     """The text block copied to the clipboard."""
@@ -83,6 +87,10 @@ def collect(job: Job, settings: Settings, ident: HelperIdentity, commit: str,
         else "  launch options: -",
         f"  instance={job.instance_id or '-'} seed_image={job.seed_image_id or '-'} "
         f"boot_volume={job.boot_volume_id or '-'}",
+        f"  transfer: percent={job.transfer.percent} received={job.transfer.bytes_received} "
+        f"written={job.transfer.bytes_written} "
+        f"duration_s={_num(job.transfer.duration_s)} average_bps={_num(job.transfer.average_bps)} "
+        f"job_duration_s={_num(job.summary.duration_s)}",
         "  disks:",
         disks or "  (none)",
         "",

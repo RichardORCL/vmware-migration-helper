@@ -16,9 +16,10 @@ from typing import Callable, Optional
 import httpx
 
 from helper_app.config import Settings
-from helper_app.disk.vmdk_stream import StreamOptimizedDecoder, VmdkFormatError
+from helper_app.disk.vmdk_stream import DecodeStats, StreamOptimizedDecoder, VmdkFormatError
 from helper_app.disk.writer import BlockDeviceWriter
-from helper_app.jobs.store import JobStore
+from helper_app.jobs.progress import RateMeter
+from helper_app.jobs.store import JobStore, utcnow
 from helper_app.models import DiskState, DiskStatus, Job, JobPhase
 from helper_app.oci.clients import describe_error
 from helper_app.oci.provision import Provisioner
@@ -28,6 +29,7 @@ from helper_app.vsphere.export import ExportError, NfcExport, match_disk_urls
 log = logging.getLogger(__name__)
 
 PROGRESS_SAVE_BYTES = 128 * 1024 * 1024
+PROGRESS_SAVE_SECONDS = 2.0  # also persist progress this often, so slow links still show movement
 
 
 class JobCancelled(RuntimeError):
@@ -184,19 +186,43 @@ class MigrationRunner:
         with self.export_factory(vm, nfc_host) as export:
             urls = match_disk_urls(job.vm.disks, export.disk_urls())
             for disk in job.disks:
-                if disk.status == DiskStatus.COPIED:
-                    continue
-                self._check_cancel(job)
-                try:
-                    self._export_disk(job, disk, export, urls[disk.index].url)
-                except BaseException:
-                    export.mark_failed(f"disk {disk.index}")
-                    raise
+                disk.stream_bytes = urls[disk.index].file_size or None
+            job.transfer.started_at = job.transfer.started_at or utcnow()
+            job.transfer.percent = 0
+            self.store.put(job)
+            try:
+                for disk in job.disks:
+                    if disk.status == DiskStatus.COPIED:
+                        continue
+                    self._check_cancel(job)
+                    try:
+                        self._export_disk(job, disk, export, urls[disk.index].url)
+                    except BaseException:
+                        export.mark_failed(f"disk {disk.index}")
+                        raise
+                job.transfer.percent = 100
+            finally:
+                job.transfer.finished_at = utcnow()
+                job.transfer.throughput_bps = 0.0
 
         # 3. finalize
         self._save(job, JobPhase.FINALIZING, "All disks copied; attaching volumes to the target instance")
         self.prov.finalize(job)
         self._save(job, message=f"Migration complete: instance {job.instance_id}")
+
+    @staticmethod
+    def _record_progress(job: Job, disk: DiskState, export: NfcExport, received: int, stats: DecodeStats,
+                         rate_bps: float, written_before: int) -> None:
+        """Copy the live counters of the disk being copied into the job record (what the UI polls)."""
+        disk.bytes_received = received
+        disk.bytes_written = stats.bytes_written
+        disk.grains_written = stats.grains_written
+        disk.throughput_bps = rate_bps
+        total = disk.stream_bytes or disk.capacity_bytes
+        disk.percent = max(0, min(99, int(received * 100 / total))) if total else 0
+        job.transfer.bytes_written = written_before + disk.bytes_written
+        job.transfer.throughput_bps = rate_bps
+        job.transfer.percent = export.percent  # identical to the figure sent to the NFC lease / vCenter task
 
     def _export_disk(self, job: Job, disk: DiskState, export: NfcExport, url: str) -> None:
         last_error: Optional[Exception] = None
@@ -206,6 +232,7 @@ class MigrationRunner:
             disk.attempts = attempt
             disk.status = DiskStatus.COPYING
             disk.bytes_received = disk.bytes_written = disk.grains_written = 0
+            disk.percent = 0
             disk.error = None
             job.step = "copying"
             self._save(job, message=f"Copying {label} to {disk.device} "
@@ -215,26 +242,31 @@ class MigrationRunner:
                 writer = BlockDeviceWriter(disk.device, expected_min_size=disk.capacity_bytes)
             except (OSError, ValueError) as exc:
                 raise ExportError(f"cannot open {disk.device}: {exc}") from exc
+            meter = RateMeter()
+            written_before = sum(d.bytes_written for d in job.disks if d is not disk)  # other disks' share
             try:
                 writer.ensure_size(disk.capacity_bytes)
                 decoder = StreamOptimizedDecoder(writer.write_at, expected_capacity_bytes=disk.capacity_bytes,
                                                  skip_zero_grains=self.s.skip_zero_grains)
                 received = 0
                 last_saved = 0
+                last_saved_at = time.monotonic()
                 for chunk in export.iter_disk(url):
                     self._check_cancel(job)
                     decoder.feed(chunk)
                     received += len(chunk)
-                    if received - last_saved >= PROGRESS_SAVE_BYTES:
-                        last_saved = received
-                        disk.bytes_received = received
-                        disk.bytes_written = decoder.stats.bytes_written
-                        disk.grains_written = decoder.stats.grains_written
+                    job.transfer.bytes_received += len(chunk)
+                    meter.add(len(chunk))
+                    now = time.monotonic()
+                    if received - last_saved >= PROGRESS_SAVE_BYTES or now - last_saved_at >= PROGRESS_SAVE_SECONDS:
+                        last_saved, last_saved_at = received, now
+                        self._record_progress(job, disk, export, received, decoder.stats, meter.rate(),
+                                              written_before)
                         self.store.put(job)
                 stats = decoder.finish()
-                disk.bytes_received = received
-                disk.bytes_written = stats.bytes_written
-                disk.grains_written = stats.grains_written
+                self._record_progress(job, disk, export, received, stats, meter.rate(), written_before)
+                disk.percent = 100
+                disk.throughput_bps = 0.0
                 disk.status = DiskStatus.COPIED
                 self._save(job, message=f"{label} copied ({received:,} bytes received, "
                                         f"{stats.grains_written:,} grains written)")
@@ -246,6 +278,8 @@ class MigrationRunner:
             except (ExportError, VmdkFormatError, OSError, httpx.HTTPError) as exc:
                 last_error = exc
                 disk.status = DiskStatus.FAILED
+                disk.throughput_bps = 0.0
+                job.transfer.throughput_bps = 0.0
                 disk.error = str(exc)
                 self._save(job, message=f"{label} attempt {attempt} failed: {exc}")
                 if attempt < self.s.disk_retry_attempts:

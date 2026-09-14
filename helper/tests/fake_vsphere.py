@@ -166,7 +166,14 @@ class FakeExport:
         self.completed = False
         self.aborted = False
         self.failed_reason = None
+        self.sent = 0
         FakeExport.instances.append(self)
+
+    @property
+    def percent(self) -> int:
+        """Like NfcExport: sent bytes over the lease's total stream size (here: the payload sizes)."""
+        total = sum(len(p) for p in self.payloads.values())
+        return max(0, min(99, int(self.sent * 100 / total))) if total else 0
 
     def __enter__(self):
         return self
@@ -180,7 +187,8 @@ class FakeExport:
     def disk_urls(self):
         n_disks = sum(1 for d in self.vm.config.hardware.device if type(d).__name__.endswith("VirtualDisk"))
         return [DiskUrl(key=f"/{self.vm._moId}/ParaVirtualSCSIController0:{i}", target_id=f"disk-{i}.vmdk",
-                        url=f"nfc://disk/{i}") for i in sorted(self.payloads) if i < n_disks]
+                        url=f"nfc://disk/{i}", file_size=len(self.payloads[i]))
+                for i in sorted(self.payloads) if i < n_disks]
 
     def iter_disk(self, url, on_progress=None):
         idx = int(url.rsplit("/", 1)[1])
@@ -193,6 +201,7 @@ class FakeExport:
             if idx in self.fail_once and pos >= half:
                 self.fail_once.discard(idx)
                 raise ExportError("simulated NFC read error")
+            self.sent += len(chunk)
             if on_progress:
                 on_progress(len(chunk))
             yield chunk

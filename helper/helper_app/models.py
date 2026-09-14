@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 
 # --------------------------------------------------------------------------- #
@@ -182,7 +182,33 @@ class DiskState(BaseModel):
     bytes_received: int = 0
     bytes_written: int = 0
     grains_written: int = 0
+    stream_bytes: Optional[int] = None  # size of the exported VMDK stream when the NFC lease reports it
+    percent: int = 0  # progress of this disk's stream (exact with stream_bytes, else bounded by capacity)
+    throughput_bps: float = 0.0  # received bytes/s over the last minute while copying
     error: Optional[str] = None
+
+
+class TransferStats(BaseModel):
+    """Export-phase figures: what vCenter's *Export OVF template* task shows, plus the totals for the summary."""
+
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+    bytes_received: int = 0  # every byte pulled from vCenter, retried attempts included
+    bytes_written: int = 0  # non-zero grain bytes written onto the OCI volumes
+    percent: int = 0  # the percentage reported to the NFC lease (= the vCenter task progress)
+    throughput_bps: float = 0.0  # over the last minute while exporting; 0 when idle
+
+    @property
+    def duration_s(self) -> Optional[float]:
+        if self.started_at is None:
+            return None
+        end = self.finished_at or datetime.now(timezone.utc)
+        return max(0.0, (end - self.started_at).total_seconds())
+
+    @property
+    def average_bps(self) -> Optional[float]:
+        d = self.duration_s
+        return self.bytes_received / d if d else None
 
 
 class Job(BaseModel):
@@ -199,13 +225,36 @@ class Job(BaseModel):
     instance_display_name: Optional[str] = None
     boot_volume_id: Optional[str] = None
     disks: list[DiskState] = Field(default_factory=list)
+    transfer: TransferStats = Field(default_factory=TransferStats)
     created_by: str = ""
     created_at: datetime
     updated_at: datetime
+    finished_at: Optional[datetime] = None  # set when the job reaches a terminal phase
 
     @property
     def total_bytes(self) -> int:
         return sum(d.capacity_bytes for d in self.disks)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def summary(self) -> "JobSummary":
+        """Duration / volume / bandwidth figures for the job view (derived, not stored)."""
+        end = self.finished_at or (datetime.now(timezone.utc) if not self.phase.terminal else self.updated_at)
+        return JobSummary(
+            duration_s=max(0.0, (end - self.created_at).total_seconds()),
+            transfer_duration_s=self.transfer.duration_s,
+            bytes_received=self.transfer.bytes_received,
+            bytes_written=self.transfer.bytes_written,
+            average_bps=self.transfer.average_bps,
+        )
+
+
+class JobSummary(BaseModel):
+    duration_s: float
+    transfer_duration_s: Optional[float] = None
+    bytes_received: int = 0
+    bytes_written: int = 0
+    average_bps: Optional[float] = None
 
 
 class CreateJobRequest(BaseModel):

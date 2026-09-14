@@ -387,6 +387,20 @@ def test_full_migration_with_retry(env):
     export = FakeExport.instances[-1]
     assert export.completed and not export.aborted
 
+    # transfer statistics: per disk (percent of the stream, size known from the lease) and for the job
+    # (bytes actually pulled including the retried half of disk 1, duration, average bandwidth)
+    payload_sizes = [len(p) for p in export.payloads.values()]
+    assert [d["stream_bytes"] for d in job["disks"]] == payload_sizes
+    assert all(d["percent"] == 100 and d["throughput_bps"] == 0 for d in job["disks"])
+    tr = job["transfer"]
+    assert tr["started_at"] and tr["finished_at"] and tr["percent"] == 100 and tr["throughput_bps"] == 0
+    assert sum(payload_sizes) < tr["bytes_received"] <= sum(payload_sizes) + payload_sizes[1]
+    assert tr["bytes_written"] == sum(d["bytes_written"] for d in job["disks"])
+    summary = job["summary"]
+    assert job["finished_at"] and summary["duration_s"] >= summary["transfer_duration_s"] >= 0
+    assert summary["bytes_received"] == tr["bytes_received"]
+    assert summary["average_bps"] is None or summary["average_bps"] > 0
+
     fake = env.fake
     inst = fake.compute.instances[job["instance_id"]]
     assert inst.lifecycle_state == "RUNNING"

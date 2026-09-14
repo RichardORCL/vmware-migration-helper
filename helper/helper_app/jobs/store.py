@@ -36,11 +36,13 @@ class JobStore:
 
     def put(self, job: Job) -> Job:
         job.updated_at = utcnow()
+        if job.phase.terminal and job.finished_at is None:
+            job.finished_at = job.updated_at
         with self._lock:
             self._conn.execute(
                 "INSERT OR REPLACE INTO jobs(id, vm_moid, phase, created_at, updated_at, data) VALUES (?,?,?,?,?,?)",
                 (job.id, job.vm.moid, job.phase.value, job.created_at.isoformat(), job.updated_at.isoformat(),
-                 job.model_dump_json()),
+                 job.model_dump_json(exclude={"summary"})),  # summary is derived on read
             )
         return job
 

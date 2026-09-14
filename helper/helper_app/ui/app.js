@@ -38,6 +38,13 @@
     while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
     return (i === 0 ? v : v.toFixed(v >= 100 ? 0 : 1)) + " " + u[i];
   };
+  const fmtRate = (bps) => (bps === null || bps === undefined) ? "-" : `${fmtBytes(bps)}/s (${(bps * 8 / 1e6).toFixed(bps * 8 >= 1e8 ? 0 : 1)} Mbit/s)`;
+  const fmtDuration = (s) => {
+    if (s === null || s === undefined) return "-";
+    s = Math.round(s);
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+    return h ? `${h}h ${m}m ${sec}s` : m ? `${m}m ${sec}s` : `${sec}s`;
+  };
   const el = (tag, attrs, ...children) => {
     const e = document.createElement(tag);
     for (const [k, v] of Object.entries(attrs || {})) {
@@ -122,14 +129,26 @@
     root.querySelector("[data-message]").textContent = job.message || "";
     root.querySelector("[data-error]").textContent = job.error || "";
 
+    // export-phase line: the percentage vCenter shows on its "Export OVF template" task + the last-minute speed
+    const tr = job.transfer || {};
+    const transfer = root.querySelector("[data-transfer]");
+    if (job.phase === "EXPORTING" && tr.started_at) {
+      transfer.hidden = false;
+      transfer.textContent = `Export OVF template: ${tr.percent || 0}% - ${fmtBytes(tr.bytes_received)} received` +
+        (tr.throughput_bps ? ` at ${fmtRate(tr.throughput_bps)} (last minute)` : "") +
+        ` - running ${fmtDuration((Date.now() - new Date(tr.started_at)) / 1000)}`;
+    } else transfer.hidden = true;
+
     const disks = root.querySelector("[data-disks]");
     disks.innerHTML = "";
     for (const d of job.disks) {
-      // The stream is compressed; use the raw capacity as an upper bound and clamp.
-      const pct = d.status === "COPIED" ? 100 : Math.min(99, Math.round(100 * (d.bytes_received || 0) / Math.max(1, d.capacity_bytes)));
+      // percent of this disk's stream: exact when the lease reported the stream size, else bounded by capacity
+      const pct = d.status === "COPIED" ? 100 : d.percent || Math.min(99, Math.round(100 * (d.bytes_received || 0) / Math.max(1, d.stream_bytes || d.capacity_bytes)));
       const barClass = "bar" + (d.status === "COPIED" ? " done" : d.status === "FAILED" ? " failed" : "");
+      const of = d.stream_bytes ? ` of ${fmtBytes(d.stream_bytes)}` : "";
       const detail = d.status === "COPIED" ? `copied, ${fmtBytes(d.bytes_received)} received, ${fmtBytes(d.bytes_written)} written` :
-        d.status === "COPYING" ? `${fmtBytes(d.bytes_received)} received (attempt ${d.attempts})` :
+        d.status === "COPYING" ? `${pct}% - ${fmtBytes(d.bytes_received)}${of} received` +
+          (d.throughput_bps ? ` at ${fmtRate(d.throughput_bps)}` : "") + (d.attempts > 1 ? ` (attempt ${d.attempts})` : "") :
         d.status === "FAILED" ? (d.error || "failed") : d.status.toLowerCase();
       disks.append(el("div", { class: "disk" },
         el("div", { class: "meta" },
@@ -138,17 +157,27 @@
         el("div", { class: barClass }, el("div", { style: `width:${pct}%` }))));
     }
 
-    kv(root.querySelector("[data-oci]"), [
+    const terminal = TERMINAL.includes(job.phase);
+    const sm = job.summary || {};
+    const rows = [
       ["Source VM", `${job.vm.name} (${job.vm.moid})`],
       ["Step", job.step || "-"],
       ["Instance", job.instance_id || "-"],
       ["Seed image", job.seed_image_id || "-"],
       ["Launch options", job.launch_options ? `${job.launch_options.firmware}, boot ${job.launch_options.boot_volume_type}, nic ${job.launch_options.network_type}` : "-"],
       ["Started by", `${job.created_by || "-"} at ${new Date(job.created_at).toLocaleString()}`],
-      ["Job id", job.id],
-    ]);
+    ];
+    if (terminal) {
+      rows.push(["Finished", job.finished_at ? new Date(job.finished_at).toLocaleString() : "-"]);
+      rows.push(["Duration", fmtDuration(sm.duration_s) + (sm.transfer_duration_s ? ` (export ${fmtDuration(sm.transfer_duration_s)})` : "")]);
+      if (tr.started_at) {
+        rows.push(["Data transferred", `${fmtBytes(sm.bytes_received)} received from vCenter, ${fmtBytes(sm.bytes_written)} written to OCI volumes`]);
+        rows.push(["Average bandwidth", sm.average_bps ? fmtRate(sm.average_bps) : "-"]);
+      }
+    }
+    rows.push(["Job id", job.id]);
+    kv(root.querySelector("[data-oci]"), rows);
 
-    const terminal = TERMINAL.includes(job.phase);
     const cancelBtn = root.querySelector("[data-cancel]");
     cancelBtn.hidden = job.phase === "COMPLETED" || job.phase === "CANCELLED";
     cancelBtn.textContent = job.phase === "FAILED" ? "Clean up OCI resources" : "Cancel";
@@ -384,7 +413,9 @@
       el("thead", {}, el("tr", {}, ...["VM", "Phase", "Message", "OCI instance", "Started", "By", ""].map((h) => el("th", {}, h)))),
       el("tbody", {}, ...jobs.map((j) => el("tr", {},
         el("td", { class: "name" }, j.vm.name), el("td", {}, el("span", { class: "phase " + j.phase }, j.phase)),
-        el("td", {}, j.message || ""), el("td", { class: "ocid" }, j.instance_id || "-"),
+        el("td", {}, (j.message || "") + (j.phase === "EXPORTING" && j.transfer && j.transfer.started_at
+          ? ` - ${j.transfer.percent || 0}%${j.transfer.throughput_bps ? ", " + fmtRate(j.transfer.throughput_bps) : ""}` : "")),
+        el("td", { class: "ocid" }, j.instance_id || "-"),
         el("td", {}, new Date(j.created_at).toLocaleString()), el("td", {}, j.created_by || "-"),
         el("td", {}, el("a", { class: "button secondary small", href: `#/jobs/${j.id}` }, "Details"))))));
     app.append(el("div", { class: "card" }, el("h2", {}, "Migration jobs"),

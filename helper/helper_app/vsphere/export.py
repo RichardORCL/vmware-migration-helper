@@ -150,11 +150,25 @@ class NfcExport:
                 log.warning("HttpNfcLeaseProgress failed: %s", e)
 
     @property
+    def total_stream_bytes(self) -> int:
+        """Best known size of the whole export: the lease's per-disk file sizes when reported, else the
+        raw disk capacity (the compressed stream is at most that large)."""
+        try:
+            sizes = [du.file_size for du in self.disk_urls()]
+        except Exception:  # noqa: BLE001 - lease may be gone
+            sizes = []
+        if sizes and all(s for s in sizes):
+            return int(sum(sizes))
+        return self.total_bytes_hint
+
+    @property
     def percent(self) -> int:
-        if not self.total_bytes_hint:
+        """Progress as reported to the lease, i.e. what vCenter shows on the *Export OVF template* task."""
+        total = self.total_stream_bytes
+        if not total:
             return 0
         with self._lock:
-            return max(0, min(99, int(self._sent * 100 / self.total_bytes_hint)))
+            return max(0, min(99, int(self._sent * 100 / total)))
 
     # ---------------------------------------------------------------- disks
     def disk_urls(self) -> list[DiskUrl]:

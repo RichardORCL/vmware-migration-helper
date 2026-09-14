@@ -32,7 +32,14 @@ which VM, OCI IAM (instance principal + dynamic group policy) decides what the h
 `Job.phase`: `QUEUED -> PROVISIONING -> EXPORTING -> FINALIZING -> COMPLETED | FAILED | CANCELLED`.
 `Job.step`/`Job.message` carry the fine-grained progress, `Job.disks[]` the per-disk state
 (`PENDING -> ATTACHED -> COPYING -> COPIED | FAILED`, with `bytes_received`, `bytes_written`,
-`grains_written`, `attempts`).
+`grains_written`, `attempts`, `stream_bytes` (size of the exported stream when the lease reports it),
+`percent` and `throughput_bps` (received bytes/s over the last minute)).
+`Job.transfer` aggregates the export phase: `percent` is the same value the runner reports to the NFC
+lease, i.e. what vCenter shows on its *Export OVF template* task; `bytes_received` counts every byte
+pulled from vCenter including retried attempts; `started_at`/`finished_at` bracket the export.
+`Job.summary` (derived on read, not stored) gives `duration_s`, `transfer_duration_s`,
+`bytes_received`, `bytes_written` and `average_bps` for finished jobs; `Job.finished_at` is set when a
+job reaches a terminal phase. Progress is persisted every 128 MiB or 2 seconds, whichever comes first.
 
 `MigrationRunner` runs each job in its own thread (pool size `HELPER_MAX_CONCURRENT_JOBS`):
 

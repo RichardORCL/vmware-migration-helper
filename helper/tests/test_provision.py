@@ -155,12 +155,14 @@ def test_prepare_windows_bios_licensing_and_seed_reuse(env):
     ld = fake.compute.launch_details[0]
     assert ld.launch_options.firmware == "BIOS"
     assert ld.launch_options.boot_volume_type == "IDE" and ld.launch_options.network_type == "E1000"
+    assert ld.launch_options.remote_data_volume_type == "SCSI"  # emulated like the boot volume, never mixed
     assert ld.licensing_configs[0].type == "WINDOWS"
     assert ld.licensing_configs[0].license_type == "OCI_PROVIDED"
     assert ld.create_vnic_details.hostname_label == "win-box-1"
     img = fake.compute.images[job.seed_image_id]
     assert img.operating_system == "Windows" and img.operating_system_version == "Server 2022 Standard"
     assert img.launch_mode == "EMULATED"  # IDE + E1000 requested
+    assert img.display_name.endswith("-emulated") and img.freeform_tags["vc-oci-launch-mode"] == "EMULATED"
 
     # a second Windows/BIOS job reuses the seed image
     job2 = make_job(make_vm(windows=True, firmware=Firmware.BIOS, disks=1), target)
@@ -169,6 +171,31 @@ def test_prepare_windows_bios_licensing_and_seed_reuse(env):
     prov.prepare(job2)
     assert job2.seed_image_id == job.seed_image_id
     assert len(fake.compute.images) == 1
+
+    # the same VM without "Maximum compatibility" must not reuse the EMULATED seed: OCI rejects a
+    # paravirtualized launch from it ("Mixing paravirtualized and emulated volumes ...")
+    job3 = make_job(make_vm(windows=True, firmware=Firmware.BIOS, disks=2),
+                    make_target(windows_license_type=WindowsLicenseType.OCI_PROVIDED))
+    job3.id = "job0003"
+    store.put(job3)
+    prov.prepare(job3)
+    assert job3.seed_image_id != job.seed_image_id
+    assert fake.compute.images[job3.seed_image_id].launch_mode == "PARAVIRTUALIZED"
+    assert fake.compute.launch_details[-1].launch_options.remote_data_volume_type == "PARAVIRTUALIZED"
+    assert len(fake.compute.images) == 2
+
+
+def test_emulated_data_volumes_attach_as_emulated(env):
+    settings, fake, store, prov = env
+    job = make_job(make_vm(windows=True, firmware=Firmware.BIOS, disks=2),
+                   make_target(compatibility_mode=True, windows_license_type=WindowsLicenseType.OCI_PROVIDED))
+    store.put(job)
+    prov.prepare(job)
+    for d in job.disks:
+        d.status = DiskStatus.COPIED
+    prov.finalize(job)
+    target_atts = [a for a in fake.compute.vol_attachments.values() if a.instance_id == job.instance_id]
+    assert [a.attachment_type for a in target_atts] == ["emulated"]
 
 
 def test_prepare_rejects_other_ad(env):

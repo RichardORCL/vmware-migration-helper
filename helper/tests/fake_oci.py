@@ -67,6 +67,16 @@ class FakeCompute:
         check_tags(details, "launch_instance")
         check_volume_size(getattr(details.source_details, "boot_volume_size_in_gbs", None), "launch_instance")
         self.launch_details.append(details)
+        # OCI: one device class per instance.  The boot volume, the data volumes and the image's import
+        # launch mode must all be paravirtualized or all emulated.
+        lo = details.launch_options
+        image = self.images[details.source_details.image_id]
+        classes = {lo.boot_volume_type == "PARAVIRTUALIZED", lo.remote_data_volume_type == "PARAVIRTUALIZED",
+                   image.launch_mode == "PARAVIRTUALIZED"}
+        if len(classes) > 1:
+            raise service_error(400, "InvalidParameter",
+                                "Mixing paravirtualized and emulated volumes in the same VM is not supported",
+                                "launch_instance")
         pc = getattr(details, "platform_config", None)
         shielded = [getattr(pc, f, False) for f in ("is_secure_boot_enabled", "is_measured_boot_enabled",
                                                    "is_trusted_platform_module_enabled")] if pc else []

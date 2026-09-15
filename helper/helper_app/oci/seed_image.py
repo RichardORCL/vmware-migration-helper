@@ -20,7 +20,7 @@ from helper_app.config import Settings
 from helper_app.disk.vmdk_stream import encode_empty_disk
 from helper_app.models import LaunchOptionsSpec
 from helper_app.oci.clients import OciClients, OciError, describe_error
-from helper_app.oci.mapping import SEED_TAG_DEFAULTS, OsMetadata, seed_image_tags
+from helper_app.oci.mapping import SEED_TAG_DEFAULTS, OsMetadata, is_emulated, seed_image_tags
 
 log = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ def import_launch_mode(lo: LaunchOptionsSpec) -> str:
     """Launch mode for the image import.  ``CUSTOM`` cannot be requested through the public API (it is
     what OCI reports after launch options were edited), so pick the closest supported mode; the
     capability schema and the per-job ``LaunchOptions`` take care of the details."""
-    if lo.boot_volume_type.value == "IDE" or lo.network_type.value == "E1000":
+    if is_emulated(lo.boot_volume_type, lo.network_type):
         return "EMULATED"
     return "PARAVIRTUALIZED"
 
@@ -53,13 +53,17 @@ class SeedImageService:
     def get_or_create(self, os_meta: OsMetadata, firmware: str, launch_options: LaunchOptionsSpec,
                       on_progress: Optional[ProgressCallback] = None) -> str:
         tags = seed_image_tags(os_meta, firmware, launch_options.secure_boot)
-        existing = self.find(tags)
+        launch_mode = import_launch_mode(launch_options)
+        existing = self.find(tags, launch_mode)
         if existing is not None:
-            log.info("reusing seed image %s (%s)", existing.id, existing.display_name)
+            log.info("reusing seed image %s (%s, launch mode %s)", existing.id, existing.display_name, launch_mode)
             return existing.id
         return self.create(os_meta, firmware, launch_options, tags, on_progress)
 
-    def find(self, tags: dict[str, str]) -> Optional[Any]:
+    def find(self, tags: dict[str, str], launch_mode: Optional[str] = None) -> Optional[Any]:
+        """Seed image carrying ``tags`` whose import launch mode matches.  The mode matters: launching a
+        paravirtualized instance from an EMULATED image fails with "Mixing paravirtualized and emulated
+        volumes in the same VM is not supported" (and vice versa), so both variants may coexist."""
         import oci
 
         images = oci.pagination.list_call_get_all_results(
@@ -69,8 +73,11 @@ class SeedImageService:
         ).data
         for img in images:
             ft = img.freeform_tags or {}
-            if all(ft.get(k, SEED_TAG_DEFAULTS.get(k)) == v for k, v in tags.items()):
-                return img
+            if not all(ft.get(k, SEED_TAG_DEFAULTS.get(k)) == v for k, v in tags.items()):
+                continue
+            if launch_mode and getattr(img, "launch_mode", None) not in (None, launch_mode):
+                continue
+            return img
         return None
 
     def create(
@@ -83,21 +90,23 @@ class SeedImageService:
         namespace = self.c.object_storage.get_namespace().data
         self._ensure_bucket(namespace, CreateBucketDetails)
 
+        launch_mode = import_launch_mode(launch_options)
         display = f"vc-oci-seed-{firmware.lower()}-{os_meta.slug}"
         if launch_options.secure_boot:
             display += "-secureboot"
+        if launch_mode == "EMULATED":
+            display += "-emulated"
         object_name = f"{display}-{uuid.uuid4().hex[:8]}.vmdk"
         payload = encode_empty_disk(self.s.seed_disk_size_gb * 1024**3)
         log.info("uploading %d byte placeholder VMDK to %s/%s", len(payload), self.s.seed_bucket, object_name)
         self.c.object_storage.put_object(namespace, self.s.seed_bucket, object_name, payload)
 
         try:
-            launch_mode = import_launch_mode(launch_options)
             details = M.CreateImageDetails(
                 compartment_id=self.seed_compartment,
                 display_name=display,
                 launch_mode=launch_mode,
-                freeform_tags=tags,
+                freeform_tags={**tags, "vc-oci-launch-mode": launch_mode},
                 image_source_details=M.ImageSourceViaObjectStorageTupleDetails(
                     source_type="objectStorageTuple",
                     namespace_name=namespace,

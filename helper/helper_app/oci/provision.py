@@ -338,15 +338,19 @@ class Provisioner:
             self.c.wait_for(lambda: self.c.compute.get_boot_volume_attachment(att.id), "lifecycle_state",
                             ["ATTACHED"], self.s.volume_timeout_s, what="target boot volume attachment")
 
-        use_iscsi = (job.launch_options and job.launch_options.remote_data_volume_type == "ISCSI")
+        # data volumes use the device class announced in launchOptions.remoteDataVolumeType
+        remote_type = job.launch_options.remote_data_volume_type if job.launch_options else "PARAVIRTUALIZED"
         for n, disk in enumerate(job.disks[1:], start=1):
             if disk.target_attachment_id:
                 continue
             self._step(job, "attach_data_volume", f"Attaching disk {disk.index} to target")
             device = f"{self.s.device_prefix}{chr(ord('a') + n)}"
-            if use_iscsi:
+            if remote_type == "ISCSI":
                 details = M.AttachIScsiVolumeDetails(type="iscsi", instance_id=job.instance_id,
                                                      volume_id=disk.volume_id, device=device)
+            elif remote_type in ("SCSI", "IDE"):
+                details = M.AttachEmulatedVolumeDetails(type="emulated", instance_id=job.instance_id,
+                                                        volume_id=disk.volume_id, device=device)
             else:
                 details = M.AttachParavirtualizedVolumeDetails(type="paravirtualized", instance_id=job.instance_id,
                                                                volume_id=disk.volume_id, device=device)

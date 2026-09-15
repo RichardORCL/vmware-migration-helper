@@ -105,6 +105,20 @@ def oci_firmware(firmware: Firmware) -> str:
     return OCI_FIRMWARE_UEFI if firmware == Firmware.EFI else OCI_FIRMWARE_BIOS
 
 
+def remote_data_volume_type_for(boot_type: BootVolumeType) -> str:
+    """OCI refuses to mix paravirtualized and emulated volumes in one instance, so the data volumes follow
+    the boot volume's device class: virtio with virtio, emulated SCSI with IDE/SCSI, iSCSI with iSCSI."""
+    if boot_type == BootVolumeType.PARAVIRTUALIZED:
+        return "PARAVIRTUALIZED"
+    if boot_type == BootVolumeType.ISCSI:
+        return "ISCSI"
+    return "SCSI"
+
+
+def is_emulated(boot_type: BootVolumeType, net_type: NetworkType) -> bool:
+    return boot_type != BootVolumeType.PARAVIRTUALIZED or net_type == NetworkType.E1000
+
+
 def map_launch_options(vm: VmSpec, target: OciTarget) -> LaunchOptionsSpec:
     """Device model for the target.  Always paravirtualized (virtio) - the vSphere controller / NIC model says
     nothing about what the guest can drive in OCI, and virtio is what OCI images run on.  Only the
@@ -124,7 +138,7 @@ def map_launch_options(vm: VmSpec, target: OciTarget) -> LaunchOptionsSpec:
         firmware=firmware,
         boot_volume_type=boot_type,
         network_type=net_type,
-        remote_data_volume_type="PARAVIRTUALIZED",
+        remote_data_volume_type=remote_data_volume_type_for(boot_type),
         is_consistent_volume_naming_enabled=True,
         # Secure Boot only exists with UEFI; vSphere reports the flag on EFI VMs only, but stay defensive
         secure_boot=bool(vm.secure_boot) and firmware == OCI_FIRMWARE_UEFI,

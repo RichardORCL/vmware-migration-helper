@@ -107,8 +107,10 @@ file. Memory use is a few MB per running disk; the OCI volumes are the only stor
 
 OCI takes an instance's firmware and device model from its image. Platform images do not expose
 those knobs, so the helper imports a placeholder VMDK as a custom image per
-(firmware, OS, Secure Boot) combination (imported as PARAVIRTUALIZED or EMULATED; `CUSTOM` cannot be
-requested through the import API), applies a `ComputeImageCapabilitySchema` that fixes
+(firmware, OS, Secure Boot, launch mode) combination (imported as PARAVIRTUALIZED, or EMULATED for the
+IDE/E1000 compatibility preset; `CUSTOM` cannot be requested through the import API, and OCI rejects a
+paravirtualized launch from an EMULATED image as "mixing paravirtualized and emulated volumes", so reuse
+also matches on the image's `launchMode`), applies a `ComputeImageCapabilitySchema` that fixes
 `Compute.Firmware`, sets `Compute.SecureBoot` to whether the source used Secure Boot, and allows every
 `Storage.BootVolumeType` / `Network.AttachmentType`, and launches from it with the job's explicit
 `launchOptions`. A source with `efiSecureBootEnabled` is launched with a `platformConfig`

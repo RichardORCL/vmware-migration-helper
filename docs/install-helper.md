@@ -7,6 +7,7 @@
   administrators' browsers can reach on 8443 (through the same VPN, or via a public IP on the helper).
 - Permissions to create instances, block volumes, custom images, an Object Storage bucket, a dynamic group, a policy and a tag namespace (or an administrator who creates the IAM parts for you, see `create_iam`).
 - The helper VM must be able to reach GitHub to clone the helper repository [RichardORCL/vmware-migration-helper](https://github.com/RichardORCL/vmware-migration-helper) (and PyPI to install its dependencies). Point `source_git_url` at your own fork if you maintain one.
+- The helper is designed for a **private subnet without a public IP**. Its subnet needs a route to the Oracle Services Network through a Service Gateway (*All <region> Services in Oracle Services Network*: OCI APIs, Object Storage, the instance console connection service used by *Remote console*, Oracle yum) and a NAT gateway for GitHub/PyPI. See the networking table in the [README](../README.md#networking-requirements).
 - A vCenter account for each operator with read access to the inventory and the
   `VirtualMachine.Provisioning.ExportOVF` privilege (*Allow disk access*) on the VMs to migrate.
 

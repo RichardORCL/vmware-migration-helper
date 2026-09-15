@@ -52,7 +52,9 @@ preloaded. Manual deployment with Terraform and all settings are described in
 ## Networking requirements
 
 All flows are TCP and are initiated by the browser or by the helper; nothing has to reach into your
-on-premises network from OCI, and the target instances need no inbound ports.
+on-premises network from OCI, and the target instances need no inbound ports. The helper is meant to run
+in a **private subnet without a public IP**: everything it needs in OCI is reachable through a Service
+Gateway (*All <region> Services in Oracle Services Network*) and/or a NAT gateway.
 
 | From | To | Port | Purpose |
 | --- | --- | --- | --- |
@@ -60,14 +62,14 @@ on-premises network from OCI, and the target instances need no inbound ports.
 | **Helper VM** | **ESXi hosts** | 443 | Only with *Download the disks directly from the ESXi host* (per migration): the helper must resolve and reach the host the VM runs on. Several times faster than the vCenter proxy. |
 | **User's web browser** | **Helper VM** | 8443 | Web UI and API over HTTPS (self-signed certificate by default); the *Remote console* runs over the same port as a WebSocket. Restricted by the stack to `allowed_source_cidrs`. |
 | **Administrator** | **Helper VM** | 22 | Optional SSH administration, same source CIDRs. |
-| **Helper VM** | **OCI APIs** (`iaas`, `objectstorage`, `identity` in the region) | 443 | Compute, Block Storage, Object Storage; reachable through a Service Gateway or NAT gateway. |
-| **Helper VM** | **OCI console connection service** `instance-console.<region>.oci.oraclecloud.com` | 443 | *Remote console* of a migrated instance: SSH tunnel to the instance's VNC console. Public endpoint, so the helper subnet needs a NAT gateway (or Internet Gateway) route; a Service Gateway alone is not enough. |
-| **Helper VM** | GitHub, Oracle Linux yum repositories | 443 | Installation and *Setup -> Update now* (`git`, `pip`); NAT or Internet gateway. |
+| **Helper VM** | **OCI APIs** (`iaas`, `objectstorage`, `identity` in the region) | 443 | Compute, Block Storage, Object Storage; Service Gateway or NAT gateway. |
+| **Helper VM** | **OCI console connection service** `instance-console.<region>.oci.oraclecloud.com` | 443 | *Remote console* of a migrated instance: SSH tunnel to the instance's VNC console. Service Gateway (*All Services in Oracle Services Network*) or NAT gateway. |
+| **Helper VM** | Oracle Linux yum repositories, GitHub, PyPI | 443 | Installation and *Setup -> Update now* (`dnf`, `git`, `pip`). The Oracle yum servers are in the Oracle Services Network (Service Gateway); GitHub and PyPI need a NAT gateway. |
 
 The Resource Manager stack creates a network security group with the 8443/22 ingress rules for the
-administrators' CIDRs and unrestricted egress; the VCN's route table must provide the paths above
-(VPN/FastConnect to vSphere, Service Gateway and/or NAT gateway to OCI). Details and troubleshooting in
-[docs/how-it-works.md](docs/how-it-works.md#networking).
+administrators' CIDRs and unrestricted egress; the helper subnet's route table must provide the paths
+above (VPN/FastConnect to vSphere, Service Gateway and NAT gateway to OCI and the internet). Details and
+troubleshooting in [docs/how-it-works.md](docs/how-it-works.md#networking).
 
 ## Tested operating systems
 

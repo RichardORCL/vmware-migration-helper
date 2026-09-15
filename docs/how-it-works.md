@@ -65,7 +65,7 @@ see [limitations.md](limitations.md).
 | Helper -> vCenter | TCP 443 | SOAP API and the NFC disk download (vCenter proxies ESXi by default) |
 | Helper -> ESXi hosts | TCP 443 | Only with *Download the disks directly from the ESXi host* (per migration) or `HELPER_NFC_HOST_OVERRIDE`; bypasses the vCenter proxy, usually several times faster |
 | Helper -> OCI | TCP 443 | Compute, Block Storage, Object Storage APIs (service gateway or NAT) |
-| Helper -> `instance-console.<region>.oci.oraclecloud.com` | TCP 443 | *Remote console* of a migrated instance: SSH to the OCI console connection service (public endpoint; NAT gateway or a route to the internet from the helper subnet). The VNC stream is bridged to the browser over the existing 8443 connection (WebSocket). |
+| Helper -> `instance-console.<region>.oci.oraclecloud.com` | TCP 443 | *Remote console* of a migrated instance: SSH to the OCI console connection service (Service Gateway with *All Services in Oracle Services Network*, or NAT gateway; the helper has no public IP). The VNC stream is bridged to the browser over the existing 8443 connection (WebSocket). |
 
 ### Remote console
 

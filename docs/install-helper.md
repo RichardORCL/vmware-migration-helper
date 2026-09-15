@@ -88,6 +88,7 @@ To replace the self-signed certificate, put your own into `/etc/vc-oci-helper/se
 | `HELPER_DEVICE_PREFIX` | `/dev/oracleoci/oraclevd` | Consistent device path prefix |
 | `HELPER_LAUNCH_TIMEOUT_S` / `HELPER_VOLUME_TIMEOUT_S` / `HELPER_IMAGE_IMPORT_TIMEOUT_S` | 1800 / 900 / 3600 | Waiter timeouts |
 | `HELPER_SKIP_ZERO_GRAINS` | `true` | Do not write all-zero grains (fresh volumes read as zero) |
+| `HELPER_CONSOLE_IDLE_TIMEOUT_S` / `HELPER_CONSOLE_CONNECT_TIMEOUT_S` | 600 / 120 | *Remote console*: delete the OCI console connection after this long without a viewer; timeout for creating it and for the SSH hops |
 | `HELPER_DB_PATH` | `/var/lib/vc-oci-helper/jobs.sqlite3` | Job database |
 | `HELPER_TLS_CERT_FILE` / `HELPER_TLS_KEY_FILE` | – | TLS material for 8443 |
 | `HELPER_LOG_LEVEL` | `INFO` | Helper log level (`journalctl -u vc-oci-helper`); changeable on the *Setup* page |

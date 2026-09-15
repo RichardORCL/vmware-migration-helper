@@ -65,6 +65,20 @@ see [limitations.md](limitations.md).
 | Helper -> vCenter | TCP 443 | SOAP API and the NFC disk download (vCenter proxies ESXi by default) |
 | Helper -> ESXi hosts | TCP 443 | Only with *Download the disks directly from the ESXi host* (per migration) or `HELPER_NFC_HOST_OVERRIDE`; bypasses the vCenter proxy, usually several times faster |
 | Helper -> OCI | TCP 443 | Compute, Block Storage, Object Storage APIs (service gateway or NAT) |
+| Helper -> `instance-console.<region>.oci.oraclecloud.com` | TCP 443 | *Remote console* of a migrated instance: SSH to the OCI console connection service (public endpoint; NAT gateway or a route to the internet from the helper subnet). The VNC stream is bridged to the browser over the existing 8443 connection (WebSocket). |
+
+### Remote console
+
+For a completed migration the job view offers *Remote console*: the helper creates an OCI *instance console
+connection* for the instance with a temporary RSA key (kept in memory only, tagged `vc-oci=console`), opens
+the VNC tunnel of that connection itself (two SSH hops through the console service with asyncssh, host key
+checked against the fingerprint OCI reports) and bridges the RFB stream into a WebSocket on
+`/api/jobs/{id}/console/vnc`, where [noVNC](https://github.com/novnc/noVNC) (vendored under `ui/vendor/novnc`)
+renders it in the browser. Requires the session cookie and a same-origin page. The console connection is
+deleted when the console is closed, after `HELPER_CONSOLE_IDLE_TIMEOUT_S` (default 600 s) without a viewer, or
+when the helper shuts down. OCI allows one console connection per instance: a leftover created by the helper is
+replaced silently, one created elsewhere only after confirmation. `manage instance-family` (already in the
+stack's policy) covers `instance-console-connection`.
 
 ## Repository layout
 
@@ -77,12 +91,14 @@ helper/
     sessions.py        web sessions bound to per-user vCenter connections (pinned by running jobs)
     auth.py            cookie-based session dependency
     runtime_settings.py  Setup page overrides (logging, concurrency, session timeout) persisted to JSON
-    api/               routes_auth, routes_vms, routes_jobs, routes_oci, routes_setup
+    api/               routes_auth, routes_vms, routes_jobs, routes_console, routes_oci, routes_setup
     vsphere/           session (pyVmomi login), inventory (VM list, VmSpec, preflight), export (NFC lease)
     disk/              stream-optimized VMDK decoder/encoder, positional block-device writer
     oci/               mapping (guest OS / launch options / shape), seed images, provisioning
     jobs/              SQLite job store, MigrationRunner
-    ui/                vanilla JS single-page UI (login, Source VMs, export dialog, jobs, setup)
+    console/           remote console: OCI console connection, asyncssh VNC tunnel, per-job session manager
+    ui/                vanilla JS single-page UI (login, Source VMs, export dialog, jobs, remote console, setup)
+                       + ui/vendor/novnc (noVNC RFB client, MPL-2.0)
   deploy/terraform/    Resource Manager stack / Terraform for the helper VM (+ cloud-init: git clone + pip)
   tests/               fakes for OCI, vCenter and NFC; end-to-end tests
 docs/

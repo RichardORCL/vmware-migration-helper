@@ -290,6 +290,7 @@
         <span class="error" data-error></span>
         <span class="muted" data-copy-state></span>
         <button class="secondary" data-copy title="Copy the job record, error and relevant helper log lines to the clipboard">Copy diagnostics</button>
+        <a class="button secondary" data-console hidden title="Open the VNC console of the migrated instance in the browser (OCI instance console connection through the helper)">Remote console</a>
         <button data-resume hidden title="All disks were copied; retry attaching the volumes and starting the instance">Retry finalize</button>
         <button class="secondary" data-cancel>Cancel</button>
         <select data-license hidden>
@@ -303,6 +304,25 @@
         <textarea class="diag" readonly rows="16"></textarea>
       </details>
     </div>
+  </template>
+
+  <!-- ------------------------------------------------------------------ remote console -->
+  <template id="tpl-console">
+    <section class="card console">
+      <div class="toolbar">
+        <h2>Remote console <span class="muted" id="console-title"></span></h2>
+        <span id="console-status" class="muted">Preparing...</span>
+        <span class="spacer"></span>
+        <button class="secondary small" id="console-cad" disabled title="Send Ctrl+Alt+Del to the instance">Ctrl+Alt+Del</button>
+        <button class="secondary small" id="console-reconnect" disabled>Reconnect</button>
+        <button class="secondary small" id="console-close" title="Disconnect and delete the OCI console connection">Close console</button>
+        <a id="console-back" class="muted" href="#/jobs">&larr; job</a>
+      </div>
+      <p class="muted console-hint">The screen is the OCI instance console (VNC) of the migrated instance, tunnelled through the helper.
+        Click into the screen to type. The console connection is deleted when you close it or after it has been idle for a while.</p>
+      <div id="console-error" class="error"></div>
+      <div id="vnc-screen" class="vnc-screen"></div>
+    </section>
   </template>
 
   <script src="app.js"></script>

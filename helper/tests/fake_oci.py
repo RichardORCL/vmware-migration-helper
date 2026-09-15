@@ -64,6 +64,8 @@ class FakeCompute:
         self.terminated: list[str] = []
         self.pending_transitions: dict[str, str] = {}
         self.import_polls_left: dict[str, int] = {}  # image id -> get_image calls before the import settles
+        self.console_connections: dict[str, NS] = {}
+        self.console_deleted: list[str] = []
 
     # instances -----------------------------------------------------------
     def launch_instance(self, details):
@@ -187,6 +189,62 @@ class FakeCompute:
             NS(shape="VM.Standard.A1.Flex", is_flexible=True, ocpus=1, memory_in_gbs=6,  # Ampere: filtered
                ocpu_options=NS(min=1, max=80), memory_options=NS(min_in_g_bs=1, max_in_g_bs=512)),
         ])
+
+    # console connections -------------------------------------------------
+    def create_instance_console_connection(self, details):
+        check_tags(details, "create_instance_console_connection")
+        if details.instance_id not in self.instances:
+            raise service_error(404, "NotAuthorizedOrNotFound", "instance not found",
+                                "create_instance_console_connection")
+        if not (details.public_key or "").startswith("ssh-rsa "):
+            raise service_error(400, "InvalidParameter", "publicKey must be an RSA key in OpenSSH format",
+                                "create_instance_console_connection")
+        # OCI: one console connection per instance
+        for c in self.console_connections.values():
+            if c.instance_id == details.instance_id and c.lifecycle_state in ("CREATING", "ACTIVE"):
+                raise service_error(409, "Conflict",
+                                    f"Instance {details.instance_id} already has a console connection",
+                                    "create_instance_console_connection")
+        cid = oid("instanceconsoleconnection")
+        region = self.f.identity.region
+        conn = NS(id=cid, instance_id=details.instance_id,
+                  compartment_id=self.instances[details.instance_id].compartment_id,
+                  lifecycle_state="CREATING", freeform_tags=dict(details.freeform_tags or {}),
+                  fingerprint="SHA256:clientkeyfingerprint", service_host_key_fingerprint=self.f.console_host_fingerprint,
+                  connection_string=f"ssh -o ProxyCommand='ssh -W %h:%p -p 443 {cid}@instance-console.{region}.oci."
+                                    f"oraclecloud.com' {details.instance_id}",
+                  vnc_connection_string=f"ssh -o ProxyCommand='ssh -W %h:%p -p 443 {cid}@instance-console.{region}"
+                                        f".oci.oraclecloud.com' -N -L localhost:5900:{details.instance_id}:5900 "
+                                        f"{details.instance_id}")
+        self.console_connections[cid] = conn
+        self.pending_transitions[cid] = "ACTIVE"
+        return Resp(conn)
+
+    def get_instance_console_connection(self, cid):
+        conn = self.console_connections.get(cid)
+        if conn is None:
+            raise service_error(404, "NotAuthorizedOrNotFound", "console connection not found",
+                                "get_instance_console_connection")
+        nxt = self.pending_transitions.pop(cid, None)
+        if nxt:
+            conn.lifecycle_state = nxt
+        return Resp(conn)
+
+    def list_instance_console_connections(self, compartment_id, instance_id=None, **kw):
+        for cid in list(self.console_connections):
+            self.get_instance_console_connection(cid)  # settle pending transitions like a real listing would
+        return Resp([c for c in self.console_connections.values()
+                     if (instance_id is None or c.instance_id == instance_id) and c.compartment_id == compartment_id])
+
+    def delete_instance_console_connection(self, cid):
+        conn = self.console_connections.get(cid)
+        if conn is None or conn.lifecycle_state == "DELETED":
+            raise service_error(404, "NotAuthorizedOrNotFound", "console connection not found",
+                                "delete_instance_console_connection")
+        self.console_deleted.append(cid)
+        conn.lifecycle_state = "DELETING"
+        self.pending_transitions[cid] = "DELETED"
+        return Resp(None)
 
     # boot volumes --------------------------------------------------------
     def list_boot_volume_attachments(self, availability_domain, compartment_id, instance_id=None, **kw):
@@ -521,6 +579,8 @@ class FakeOci:
         # instance launch outcome (state reached after PROVISIONING) and work request errors
         self.launch_outcome = "RUNNING"
         self.launch_errors: list[tuple[str, str]] = []
+        # host key fingerprint of the (fake) console connection service
+        self.console_host_fingerprint = "SHA256:servicehostkeyfingerprintAAAAAAAAAAAAAAAAAAA"
         # whole disks visible on the helper (what /sys/block would list): its own boot disk to begin with
         self.block_devices: dict[str, int] = {"/dev/sda": 50 * 1024**3}
         self.work_requests = FakeWorkRequests()

@@ -15,8 +15,10 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from helper_app import __version__, logging_config, runtime_settings
-from helper_app.api import routes_auth, routes_jobs, routes_oci, routes_setup, routes_vms
+from helper_app.api import routes_auth, routes_console, routes_jobs, routes_oci, routes_setup, routes_vms
 from helper_app.config import Settings, get_settings
+from helper_app.console.manager import ConsoleManager
+from helper_app.console.tunnel import TunnelFactory, open_vnc_stream
 from helper_app.disk.devices import DeviceScanner, scan_block_devices
 from helper_app.jobs.runner import MigrationRunner
 from helper_app.jobs.store import JobStore
@@ -38,6 +40,7 @@ def create_app(
     updater: Optional[Updater] = None,
     command_runner: Runner = _default_runner,
     scan_devices: DeviceScanner = scan_block_devices,
+    tunnel_factory: TunnelFactory = open_vnc_stream,
 ) -> FastAPI:
     settings = settings or get_settings()
 
@@ -62,12 +65,16 @@ def create_app(
         app.state.runner = MigrationRunner(settings, app.state.store, app.state.provisioner,
                                            export_factory=export_factory)
         app.state.runner.fail_stale_jobs()
+        # remote consoles: instance console connections + SSH tunnels bridged into the browser
+        app.state.consoles = ConsoleManager(app.state.clients, settings, tunnel_factory=tunnel_factory)
+        app.state.consoles.start()
         ident = app.state.clients.identity_info
         log.info("helper %s ready in %s / %s; vCenter %s", ident.instance_id, ident.region,
                  ident.availability_domain, settings.vcenter_host or "(not configured)")
         try:
             yield
         finally:
+            await app.state.consoles.close_all()
             app.state.runner.shutdown()
             app.state.sessions.close_all()
             app.state.store.close()
@@ -76,6 +83,7 @@ def create_app(
     app.include_router(routes_auth.router)
     app.include_router(routes_vms.router)
     app.include_router(routes_jobs.router)
+    app.include_router(routes_console.router)
     app.include_router(routes_oci.router)
     app.include_router(routes_setup.router)
 

@@ -18,6 +18,8 @@ firmware mode (BIOS/UEFI, Secure Boot), CPU/memory sizing and Windows licensing 
   the target is created, sized and placed (compartment, VCN/subnet, shape, OCPUs/memory) per VM.
 - **Batch work**: several migrations run in parallel, further jobs queue; progress, throughput and
   a copy of the diagnostics are available per job.
+- **First boot debugging**: a *Remote console* button on a completed job opens the instance's VNC console
+  in the browser (OCI console connection created on the fly, tunnelled through the helper).
 
 Not in scope: running VMs (no live/CBT sync), VMware Workstation/Fusion, Hyper-V or KVM sources, and
 guest-side reconfiguration (IP addresses, drivers - see the notes on VirtIO drivers for Windows in

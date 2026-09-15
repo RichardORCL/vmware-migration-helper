@@ -55,10 +55,10 @@ def target(**kw):
 
 
 class Env:
-    def __init__(self, tmp_path, fail_once=frozenset({1}), block_event=None, store=None):
+    def __init__(self, tmp_path, fail_once=frozenset({1}), block_event=None, store=None, tunnel_factory=None):
         self.settings = Settings(device_prefix=str(tmp_path / "dev" / "oraclevd"), db_path=str(tmp_path / "jobs.db"),
                                  seed_bucket="vc-oci-seed", launch_timeout_s=5, volume_timeout_s=5,
-                                 image_import_timeout_s=5, cookie_secure=False,
+                                 image_import_timeout_s=5, cookie_secure=False, console_connect_timeout_s=5,
                                  vcenter_host="vc.test", disk_retry_attempts=3, max_concurrent_jobs=2,
                                  update_source_dir=str(tmp_path / "src"), update_venv_dir=str(tmp_path / "venv"),
                                  update_log_path=str(tmp_path / "update.log"),
@@ -92,10 +92,11 @@ class Env:
             self.nfc_hosts.append(nfc_host)
             return FakeExport(vm, payloads, fail_once=set(fail_once), block_event=block_event)
 
+        extra = {"tunnel_factory": tunnel_factory} if tunnel_factory else {}
         self.app = create_app(
             settings=self.settings, clients=self.fake.clients(), store=self.store, vcenter=self.vcenter,
             export_factory=export_factory, updater=self.updater, command_runner=self._run_command,
-            scan_devices=self.fake.scan_devices,
+            scan_devices=self.fake.scan_devices, **extra,
         )
 
     # -- fake git / systemd for the updater

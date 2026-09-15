@@ -77,6 +77,11 @@ class Settings(BaseSettings):
     image_import_timeout_s: int = 3600
     skip_zero_grains: bool = True
 
+    # Remote (VNC) console of a migrated instance: OCI instance console connection + SSH tunnel bridged into
+    # the browser.  The console connection is deleted after this long without a viewer.
+    console_idle_timeout_s: int = 600
+    console_connect_timeout_s: int = 120  # CreateInstanceConsoleConnection -> ACTIVE, and the SSH hops
+
     # Self-update from the git checkout the helper was installed from (source install on the helper VM)
     update_source_dir: str = "/opt/vc-oci/src"
     update_venv_dir: str = "/opt/vc-oci/venv"

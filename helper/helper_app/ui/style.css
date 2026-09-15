@@ -111,3 +111,10 @@ td.ocid { font-family: Consolas, monospace; font-size: 11px; word-break: break-a
 .disk .bar.done > div { background: var(--ok); }
 .disk .bar.failed > div { background: var(--danger); }
 .disk .meta { display: flex; justify-content: space-between; color: var(--muted); font-size: 12px; }
+
+/* remote console: the noVNC canvas fills the card below the toolbar */
+.toolbar .spacer { flex: 1; }
+.console .console-hint { margin: 0 0 8px; font-size: 12px; }
+.vnc-screen { position: relative; width: 100%; height: calc(100vh - 230px); min-height: 480px; background: #000; border-radius: 3px; overflow: hidden; }
+.vnc-screen canvas { outline: none; }
+.console-status.ok { color: var(--ok); }

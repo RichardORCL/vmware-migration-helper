@@ -10,7 +10,7 @@
 
   // ---------------------------------------------------------------------- api
   class ApiError extends Error {
-    constructor(message, status) { super(message); this.status = status; }
+    constructor(message, status, detail) { super(message); this.status = status; this.detail = detail; }
   }
 
   async function api(method, path, body) {
@@ -26,7 +26,7 @@
     if (!resp.ok) {
       const detail = data && data.detail ? (typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail)) : resp.statusText;
       if (resp.status === 401 && !path.startsWith("/auth/login")) { state.me = null; showLogin(); }
-      throw new ApiError(detail, resp.status);
+      throw new ApiError(detail, resp.status, data && data.detail);
     }
     return data;
   }
@@ -67,6 +67,8 @@
   const isWindowsClient = (vm) => /windows\s+(10|11)\b/i.test(vm.guest_full_name || "")
     || (!/server/i.test(vm.guest_full_name || "") && /^windows(9|1[12])_64/i.test(vm.guest_id || ""));
   const TERMINAL = ["COMPLETED", "FAILED", "CANCELLED"];
+  // remote console: completed migrations with an OCI instance (mirrors routes_console._console_job)
+  const hasConsole = (job) => job.phase === "COMPLETED" && !!job.instance_id;
   const STEP_LABELS = { seed_image: "Seed image import", launch_instance: "Instance launch" };
   // OCI console deep link for an instance OCID; the region query parameter makes the console switch to
   // the helper's region instead of the user's last one
@@ -261,6 +263,10 @@
       } catch (e) { copyState.textContent = "Cannot collect diagnostics: " + e.message; }
       finally { copyBtn.disabled = false; setTimeout(() => { if (copyState.textContent.startsWith("Copied")) copyState.textContent = ""; }, 6000); }
     };
+    // the VNC console of the migrated instance (OCI console connection through the helper)
+    const consoleBtn = root.querySelector("[data-console]");
+    consoleBtn.hidden = !hasConsole(job);
+    consoleBtn.href = `#/jobs/${job.id}/console`;
     const licSel = root.querySelector("[data-license]"); const licBtn = root.querySelector("[data-license-btn]");
     const showLic = isWindows(job.vm) && job.instance_id && (job.phase === "COMPLETED" || job.phase === "FINALIZING");
     licSel.hidden = licBtn.hidden = !showLic;
@@ -596,7 +602,7 @@
     try { jobs = await api("GET", "/jobs"); } catch (e) { if (e.status !== 401) showError(e.message); return; }
     app.innerHTML = "";
     // fixed layout (see style.css): the message column takes what the others leave
-    const columns = [["VM", "15%"], ["Phase", "112px"], ["Message", null], ["OCI instance", "17%"], ["Started", "11%"], ["By", "13%", "by"], ["", "80px"]];
+    const columns = [["VM", "15%"], ["Phase", "112px"], ["Message", null], ["OCI instance", "17%"], ["Started", "11%"], ["By", "13%", "by"], ["", "150px"]];
     const table = el("table", { class: "jobs" },
       el("colgroup", {}, ...columns.map(([, w, cls]) => el("col", { style: w ? `width:${w}` : null, class: cls || null }))),
       el("thead", {}, el("tr", {}, ...columns.map(([h, , cls]) => el("th", { class: cls || null }, h)))),
@@ -608,7 +614,9 @@
             ? ` - ${j.step_percent}%` : "")),
         el("td", { class: "ocid", title: j.instance_id || "" }, ocidLink("instances", j.instance_id)),
         el("td", {}, new Date(j.created_at).toLocaleString()), el("td", { class: "by" }, j.created_by || "-"),
-        el("td", { class: "row-actions" }, el("a", { class: "button secondary small", href: `#/jobs/${j.id}` }, "Details"))))));
+        el("td", { class: "row-actions" },
+          hasConsole(j) ? el("a", { class: "button secondary small", href: `#/jobs/${j.id}/console`, title: "Open the VNC console of the instance" }, "Console") : null,
+          el("a", { class: "button secondary small", href: `#/jobs/${j.id}` }, "Details"))))));
     app.append(el("div", { class: "card" }, el("h2", {}, "Migration jobs"),
       jobs.length ? table : el("div", { class: "muted" }, "No jobs yet. Pick a powered-off VM under Source VMs to start one.")));
     // refresh the table while jobs are active
@@ -623,6 +631,87 @@
     const c = el("div", { class: "card" });
     app.append(el("div", { class: "toolbar" }, el("a", { href: "#/jobs", class: "muted" }, "\u2190 all jobs")), c);
     activePoll = pollJob(jobId, c);
+  }
+
+  // ------------------------------------------------------------ remote console
+  // OCI instance console connection (created by the helper with a temporary key) -> SSH tunnel on the helper
+  // -> WebSocket on this origin -> noVNC in this page.  The connection is deleted on Close or when idle.
+  async function consoleView(jobId) {
+    app.innerHTML = "";
+    app.append(tpl("tpl-console"));
+    const status = document.getElementById("console-status"), errBox = document.getElementById("console-error");
+    const screen = document.getElementById("vnc-screen");
+    const cadBtn = document.getElementById("console-cad"), reconnectBtn = document.getElementById("console-reconnect");
+    const closeBtn = document.getElementById("console-close"), back = document.getElementById("console-back");
+    back.href = `#/jobs/${jobId}`;
+    let rfb = null; let stopped = false; let closing = false;
+    const setStatus = (text, ok) => { status.textContent = text; status.className = "console-status" + (ok ? " ok" : " muted"); };
+    const setError = (text) => { errBox.textContent = text || ""; };
+
+    let job;
+    try { job = await api("GET", `/jobs/${encodeURIComponent(jobId)}`); }
+    catch (e) { if (e.status !== 401) showError(e.message); return; }
+    document.getElementById("console-title").textContent = `- ${job.instance_display_name || job.vm.name}`;
+    if (!hasConsole(job)) { setStatus("", false); setError("The remote console is available for completed migrations with an OCI instance."); closeBtn.hidden = true; return; }
+
+    // 1. console connection on the OCI side (idempotent while one is active)
+    const openConnection = async () => {
+      setStatus("Creating the OCI console connection...", false);
+      let st;
+      try { st = await api("POST", `/jobs/${encodeURIComponent(jobId)}/console`); }
+      catch (e) {
+        if (e.status === 409 && e.detail && e.detail.code === "foreign_connection") {
+          if (!confirm(`${e.detail.message}\n\nReplace the existing console connection ${e.detail.connection_id}?`)) throw new Error("An existing console connection is in the way; nothing was changed.");
+          st = await api("POST", `/jobs/${encodeURIComponent(jobId)}/console?replace=true`);
+        } else throw e;
+      }
+      while (st.state === "CREATING" && !stopped) {
+        await new Promise((r) => setTimeout(r, 2000));
+        st = await api("GET", `/jobs/${encodeURIComponent(jobId)}/console`);
+      }
+      if (st.state !== "ACTIVE") throw new Error(st.error || `console connection is ${st.state}`);
+      return st;
+    };
+
+    // 2. noVNC over the helper's WebSocket bridge
+    const connectVnc = async () => {
+      const { default: RFB } = await import("./vendor/novnc/core/rfb.js");
+      const url = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/jobs/${encodeURIComponent(jobId)}/console/vnc`;
+      setStatus("Connecting to the instance console...", false);
+      screen.innerHTML = "";
+      rfb = new RFB(screen, url, {});
+      rfb.scaleViewport = true;
+      rfb.resizeSession = false;
+      rfb.background = "#000";
+      rfb.addEventListener("connect", () => { setStatus("Connected", true); setError(""); cadBtn.disabled = false; reconnectBtn.disabled = true; rfb.focus(); });
+      rfb.addEventListener("disconnect", (ev) => {
+        cadBtn.disabled = true; reconnectBtn.disabled = stopped;
+        if (closing) return;
+        setStatus(ev.detail.clean ? "Disconnected" : "Connection lost", false);
+        if (!ev.detail.clean) setError("The console connection dropped (the helper logs the reason; the instance may be rebooting or the tunnel was refused). Use Reconnect to try again.");
+      });
+      rfb.addEventListener("securityfailure", (ev) => setError(`VNC security failure: ${ev.detail.reason || ev.detail.status}`));
+      rfb.addEventListener("credentialsrequired", () => setError("The VNC server asked for credentials; the OCI console does not normally do this."));
+    };
+
+    const start = async () => {
+      setError(""); reconnectBtn.disabled = true;
+      try { await openConnection(); if (!stopped) await connectVnc(); }
+      catch (e) { if (e.status === 401) return; setStatus("Not connected", false); setError(e.message); reconnectBtn.disabled = false; }
+    };
+    cadBtn.onclick = () => { if (rfb) rfb.sendCtrlAltDel(); };
+    reconnectBtn.onclick = () => { if (rfb) { try { rfb.disconnect(); } catch (_) { /* already gone */ } rfb = null; } start(); };
+    closeBtn.onclick = async () => {
+      if (!confirm("Close the remote console and delete the OCI console connection?")) return;
+      closing = true; closeBtn.disabled = true; setStatus("Closing...", false);
+      if (rfb) { try { rfb.disconnect(); } catch (_) { /* ignore */ } rfb = null; }
+      try { await api("DELETE", `/jobs/${encodeURIComponent(jobId)}/console`); } catch (e) { alert(e.message); }
+      location.hash = `#/jobs/${jobId}`;
+    };
+    // leaving the view (hash change) disconnects the VNC session; the console connection stays for a quick
+    // return and is removed by the helper's idle timeout
+    activePoll = () => { stopped = true; if (rfb) { try { rfb.disconnect(); } catch (_) { /* ignore */ } rfb = null; } };
+    await start();
   }
 
   // --------------------------------------------------------------- setup view
@@ -799,6 +888,7 @@
     for (const a of nav.querySelectorAll("a")) a.classList.toggle("active", hash.startsWith(a.getAttribute("href")));
     let m;
     if ((m = /^#\/export\/(.+)$/.exec(hash))) return exportView(decodeURIComponent(m[1]));
+    if ((m = /^#\/jobs\/([^/]+)\/console$/.exec(hash))) return consoleView(decodeURIComponent(m[1]));
     if ((m = /^#\/jobs\/(.+)$/.exec(hash))) return jobDetailView(decodeURIComponent(m[1]));
     if (hash === "#/jobs") return jobsView();
     if (hash === "#/setup") return setupView();

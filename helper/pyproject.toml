@@ -15,6 +15,7 @@ dependencies = [
     "httpx>=0.26",
     "oci>=2.120",
     "pyvmomi>=8.0",
+    "asyncssh>=2.14",
 ]
 
 [project.optional-dependencies]
@@ -27,7 +28,7 @@ vc-oci-helper = "helper_app.main:run"
 include = ["helper_app*"]
 
 [tool.setuptools.package-data]
-helper_app = ["ui/*"]
+helper_app = ["ui/*", "ui/vendor/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

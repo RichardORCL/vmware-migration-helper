@@ -102,39 +102,16 @@ variable "max_concurrent_jobs" {
   default     = 2
 }
 
-variable "install_method" {
-  description = "How the helper service is installed on the VM: 'source' (git clone + pip, no registry needed) or 'container' (podman pull)"
-  type        = string
-  default     = "source"
-  validation {
-    condition     = contains(["source", "container"], var.install_method)
-    error_message = "install_method must be 'source' or 'container'."
-  }
-}
-
 variable "source_git_url" {
-  description = "Git repository containing the helper (install_method = source)"
+  description = "Git repository containing the helper; cloned on the VM and installed with pip"
   type        = string
   default     = "https://github.com/RichardORCL/vmware-migration-helper.git"
 }
 
 variable "source_git_ref" {
-  description = "Branch, tag or commit to install (install_method = source)"
+  description = "Branch, tag or commit to install"
   type        = string
   default     = "main"
-}
-
-variable "container_image" {
-  description = "Helper container image reference, e.g. fra.ocir.io/<namespace>/vc-oci-helper:latest (install_method = container)"
-  type        = string
-  default     = ""
-}
-
-variable "container_registry_auth" {
-  description = "Optional 'user:password' for podman login to the registry hosting container_image"
-  type        = string
-  default     = ""
-  sensitive   = true
 }
 
 # ----------------------------------------------------------------------------- IAM

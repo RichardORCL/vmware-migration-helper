@@ -1,18 +1,14 @@
 #cloud-config
-# Installs the vCenter to OCI migration helper (web UI + migration engine) on Oracle Linux 9, either from
-# source (git + pip) or as a podman container, generates a self-signed certificate and runs it as the
-# vc-oci-helper systemd unit.
+# Installs the vCenter to OCI migration helper (web UI + migration engine) on Oracle Linux 9 from source
+# (git + pip into a virtualenv), generates a self-signed certificate and runs it as the vc-oci-helper
+# systemd unit.
 package_update: true
 packages:
   - openssl
   - firewalld
-%{ if install_method == "source" ~}
   - git
   - python3.11
   - python3.11-pip
-%{ else ~}
-  - podman
-%{ endif ~}
 
 write_files:
   - path: /etc/vc-oci-helper/helper.env
@@ -32,7 +28,6 @@ write_files:
       HELPER_TLS_KEY_FILE=/etc/vc-oci-helper/server.key
       HELPER_DB_PATH=/var/lib/vc-oci-helper/jobs.sqlite3
 
-%{ if install_method == "source" ~}
   - path: /usr/local/sbin/vc-oci-helper-install
     permissions: "0755"
     content: |
@@ -71,32 +66,6 @@ write_files:
 
       [Install]
       WantedBy=multi-user.target
-%{ else ~}
-  - path: /etc/systemd/system/vc-oci-helper.service
-    permissions: "0644"
-    content: |
-      [Unit]
-      Description=vCenter to OCI helper
-      After=network-online.target
-      Wants=network-online.target
-
-      [Service]
-      Restart=always
-      RestartSec=5
-      ExecStartPre=-/usr/bin/podman rm -f vc-oci-helper
-      ExecStartPre=/usr/bin/podman pull ${container_image}
-      # --privileged: the container writes to paravirtualized volume devices (/dev/oracleoci/oraclevd*)
-      ExecStart=/usr/bin/podman run --name vc-oci-helper --rm --privileged --network host \
-        --env-file /etc/vc-oci-helper/helper.env \
-        -v /etc/vc-oci-helper:/etc/vc-oci-helper:ro \
-        -v /var/lib/vc-oci-helper:/var/lib/vc-oci-helper \
-        -v /dev:/dev \
-        ${container_image}
-      ExecStop=/usr/bin/podman stop -t 30 vc-oci-helper
-
-      [Install]
-      WantedBy=multi-user.target
-%{ endif ~}
 
 runcmd:
   - mkdir -p /var/lib/vc-oci-helper /etc/vc-oci-helper
@@ -112,16 +81,6 @@ runcmd:
   - systemctl enable --now firewalld
   - firewall-cmd --permanent --add-port=8443/tcp
   - firewall-cmd --reload
-%{ if install_method == "source" ~}
   - /usr/local/sbin/vc-oci-helper-install
-%{ else ~}
-  - |
-    if [ -n "${container_registry_auth}" ]; then
-      REG=$(echo "${container_image}" | cut -d/ -f1)
-      USER_PART=$(echo "${container_registry_auth}" | cut -d: -f1)
-      PASS_PART=$(echo "${container_registry_auth}" | cut -d: -f2-)
-      echo "$PASS_PART" | podman login "$REG" -u "$USER_PART" --password-stdin
-    fi
-%{ endif ~}
   - systemctl daemon-reload
   - systemctl enable --now vc-oci-helper

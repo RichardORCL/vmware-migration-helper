@@ -19,11 +19,10 @@ provider "oci" {
 }
 
 locals {
-  policy_scope   = var.policy_scope_compartment_ocid != "" ? "compartment id ${var.policy_scope_compartment_ocid}" : "tenancy"
-  tag_namespace  = "vc-oci"
-  tag_role_key   = "role"
-  dynamic_group  = "${var.helper_display_name}-dg"
-  install_source = var.install_method == "source"
+  policy_scope  = var.policy_scope_compartment_ocid != "" ? "compartment id ${var.policy_scope_compartment_ocid}" : "tenancy"
+  tag_namespace = "vc-oci"
+  tag_role_key  = "role"
+  dynamic_group = "${var.helper_display_name}-dg"
 }
 
 # ---------------------------------------------------------------------------- image
@@ -196,30 +195,23 @@ resource "oci_core_instance" "helper" {
   metadata = {
     ssh_authorized_keys = var.ssh_public_key
     user_data = base64encode(templatefile("${path.module}/cloud-init.yaml", {
-      install_method          = var.install_method
-      source_git_url          = var.source_git_url
-      source_git_ref          = var.source_git_ref
-      container_image         = var.container_image
-      container_registry_auth = var.container_registry_auth
-      seed_bucket             = var.seed_bucket_name
-      default_shape           = var.default_target_shape
-      max_concurrent_jobs     = var.max_concurrent_jobs
-      vcenter_host            = var.vcenter_host
-      vcenter_port            = var.vcenter_port
-      vcenter_verify_ssl      = var.vcenter_verify_ssl
-      region                  = var.region
-      tenancy_ocid            = var.tenancy_ocid
+      source_git_url      = var.source_git_url
+      source_git_ref      = var.source_git_ref
+      seed_bucket         = var.seed_bucket_name
+      default_shape       = var.default_target_shape
+      max_concurrent_jobs = var.max_concurrent_jobs
+      vcenter_host        = var.vcenter_host
+      vcenter_port        = var.vcenter_port
+      vcenter_verify_ssl  = var.vcenter_verify_ssl
+      region              = var.region
+      tenancy_ocid        = var.tenancy_ocid
     }))
   }
 
   lifecycle {
     precondition {
-      condition     = var.install_method != "source" || var.source_git_url != ""
-      error_message = "source_git_url is required when install_method is 'source'."
-    }
-    precondition {
-      condition     = var.install_method != "container" || var.container_image != ""
-      error_message = "container_image is required when install_method is 'container'."
+      condition     = var.source_git_url != ""
+      error_message = "source_git_url is required."
     }
     ignore_changes = [source_details[0].source_id, metadata]
   }

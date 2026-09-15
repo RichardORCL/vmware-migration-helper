@@ -83,8 +83,7 @@ helper/
     oci/               mapping (guest OS / launch options / shape), seed images, provisioning
     jobs/              SQLite job store, MigrationRunner
     ui/                vanilla JS single-page UI (login, Source VMs, export dialog, jobs, setup)
-  deploy/terraform/    Resource Manager stack / Terraform for the helper VM (+ cloud-init)
-  Dockerfile
+  deploy/terraform/    Resource Manager stack / Terraform for the helper VM (+ cloud-init: git clone + pip)
   tests/               fakes for OCI, vCenter and NFC; end-to-end tests
 docs/
 ```

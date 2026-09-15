@@ -14,14 +14,9 @@ vcenter_host       = "vcenter.example.com"
 vcenter_port       = 443
 vcenter_verify_ssl = false
 
-# Installation: from GitHub (default) ...
-install_method = "source"
+# Installation: the helper is cloned from this repository and installed with pip on the VM
 source_git_url = "https://github.com/RichardORCL/vmware-migration-helper.git"
 source_git_ref = "main"
-# ... or from a container image
-# install_method          = "container"
-# container_image         = "fra.ocir.io/<namespace>/vc-oci-helper:latest"
-# container_registry_auth = "<namespace>/oracleidentitycloudservice/user@example.com:<auth-token>"
 
 # max_concurrent_jobs = 2
 

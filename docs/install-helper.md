@@ -6,7 +6,7 @@
   HTTPS connections to vCenter on 443 for the API and the NFC disk download) and that the
   administrators' browsers can reach on 8443 (through the same VPN, or via a public IP on the helper).
 - Permissions to create instances, block volumes, custom images, an Object Storage bucket, a dynamic group, a policy and a tag namespace (or an administrator who creates the IAM parts for you, see `create_iam`).
-- The helper VM must be able to reach GitHub to clone the helper repository [RichardORCL/vmware-migration-helper](https://github.com/RichardORCL/vmware-migration-helper) (`install_method = source`, default), or a container registry holding the helper image (`install_method = container`). Point `source_git_url` at your own fork if you maintain one.
+- The helper VM must be able to reach GitHub to clone the helper repository [RichardORCL/vmware-migration-helper](https://github.com/RichardORCL/vmware-migration-helper) (and PyPI to install its dependencies). Point `source_git_url` at your own fork if you maintain one.
 - A vCenter account for each operator with read access to the inventory and the
   `VirtualMachine.Provisioning.ExportOVF` privilege (*Allow disk access*) on the VMs to migrate.
 
@@ -21,11 +21,11 @@ The Terraform in `helper/deploy/terraform` is a self-contained [Resource Manager
    - *Placement*: compartment, availability domain (target instances land in the same AD), VCN, subnet, whether to assign a public IP, and the CIDRs of the administrators' networks allowed to reach the web UI.
    - *vCenter*: host name/IP as reachable from the helper subnet, port, whether to verify its TLS certificate.
    - *Helper instance*: shape/OCPUs/memory and your SSH public key.
-   - *Helper service*: installation method (git URL + ref, defaulting to the `vmware-migration-helper` GitHub repo, or container image + optional registry credentials), seed bucket, default target shape, number of parallel migrations.
+   - *Helper service*: git URL + ref to install (defaulting to the `vmware-migration-helper` GitHub repo), seed bucket, default target shape, number of parallel migrations.
    - *IAM*: keep **Create IAM resources** on unless an administrator already created the dynamic group/policy/tag namespace; optionally limit the compartment where the helper may create target instances.
 4. Run **Plan**, then **Apply**. Outputs show `helper_ui_url`, the vCenter host, the availability domain and next steps.
 
-Re-running Apply after changing the git ref or image is enough to upgrade the helper (cloud-init changes are ignored; on the VM run `sudo /usr/local/sbin/vc-oci-helper-install && sudo systemctl restart vc-oci-helper` for source installs, or `sudo systemctl restart vc-oci-helper` to re-pull a container).
+To upgrade the helper use the **Setup** page in the web UI (see below), or on the VM run `sudo /usr/local/sbin/vc-oci-helper-install && sudo systemctl restart vc-oci-helper`. Changing the git ref in the stack alone does not upgrade an existing VM (cloud-init changes are ignored).
 
 ## 1. Option B - local Terraform
 
@@ -36,20 +36,13 @@ terraform init && terraform apply
 terraform output helper_ui_url
 ```
 
-If you use `install_method = container`, build and push the image first:
-
-```bash
-docker build -f helper/Dockerfile -t fra.ocir.io/<namespace>/vc-oci-helper:latest .
-docker push fra.ocir.io/<namespace>/vc-oci-helper:latest
-```
-
 ## 2. What the stack creates
 
 - an Oracle Linux 9 flex instance with paravirtualized storage/network and consistent device naming (`/dev/oracleoci/oraclevd*`), tagged `vc-oci.role=helper`;
 - a network security group allowing TCP 8443 (web UI) and 22 (SSH) from `allowed_source_cidrs`, all egress;
 - the `vc-oci-seed-images` Object Storage bucket used while importing seed images;
 - (when `create_iam = true`) the `vc-oci` tag namespace, a dynamic group matching the tagged instance in the helper compartment, and a policy granting it `manage instance-family` / `manage volume-family` / `use virtual-network-family` in `policy_scope_compartment_ocid` (default: tenancy), plus `manage instance-images` / `compute-image-capability-schema` / volume attachments in its own compartment, object access to the seed bucket and `PAR_MANAGE` on that bucket (the image import service reads the placeholder through a pre-authenticated request it creates on the helper's behalf);
-- cloud-init that writes `/etc/vc-oci-helper/helper.env` (`HELPER_VCENTER_*`, OCI settings), installs the helper (git clone + `pip install` into `/opt/vc-oci/venv`, or podman), generates a self-signed certificate, opens 8443 in firewalld and runs the `vc-oci-helper` systemd unit.
+- cloud-init that writes `/etc/vc-oci-helper/helper.env` (`HELPER_VCENTER_*`, OCI settings), installs the helper (git clone + `pip install` into `/opt/vc-oci/venv`), generates a self-signed certificate, opens 8443 in firewalld and runs the `vc-oci-helper` systemd unit.
 
 **Target instances can only be created in the helper's AD** because boot volumes are AD-local; deploy one stack per AD if you need more.
 
@@ -112,8 +105,7 @@ from (`source_git_ref`, queried through the GitHub API, falling back to `git ls-
 virtualenv, then `systemctl restart vc-oci-helper`. All web sessions end with the restart; the page
 waits for the new version and returns to the login screen. The update is refused while migrations
 are running (the restart would abort them) unless forced through the API
-(`POST /api/setup/software/update {"force": true}`). Container installations update by restarting
-the service on the VM (`ExecStartPre` pulls the image).
+(`POST /api/setup/software/update {"force": true}`).
 
 The same thing by hand: `sudo /usr/local/sbin/vc-oci-helper-install && sudo systemctl restart vc-oci-helper`.
 

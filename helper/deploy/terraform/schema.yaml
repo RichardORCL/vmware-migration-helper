@@ -31,11 +31,8 @@ variableGroups:
       - ssh_public_key
   - title: "Helper service"
     variables:
-      - install_method
       - source_git_url
       - source_git_ref
-      - container_image
-      - container_registry_auth
       - seed_bucket_name
       - default_target_shape
       - max_concurrent_jobs
@@ -148,54 +145,17 @@ variables:
     title: "SSH public key"
     required: true
 
-  install_method:
-    type: enum
-    title: "Installation method"
-    description: "'source' clones the repository and installs with pip (no registry needed); 'container' pulls an image with podman"
-    enum:
-      - source
-      - container
-    default: source
-    required: true
-
   source_git_url:
     type: string
     title: "Git repository URL"
-    description: "HTTPS URL of the helper repository (must be reachable from the helper VM)"
+    description: "HTTPS URL of the helper repository (must be reachable from the helper VM); cloned and installed with pip"
     default: "https://github.com/RichardORCL/vmware-migration-helper.git"
-    visible:
-      eq:
-        - ${install_method}
-        - source
     required: true
 
   source_git_ref:
     type: string
     title: "Git branch / tag / commit"
     default: "main"
-    visible:
-      eq:
-        - ${install_method}
-        - source
-
-  container_image:
-    type: string
-    title: "Container image"
-    description: "e.g. fra.ocir.io/<namespace>/vc-oci-helper:latest"
-    visible:
-      eq:
-        - ${install_method}
-        - container
-    required: true
-
-  container_registry_auth:
-    type: password
-    title: "Registry credentials (user:password)"
-    description: "Leave empty for public images"
-    visible:
-      eq:
-        - ${install_method}
-        - container
 
   seed_bucket_name:
     type: string

@@ -1,15 +1,55 @@
-.venv/
+# --- Python
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
 *.egg-info/
+build/
+dist/
+.eggs/
+.venv/
+venv/
+env/
+.python-version
+
+# --- test / lint / type-check caches and reports
 .pytest_cache/
 .ruff_cache/
+.mypy_cache/
+.pyre/
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+junit*.xml
+pytest-report*.xml
+
+# --- local runtime state of the helper (jobs DB, TLS material, runtime settings, logs)
 *.sqlite3*
-helper/.env
+*.db
+*.log
+runtime-settings.json
+.env
+.env.*
 helper/data/
 helper/certs/
-helper/deploy/terraform/.terraform/
-helper/deploy/terraform/*.tfstate*
-helper/deploy/terraform/terraform.tfvars
-helper/deploy/terraform/.terraform.lock.hcl
 certs/
+
+# --- Terraform / Resource Manager local state (the stack zip in the repo root IS committed)
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+terraform.tfvars
+*.auto.tfvars
+crash.log
+
+# --- editors / OS
+.idea/
+.vscode/
+.cursor/
+*.swp
+*~
+.DS_Store
+Thumbs.db

@@ -11,7 +11,6 @@ does not kill the update itself.  Progress is appended to a log file that the Se
 from __future__ import annotations
 
 import logging
-import os
 import re
 import shlex
 import subprocess
@@ -36,7 +35,7 @@ class UpdateError(RuntimeError):
 
 class SoftwareStatus(BaseModel):
     version: str
-    install_method: str  # source | container | none
+    install_method: str  # source | none
     source_dir: str = ""
     repo_url: str = ""  # browsable repository URL, if the origin is on GitHub
     branch: str = ""
@@ -85,11 +84,7 @@ class Updater:
     # ------------------------------------------------------------------ local
     @property
     def install_method(self) -> str:
-        if (self.src / ".git").exists():
-            return "source"
-        if os.environ.get("container") or Path("/.dockerenv").exists() or Path("/run/.containerenv").exists():
-            return "container"
-        return "none"
+        return "source" if (self.src / ".git").exists() else "none"
 
     def _git(self, *args: str, timeout: float = 30.0) -> Optional[str]:
         rc, out = self._run(["git", "-C", str(self.src), *args], timeout)
@@ -174,9 +169,7 @@ class Updater:
                     st.update_available = st.latest_commit != st.commit
         st.update_running = self.running()
         st.log = self.log_tail()
-        if method == "container":
-            st.reason = "Container installation: restart the vc-oci-helper service on the VM to pull the latest image."
-        elif method != "source":
+        if method != "source":
             st.reason = f"No git checkout at {self.src}; the helper was not installed from source."
         elif st.update_running:
             st.reason = "An update is running."

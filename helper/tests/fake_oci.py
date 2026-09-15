@@ -282,17 +282,18 @@ class FakeCompute:
                                 "Missing launchOptions: launchOptions must be provided when using CUSTOM launchMode",
                                 "create_image")
         src = details.image_source_details
-        # OCI: Windows versions come from its catalog; client editions are "Windows10"/"Windows11" only
-        if src.operating_system == "Windows" and not (
-                src.operating_system_version.startswith("Server ") or src.operating_system_version in ("Windows10", "Windows11")):
+        # OCI: CreateImage only knows the server catalog for Windows; the client editions ("Windows10" /
+        # "Windows11") are rejected here and can only be set with UpdateImage afterwards
+        os_name, os_version = src.operating_system or "Custom", src.operating_system_version or "Custom"
+        if os_name == "Windows" and not os_version.startswith("Server "):
             raise service_error(400, "InvalidParameter",
-                                f"Invalid operatingSystemVersion: {src.operating_system_version} (The operating "
-                                "system version is not supported.)", "create_image")
+                                f"Invalid operatingSystemVersion: {os_version} (The operating system version is "
+                                "not supported.)", "create_image")
         iid = oid("image")
         img = NS(id=iid, display_name=details.display_name, compartment_id=details.compartment_id,
                  lifecycle_state="IMPORTING", freeform_tags=dict(details.freeform_tags or {}),
-                 launch_mode=details.launch_mode, operating_system=src.operating_system,
-                 operating_system_version=src.operating_system_version, source_image_type=src.source_image_type,
+                 launch_mode=details.launch_mode, operating_system=os_name,
+                 operating_system_version=os_version, source_image_type=src.source_image_type,
                  object_name=src.object_name)
         self.images[iid] = img
         self.pending_transitions[iid] = self.f.import_outcome
@@ -312,6 +313,21 @@ class FakeCompute:
         nxt = self.pending_transitions.pop(iid, None)
         if nxt:
             img.lifecycle_state = nxt
+        return Resp(img)
+
+    def update_image(self, iid, details):
+        img = self.images[iid]
+        if img.lifecycle_state != "AVAILABLE":
+            raise service_error(409, "IncorrectState", f"Image {iid} is in {img.lifecycle_state} state", "update_image")
+        os_name = details.operating_system or img.operating_system
+        os_version = details.operating_system_version or img.operating_system_version
+        if os_name == "Windows" and not (os_version.startswith("Server ") or os_version in ("Windows10", "Windows11")):
+            raise service_error(400, "InvalidParameter",
+                                f"Invalid operatingSystemVersion: {os_version} (The operating system version is "
+                                "not supported.)", "update_image")
+        img.operating_system, img.operating_system_version = os_name, os_version
+        if details.display_name:
+            img.display_name = details.display_name
         return Resp(img)
 
     def delete_image(self, iid):

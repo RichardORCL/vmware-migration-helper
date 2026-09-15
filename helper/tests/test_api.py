@@ -519,8 +519,11 @@ def test_windows_client_edition_uses_catalog_version_and_byol(env):
     job = wait_phase(c, r.json()["id"], "COMPLETED", "FAILED")
     assert job["phase"] == "COMPLETED", job
     img = env.fake.compute.images[job["seed_image_id"]]
+    # imported without OS metadata (CreateImage rejects Windows1x), then registered via UpdateImage
     assert (img.operating_system, img.operating_system_version) == ("Windows", "Windows11")
     assert job["launch_options"]["firmware"] == "UEFI_64"
+    ld = [d for d in env.fake.compute.launch_details if d.display_name == "desk-01"][0]
+    assert ld.licensing_configs[0].license_type == "BRING_YOUR_OWN_LICENSE"  # still a Windows image
 
 
 def test_direct_esxi_download_option(env):

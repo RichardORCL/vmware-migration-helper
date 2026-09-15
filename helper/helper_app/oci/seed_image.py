@@ -20,7 +20,13 @@ from helper_app.config import Settings
 from helper_app.disk.vmdk_stream import encode_empty_disk
 from helper_app.models import LaunchOptionsSpec
 from helper_app.oci.clients import OciClients, OciError, describe_error
-from helper_app.oci.mapping import SEED_TAG_DEFAULTS, OsMetadata, is_emulated, seed_image_tags
+from helper_app.oci.mapping import (
+    SEED_TAG_DEFAULTS,
+    WINDOWS_CLIENT_VERSIONS,
+    OsMetadata,
+    is_emulated,
+    seed_image_tags,
+)
 
 log = logging.getLogger(__name__)
 
@@ -101,21 +107,27 @@ class SeedImageService:
         log.info("uploading %d byte placeholder VMDK to %s/%s", len(payload), self.s.seed_bucket, object_name)
         self.c.object_storage.put_object(namespace, self.s.seed_bucket, object_name, payload)
 
+        # Windows client editions: CreateImage refuses "Windows10"/"Windows11" ("Invalid operatingSystemVersion
+        # ... not supported"), yet UpdateImage accepts exactly those.  So import without OS metadata and set
+        # Windows / Windows1x afterwards, as Oracle's own Windows 10/11 import procedure does.
+        client_edition = os_meta.is_windows and os_meta.operating_system_version in WINDOWS_CLIENT_VERSIONS
+        source = M.ImageSourceViaObjectStorageTupleDetails(
+            source_type="objectStorageTuple",
+            namespace_name=namespace,
+            bucket_name=self.s.seed_bucket,
+            object_name=object_name,
+            source_image_type="VMDK",
+        )
+        if not client_edition:
+            source.operating_system = os_meta.operating_system
+            source.operating_system_version = os_meta.operating_system_version
         try:
             details = M.CreateImageDetails(
                 compartment_id=self.seed_compartment,
                 display_name=display,
                 launch_mode=launch_mode,
                 freeform_tags={**tags, "vc-oci-launch-mode": launch_mode},
-                image_source_details=M.ImageSourceViaObjectStorageTupleDetails(
-                    source_type="objectStorageTuple",
-                    namespace_name=namespace,
-                    bucket_name=self.s.seed_bucket,
-                    object_name=object_name,
-                    source_image_type="VMDK",
-                    operating_system=os_meta.operating_system,
-                    operating_system_version=os_meta.operating_system_version,
-                ),
+                image_source_details=source,
             )
             resp = self.c.compute.create_image(details)
             image = resp.data
@@ -130,6 +142,12 @@ class SeedImageService:
                 raise OciError(f"{exc}; {self._import_failure_detail(work_request_id)}") from exc
             if on_progress:
                 on_progress(100, f"Seed image {display} imported; applying capability schema")
+            if client_edition:
+                log.info("registering seed image %s as %s / %s", image.id, os_meta.operating_system,
+                         os_meta.operating_system_version)
+                self.c.compute.update_image(image.id, M.UpdateImageDetails(
+                    operating_system=os_meta.operating_system,
+                    operating_system_version=os_meta.operating_system_version))
             self._apply_capability_schema(image.id, firmware, launch_options, display, tags, launch_mode,
                                           consistent_naming=not os_meta.is_windows)
             return image.id

@@ -19,7 +19,7 @@ Implemented in `helper/helper_app/oci/mapping.py`.
 | `windows2019srvNext_64Guest` | Windows | Server 2022 Standard |
 | `windows9Server64Guest` | Windows | Server 2016 Standard |
 | `windows8Server64Guest` | Windows | Server 2012 R2 Standard |
-| `windows9_64Guest` / `windows11_64Guest` (or "Microsoft Windows 10/11" in the display name) | Windows | `Windows10` / `Windows11` (OCI's catalog names; other spellings are rejected by `CreateImage`). Client editions must be BYOL: OCI provides no licenses for them. |
+| `windows9_64Guest` / `windows11_64Guest` (or "Microsoft Windows 10/11" in the display name) | Windows | `Windows10` / `Windows11`. `CreateImage` rejects these, so the seed is imported without OS metadata and then registered with `UpdateImage` (the same two-step procedure Oracle documents for Windows 10/11 imports). Client editions must be BYOL: OCI provides no licenses for them. |
 | other `windows*` | Windows | Server 2019 Standard |
 | anything else | Custom Linux | first number in `guestFullName` |
 

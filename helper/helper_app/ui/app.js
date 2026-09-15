@@ -48,7 +48,8 @@
   const el = (tag, attrs, ...children) => {
     const e = document.createElement(tag);
     for (const [k, v] of Object.entries(attrs || {})) {
-      if (k === "class") e.className = v; else if (k.startsWith("on")) e.addEventListener(k.slice(2), v); else if (v !== null && v !== undefined) e.setAttribute(k, v);
+      if (v === null || v === undefined) continue;
+      if (k === "class") e.className = v; else if (k.startsWith("on")) e.addEventListener(k.slice(2), v); else e.setAttribute(k, v);
     }
     for (const c of children) if (c !== null && c !== undefined) e.append(c.nodeType ? c : document.createTextNode(String(c)));
     return e;
@@ -571,17 +572,20 @@
     let jobs = [];
     try { jobs = await api("GET", "/jobs"); } catch (e) { if (e.status !== 401) showError(e.message); return; }
     app.innerHTML = "";
+    // fixed layout (see style.css): the message column takes what the others leave
+    const columns = [["VM", "15%"], ["Phase", "112px"], ["Message", null], ["OCI instance", "17%"], ["Started", "11%"], ["By", "13%", "by"], ["", "80px"]];
     const table = el("table", { class: "jobs" },
-      el("thead", {}, el("tr", {}, ...["VM", "Phase", "Message", "OCI instance", "Started", "By", ""].map((h) => el("th", {}, h)))),
+      el("colgroup", {}, ...columns.map(([, w, cls]) => el("col", { style: w ? `width:${w}` : null, class: cls || null }))),
+      el("thead", {}, el("tr", {}, ...columns.map(([h, , cls]) => el("th", { class: cls || null }, h)))),
       el("tbody", {}, ...jobs.map((j) => el("tr", {},
         el("td", { class: "name" }, j.vm.name), el("td", {}, el("span", { class: "phase " + j.phase }, j.phase)),
         el("td", {}, (j.message || "") + (j.phase === "EXPORTING" && j.transfer && j.transfer.started_at
           ? ` - ${j.transfer.percent || 0}%${j.transfer.throughput_bps ? ", " + fmtRate(j.transfer.throughput_bps) : ""}`
           : !TERMINAL.includes(j.phase) && j.step_percent !== null && j.step_percent !== undefined && !/\d+%/.test(j.message || "")
             ? ` - ${j.step_percent}%` : "")),
-        el("td", { class: "ocid" }, ocidLink("instances", j.instance_id)),
-        el("td", {}, new Date(j.created_at).toLocaleString()), el("td", {}, j.created_by || "-"),
-        el("td", {}, el("a", { class: "button secondary small", href: `#/jobs/${j.id}` }, "Details"))))));
+        el("td", { class: "ocid", title: j.instance_id || "" }, ocidLink("instances", j.instance_id)),
+        el("td", {}, new Date(j.created_at).toLocaleString()), el("td", { class: "by" }, j.created_by || "-"),
+        el("td", { class: "row-actions" }, el("a", { class: "button secondary small", href: `#/jobs/${j.id}` }, "Details"))))));
     app.append(el("div", { class: "card" }, el("h2", {}, "Migration jobs"),
       jobs.length ? table : el("div", { class: "muted" }, "No jobs yet. Pick a powered-off VM under Source VMs to start one.")));
     // refresh the table while jobs are active

@@ -83,8 +83,14 @@ ul { margin: 6px 0 0; padding-left: 18px; }
 .muted { color: var(--muted); }
 
 table.vms, table.jobs { width: 100%; border-collapse: collapse; }
-table.vms th, table.vms td, table.jobs th, table.jobs td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+table.vms th, table.vms td, table.jobs th, table.jobs td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; overflow-wrap: anywhere; }
 table.vms th, table.jobs th { color: var(--muted); font-weight: 600; white-space: nowrap; }
+/* jobs: fixed column widths so long messages / OCIDs wrap inside the card instead of widening the table */
+table.jobs { table-layout: fixed; }
+table.jobs td.ocid { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+table.jobs td.ocid a { display: inline; }
+table.jobs td.row-actions { text-align: right; }
+@media (max-width: 900px) { table.jobs col.by, table.jobs th.by, table.jobs td.by { display: none; } }
 table.vms tr:hover td { background: #f7f9fa; }
 td.name { font-weight: 600; }
 td.ocid { font-family: Consolas, monospace; font-size: 11px; word-break: break-all; }
@@ -96,7 +102,7 @@ td.ocid { font-family: Consolas, monospace; font-size: 11px; word-break: break-a
 .job-head { display: flex; gap: 10px; align-items: baseline; margin-bottom: 8px; }
 .transfer { font-size: 13px; margin: -4px 0 8px; font-variant-numeric: tabular-nums; }
 .transfer .bar { margin-top: 4px; }
-.phase { font-weight: 600; padding: 2px 8px; border-radius: 10px; background: #e3eef5; color: var(--primary); text-decoration: none; font-size: 12px; }
+.phase { font-weight: 600; padding: 2px 8px; border-radius: 10px; background: #e3eef5; color: var(--primary); text-decoration: none; font-size: 12px; white-space: nowrap; display: inline-block; }
 .phase.COMPLETED { background: #e3f5e6; color: var(--ok); }
 .phase.FAILED, .phase.CANCELLED { background: #fbe5e1; color: var(--danger); }
 .disk { margin: 4px 0; }

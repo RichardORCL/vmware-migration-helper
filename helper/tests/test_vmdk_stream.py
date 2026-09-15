@@ -5,6 +5,7 @@ import random
 import struct
 
 import pytest
+
 from helper_app.disk import vmdk_stream as vs
 from helper_app.disk.writer import BlockDeviceWriter
 

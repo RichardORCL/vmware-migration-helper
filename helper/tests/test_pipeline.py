@@ -4,6 +4,7 @@ import threading
 import time
 
 import pytest
+
 from helper_app.disk import vmdk_stream as vs
 from helper_app.disk.pipeline import PipelinedDecoder
 

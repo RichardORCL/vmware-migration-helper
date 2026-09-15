@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+
 from helper_app.config import Settings
 from helper_app.disk.vmdk_stream import encode_raw_bytes
 from helper_app.jobs.store import JobStore, utcnow

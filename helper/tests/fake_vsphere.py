@@ -5,10 +5,11 @@ from __future__ import annotations
 
 from types import SimpleNamespace as NS
 
+from pyVmomi import vim
+
 from helper_app.models import VmSummary
 from helper_app.vsphere.export import DiskUrl, ExportError
 from helper_app.vsphere.session import VCenterAuthError, VCenterError
-from pyVmomi import vim
 
 GIB = 1024**3
 

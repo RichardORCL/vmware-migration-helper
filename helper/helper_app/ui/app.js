@@ -346,7 +346,8 @@
       sel("compartment_id").append(el("option", { value: c.id }, c.path || c.name));
       sel("network_compartment_id").append(el("option", { value: c.id }, c.path || c.name));
     }
-    for (const ad of options.availability_domains) sel("availability_domain").append(el("option", { value: ad }, ad + (ad === options.helper_availability_domain ? " (helper)" : "")));
+    // not a choice: the helper writes the volumes itself and boot volumes are AD-local, so the target
+    // always lands in the helper's AD (the API enforces it as well)
     sel("availability_domain").value = options.helper_availability_domain;
     // VCN -> subnet: the subnet list is filtered by the selected VCN
     let netOptions = options;
@@ -469,7 +470,7 @@
       const fd = new FormData(form);
       const target = {
         compartment_id: fd.get("compartment_id"),
-        availability_domain: fd.get("availability_domain"),
+        availability_domain: options.helper_availability_domain,
         subnet_id: fd.get("subnet_id"),
         shape: fd.get("shape") || null,
         ocpus: fd.get("ocpus") ? Number(fd.get("ocpus")) : null,
@@ -485,9 +486,6 @@
         pipelined_decode: fd.get("pipelined_decode") === "on",
         volume_vpus_per_gb: Number(fd.get("volume_vpus_per_gb") || 10),
       };
-      if (target.availability_domain !== options.helper_availability_domain) {
-        formError.textContent = "The availability domain must match the helper VM's AD."; return;
-      }
       submit.disabled = true;
       try {
         const job = await api("POST", "/jobs", { vm_moid: moid, target });

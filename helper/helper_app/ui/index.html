@@ -100,8 +100,8 @@
             <small>Where the instance and its volumes are created.</small>
           </label>
           <label>Availability domain
-            <select name="availability_domain" required></select>
-            <small>Must match the helper VM's availability domain (boot volumes are AD-local).</small>
+            <input name="availability_domain" type="text" readonly tabindex="-1">
+            <small>Fixed to the helper VM's availability domain: the volumes are written by the helper and boot volumes are AD-local.</small>
           </label>
           <label>Network compartment
             <select name="network_compartment_id" required></select>

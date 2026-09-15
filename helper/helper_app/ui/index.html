@@ -151,7 +151,7 @@
             <legend>Windows licensing</legend>
             <label class="check"><input type="radio" name="windows_license_type" value="BRING_YOUR_OWN_LICENSE" checked> Bring your own license (BYOL)</label>
             <label class="check"><input type="radio" name="windows_license_type" value="OCI_PROVIDED"> OCI provided license</label>
-            <small id="windows-license-hint">The instance is registered as Windows in OCI; the license type can be changed later.</small>
+            <small id="windows-license-hint">The instance is registered as Windows in OCI; the license type can be changed later in the OCI console.</small>
           </fieldset>
 
           <details>
@@ -288,11 +288,6 @@
           <h3>Target instance</h3>
           <div class="kv" data-target></div>
           <div class="actions">
-            <select data-license hidden>
-              <option value="BRING_YOUR_OWN_LICENSE">BYOL</option>
-              <option value="OCI_PROVIDED">OCI provided</option>
-            </select>
-            <button class="secondary" data-license-btn hidden>Change license type</button>
             <a class="button secondary" data-console hidden title="Open the VNC console of the migrated instance in the browser (OCI instance console connection through the helper)">Remote console</a>
           </div>
         </section>

@@ -586,16 +586,6 @@ def test_cleanup_tears_down(env):
     assert job.disks[1].target_attachment_id is None and job.disks[1].helper_attachment_id is None
 
 
-def test_update_windows_license(env):
-    settings, fake, store, prov = env
-    job = make_job(make_vm(windows=True, disks=1), make_target(windows_license_type=WindowsLicenseType.BRING_YOUR_OWN_LICENSE))
-    store.put(job)
-    prov.prepare(job)
-    inst = prov.update_windows_license(job.instance_id, WindowsLicenseType.OCI_PROVIDED)
-    assert inst.licensing_configs[0].license_type == "OCI_PROVIDED"
-    assert fake.compute.updates[0][0] == job.instance_id
-
-
 def test_wait_for_timeout_and_failure_state(env):
     settings, fake, store, prov = env
     clients = fake.clients()

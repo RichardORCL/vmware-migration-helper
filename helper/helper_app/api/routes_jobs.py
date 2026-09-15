@@ -1,4 +1,4 @@
-"""Migration jobs: create, list, monitor, cancel, change Windows licensing."""
+"""Migration jobs: create, list, monitor, cancel, resume finalize."""
 
 from __future__ import annotations
 
@@ -19,7 +19,6 @@ from helper_app.models import (
     InstanceStatus,
     Job,
     JobPhase,
-    LicenseUpdateRequest,
     WindowsLicenseType,
 )
 from helper_app.oci.clients import describe_error
@@ -163,25 +162,3 @@ def resume_finalize(job_id: str, request: Request):
     st.store.put(job)
     st.runner.resume_finalize(job.id)
     return job
-
-
-@router.post("/{job_id}/licensing")
-async def update_license(job_id: str, body: LicenseUpdateRequest, request: Request):
-    st = request.app.state
-    job = _get_job(request, job_id)
-    if not job.instance_id:
-        raise HTTPException(status.HTTP_409_CONFLICT, "no OCI instance associated with this job yet")
-    if not job.vm.is_windows:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "license type applies to Windows instances only")
-    try:
-        inst = await asyncio.to_thread(st.provisioner.update_windows_license, job.instance_id, body.license_type)
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"UpdateInstance failed: {exc}")
-    job.target.windows_license_type = body.license_type
-    job.message = f"Windows license type set to {body.license_type.value}"
-    st.store.put(job)
-    configs = [
-        {"type": getattr(c, "type", None), "license_type": getattr(c, "license_type", None)}
-        for c in (getattr(inst, "licensing_configs", None) or [])
-    ]
-    return {"instance_id": job.instance_id, "licensing_configs": configs}

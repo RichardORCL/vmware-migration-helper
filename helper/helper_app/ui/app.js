@@ -212,6 +212,8 @@
       ["Guest OS", `${job.vm.guest_full_name || job.vm.guest_id}${job.target.operating_system_version ? ` - release ${job.target.operating_system_version} (selected)` : ""}`],
       ["Shape", `${job.target.shape || "(helper default)"}${job.target.ocpus || job.target.memory_gb ? ` - ${job.target.ocpus ?? "auto"} OCPU / ${job.target.memory_gb ?? "auto"} GB (custom)` : " - sized from the source VM"}`],
       ["Launch options", job.launch_options ? `${job.launch_options.firmware}${job.launch_options.secure_boot ? " + Secure Boot (shielded instance, with Measured Boot + vTPM on VM shapes)" : ""}, boot ${job.launch_options.boot_volume_type}, nic ${job.launch_options.network_type}` : "-"],
+      ...(job.target.windows_license_type ? [["Windows license", job.target.windows_license_type === "OCI_PROVIDED"
+        ? "OCI provided (change it in the OCI console if needed)" : "Bring your own license (change it in the OCI console if needed)"]] : []),
       ["Seed image", job.seed_image_id || "-"],
     ]);
     // right panel: the migration job itself
@@ -274,18 +276,6 @@
     const consoleBtn = root.querySelector("[data-console]");
     consoleBtn.hidden = !hasConsole(job);
     consoleBtn.href = `#/jobs/${job.id}/console`;
-    const licSel = root.querySelector("[data-license]"); const licBtn = root.querySelector("[data-license-btn]");
-    const showLic = isWindows(job.vm) && job.instance_id && (job.phase === "COMPLETED" || job.phase === "FINALIZING");
-    licSel.hidden = licBtn.hidden = !showLic;
-    if (showLic) {
-      if (job.target.windows_license_type && !licSel.dataset.touched) licSel.value = job.target.windows_license_type;
-      licSel.onchange = () => { licSel.dataset.touched = "1"; };
-      licBtn.onclick = async () => {
-        licBtn.disabled = true;
-        try { await api("POST", `/jobs/${job.id}/licensing`, { license_type: licSel.value }); alert("License type updated."); }
-        catch (e) { alert(e.message); } finally { licBtn.disabled = false; }
-      };
-    }
     if (opts.onTerminal && terminal) opts.onTerminal(job);
     return job.phase === "COMPLETED" || job.phase === "CANCELLED";
   }

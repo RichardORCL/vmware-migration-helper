@@ -558,7 +558,7 @@ def test_resume_finalize_after_attach_failure(env):
     assert c.post(f"/api/jobs/{job['id']}/finalize").status_code == 409  # nothing left to resume
 
 
-def test_windows_requires_license_and_license_update(env):
+def test_windows_requires_license(env):
     c = env.client
     login(c)
     r = c.post("/api/jobs", json={"vm_moid": "vm-202", "target": target()})
@@ -574,10 +574,7 @@ def test_windows_requires_license_and_license_update(env):
     assert (lo["firmware"], lo["boot_volume_type"], lo["network_type"]) == ("BIOS", "PARAVIRTUALIZED", "PARAVIRTUALIZED")
     ld = [d for d in env.fake.compute.launch_details if d.display_name == "win-01"][0]
     assert ld.licensing_configs[0].license_type == "BRING_YOUR_OWN_LICENSE"
-    r = c.post(f"/api/jobs/{job['id']}/licensing", json={"license_type": "OCI_PROVIDED"})
-    assert r.status_code == 200, r.text
-    assert r.json()["licensing_configs"][0]["license_type"] == "OCI_PROVIDED"
-    assert c.get(f"/api/jobs/{job['id']}").json()["target"]["windows_license_type"] == "OCI_PROVIDED"
+    assert c.get(f"/api/jobs/{job['id']}").json()["target"]["windows_license_type"] == "BRING_YOUR_OWN_LICENSE"
     assert env.fake.compute.instances[job["instance_id"]].lifecycle_state == "STOPPED"
 
 
@@ -735,10 +732,6 @@ def test_create_job_validation(env):
     assert r.status_code == 400 and "availability domain" in r.text
     assert c.post("/api/jobs", json={"vm_moid": "vm-nope", "target": target()}).status_code == 404
     assert c.get("/api/jobs/nope").status_code == 404
-    # license change needs a Windows job with an instance
-    r = c.post("/api/jobs", json={"vm_moid": "vm-101", "target": target()})
-    job = wait_phase(c, r.json()["id"], "COMPLETED", "FAILED")
-    assert c.post(f"/api/jobs/{job['id']}/licensing", json={"license_type": "OCI_PROVIDED"}).status_code == 400
 
 
 def test_cancel_during_copy_cleans_up(tmp_path, fast_retries):

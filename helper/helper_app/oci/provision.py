@@ -489,15 +489,6 @@ class Provisioner:
         self.save(job)
         return actions
 
-    # ---------------------------------------------------------------- licensing
-    def update_windows_license(self, instance_id: str, license_type: WindowsLicenseType) -> Any:
-        import oci.core.models as M
-
-        details = M.UpdateInstanceDetails(
-            licensing_configs=[M.UpdateInstanceWindowsLicensingConfig(type="WINDOWS", license_type=license_type.value)]
-        )
-        return self.c.compute.update_instance(instance_id, details).data
-
 
 TAG_VALUE_MAX = 256  # OCI freeform tag values are limited to 256 characters (keys to 100)
 

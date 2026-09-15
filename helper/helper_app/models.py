@@ -307,10 +307,6 @@ class CreateJobRequest(BaseModel):
     target: OciTarget
 
 
-class LicenseUpdateRequest(BaseModel):
-    license_type: WindowsLicenseType
-
-
 class InstanceStatus(BaseModel):
     """Live state of the job's target instance as OCI reports it (GET /api/jobs/{id}/instance)."""
 

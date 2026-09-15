@@ -10,6 +10,7 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass
+from typing import Optional
 
 from helper_app.models import BootVolumeType, Firmware, LaunchOptionsSpec, NetworkType, OciTarget, VmSpec
 
@@ -131,13 +132,38 @@ def map_launch_options(vm: VmSpec, target: OciTarget) -> LaunchOptionsSpec:
         boot_type = target.boot_volume_type_override
     if target.network_type_override:
         net_type = target.network_type_override
+    firmware = oci_firmware(vm.firmware)
     return LaunchOptionsSpec(
-        firmware=oci_firmware(vm.firmware),
+        firmware=firmware,
         boot_volume_type=boot_type,
         network_type=net_type,
         remote_data_volume_type="PARAVIRTUALIZED",
         is_consistent_volume_naming_enabled=True,
+        # Secure Boot only exists with UEFI; vSphere reports the flag on EFI VMs only, but stay defensive
+        secure_boot=bool(vm.secure_boot) and firmware == OCI_FIRMWARE_UEFI,
     )
+
+
+# OCI "platform config" type per shape family; Secure Boot (shielded instances) is switched on there.
+PLATFORM_AMD_VM = "AMD_VM"
+PLATFORM_INTEL_VM = "INTEL_VM"
+PLATFORM_GENERIC_BM = "GENERIC_BM"
+
+
+def platform_config_type(shape: str) -> Optional[str]:
+    """Which ``LaunchInstancePlatformConfig`` subtype a shape takes, or None when the shape family has no
+    platform config with Secure Boot (Ampere A1/A2 and other ARM shapes)."""
+    s = (shape or "").upper()
+    if s.startswith("BM."):
+        return PLATFORM_GENERIC_BM
+    if not s.startswith("VM."):
+        return None
+    family = s[3:]  # e.g. STANDARD.E5.FLEX, STANDARD3.FLEX, STANDARD.A1.FLEX, DENSEIO2.8
+    if re.search(r"\.A\d", family):
+        return None  # Ampere (ARM)
+    if re.search(r"\.E\d", family):
+        return PLATFORM_AMD_VM  # E2..E6 AMD EPYC
+    return PLATFORM_INTEL_VM  # Standard2/3, Optimized3, DenseIO2, GPU shapes: Intel
 
 
 @dataclass(frozen=True)
@@ -166,9 +192,17 @@ def volume_size_gb(capacity_bytes: int, min_volume_gb: int = 50) -> int:
     return max(min_volume_gb, math.ceil(capacity_bytes / 1024**3))
 
 
-def seed_image_tags(os_meta: OsMetadata, firmware: str) -> dict[str, str]:
+SEED_SECURE_BOOT_TAG = "vc-oci-secure-boot"
+# tags older seed images may lack, with the value they implicitly had (so they keep being reused)
+SEED_TAG_DEFAULTS = {SEED_SECURE_BOOT_TAG: "false"}
+
+
+def seed_image_tags(os_meta: OsMetadata, firmware: str, secure_boot: bool = False) -> dict[str, str]:
+    """Identity of a seed image.  Secure Boot is part of it: the image's capability schema must declare
+    ``Compute.SecureBoot`` for OCI to accept a shielded launch from it."""
     return {
         "vc-oci-seed": "true",
         "vc-oci-firmware": firmware,
         "vc-oci-os": os_meta.slug,
+        SEED_SECURE_BOOT_TAG: "true" if secure_boot else "false",
     }

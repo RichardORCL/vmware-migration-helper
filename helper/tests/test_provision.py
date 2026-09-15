@@ -21,7 +21,7 @@ from .fake_oci import FakeOci, service_error
 GIB = 1024**3
 
 
-def make_vm(windows=False, firmware=Firmware.EFI, disks=2) -> VmSpec:
+def make_vm(windows=False, firmware=Firmware.EFI, disks=2, secure_boot=False) -> VmSpec:
     return VmSpec(
         moid="vm-42",
         name="app-server-01",
@@ -30,6 +30,7 @@ def make_vm(windows=False, firmware=Firmware.EFI, disks=2) -> VmSpec:
         guest_id="windows2019srvNext_64Guest" if windows else "oracleLinux8_64Guest",
         guest_full_name="Microsoft Windows Server 2022 (64-bit)" if windows else "Oracle Linux 8 (64-bit)",
         firmware=firmware,
+        secure_boot=secure_boot,
         disks=[
             DiskSpec(index=i, label=f"Hard disk {i + 1}", device_key=2000 + i, capacity_bytes=(40 + 60 * i) * GIB,
                      controller_type="pvscsi")
@@ -104,6 +105,8 @@ def test_prepare_linux_two_disks(env):
     assert ld.shape_config.ocpus == 2 and ld.shape_config.memory_in_gbs == 16
     assert ld.licensing_configs is None
     assert ld.create_vnic_details.hostname_label == "app-server-01"
+    assert getattr(ld, "platform_config", None) is None  # no Secure Boot on the source -> plain launch
+    assert schema["Compute.SecureBoot"].default_value is False
 
     # stopped, boot volume detached from the target and attached to the helper
     assert (job.instance_id, "STOP") in fake.compute.actions
@@ -174,6 +177,74 @@ def test_prepare_rejects_other_ad(env):
     store.put(job)
     with pytest.raises(OciError, match="availability domain"):
         prov.prepare(job)
+
+
+def test_secure_boot_source_launches_shielded_instance(env):
+    """A source with UEFI Secure Boot gets its own seed image (schema declares Compute.SecureBoot) and is
+    launched with a platform config that enables Secure Boot, matching the shape's CPU family."""
+    import oci.core.models as M
+
+    settings, fake, store, prov = env
+    job = make_job(make_vm(secure_boot=True), make_target())
+    store.put(job)
+    prov.prepare(job)
+
+    assert job.launch_options.secure_boot is True
+    img = fake.compute.images[job.seed_image_id]
+    assert img.freeform_tags["vc-oci-secure-boot"] == "true" and img.display_name.endswith("-secureboot")
+    assert fake.compute.capability_schemas[-1].schema_data["Compute.SecureBoot"].default_value is True
+    ld = fake.compute.launch_details[-1]
+    assert isinstance(ld.platform_config, M.AmdVmLaunchInstancePlatformConfig)  # VM.Standard.E5.Flex default
+    assert ld.platform_config.is_secure_boot_enabled is True
+    assert ld.launch_options.firmware == "UEFI_64"
+
+    # Intel shape family -> Intel platform config
+    job2 = make_job(make_vm(secure_boot=True), make_target(shape="VM.Standard3.Flex"))
+    job2.id = "job0002"
+    store.put(job2)
+    prov.prepare(job2)
+    ld2 = fake.compute.launch_details[-1]
+    assert isinstance(ld2.platform_config, M.IntelVmLaunchInstancePlatformConfig)
+    assert job2.seed_image_id == job.seed_image_id  # the secure-boot seed is reused
+
+    # a VM without Secure Boot must not pick up the secure-boot seed, and vice versa
+    job3 = make_job(make_vm(), make_target())
+    job3.id = "job0003"
+    store.put(job3)
+    prov.prepare(job3)
+    assert job3.seed_image_id != job.seed_image_id
+    assert getattr(fake.compute.launch_details[-1], "platform_config", None) is None
+
+
+def test_secure_boot_refuses_shapes_without_platform_config_before_creating_anything(env):
+    settings, fake, store, prov = env
+    job = make_job(make_vm(secure_boot=True), make_target(shape="VM.Standard.A1.Flex"))
+    store.put(job)
+    with pytest.raises(OciError, match="Secure Boot.*VM.Standard.A1.Flex"):
+        prov.prepare(job)
+    assert not fake.compute.images and not fake.compute.launch_details  # nothing was created
+
+
+def test_seed_images_without_the_secure_boot_tag_are_still_reused(env):
+    """Seeds created before the Secure Boot dimension existed lack the tag; they count as 'false'."""
+    settings, fake, store, prov = env
+    job = make_job(make_vm(), make_target())
+    store.put(job)
+    prov.prepare(job)
+    img = fake.compute.images[job.seed_image_id]
+    del img.freeform_tags["vc-oci-secure-boot"]
+
+    job2 = make_job(make_vm(), make_target())
+    job2.id = "job0002"
+    store.put(job2)
+    prov.prepare(job2)
+    assert job2.seed_image_id == job.seed_image_id
+
+    job3 = make_job(make_vm(secure_boot=True), make_target())
+    job3.id = "job0003"
+    store.put(job3)
+    prov.prepare(job3)
+    assert job3.seed_image_id != job.seed_image_id  # an untagged seed never serves a Secure Boot job
 
 
 def test_seed_import_progress_is_tracked_from_the_work_request(env):

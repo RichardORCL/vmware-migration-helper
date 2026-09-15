@@ -106,11 +106,16 @@ file. Memory use is a few MB per running disk; the OCI volumes are the only stor
 
 OCI takes an instance's firmware and device model from its image. Platform images do not expose
 those knobs, so the helper imports a placeholder VMDK as a custom image per
-(firmware, OS) combination (imported as PARAVIRTUALIZED or EMULATED; `CUSTOM` cannot be requested
-through the import API), applies a `ComputeImageCapabilitySchema` that fixes `Compute.Firmware` and
-allows every `Storage.BootVolumeType` / `Network.AttachmentType`, and launches from it with the
-job's explicit `launchOptions`. The seed's boot volume is replaced by the copied disk before the instance
-ever boots. Seed images are tagged `vc-oci-seed=true` and can be removed with
+(firmware, OS, Secure Boot) combination (imported as PARAVIRTUALIZED or EMULATED; `CUSTOM` cannot be
+requested through the import API), applies a `ComputeImageCapabilitySchema` that fixes
+`Compute.Firmware`, sets `Compute.SecureBoot` to whether the source used Secure Boot, and allows every
+`Storage.BootVolumeType` / `Network.AttachmentType`, and launches from it with the job's explicit
+`launchOptions`. A source with `efiSecureBootEnabled` is launched with a `platformConfig`
+(`AMD_VM`, `INTEL_VM` or `GENERIC_BM` depending on the shape family) that has `isSecureBootEnabled`,
+i.e. as a shielded instance; shapes without such a platform config (Ampere) are refused before any
+resource is created. The seed's boot volume is replaced by the copied disk before the instance ever
+boots. Seed images are tagged `vc-oci-seed=true` (plus `vc-oci-firmware`, `vc-oci-os`,
+`vc-oci-secure-boot`; seeds from before the Secure Boot tag count as `false`) and can be removed with
 `DELETE /api/seed-images`.
 
 ## Windows licensing

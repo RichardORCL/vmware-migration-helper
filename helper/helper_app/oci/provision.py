@@ -18,10 +18,14 @@ from helper_app.disk.devices import DeviceScanner, scan_block_devices, wait_for_
 from helper_app.models import DiskState, DiskStatus, Job, JobPhase, WindowsLicenseType
 from helper_app.oci.clients import OciClients, OciError
 from helper_app.oci.mapping import (
+    PLATFORM_AMD_VM,
+    PLATFORM_GENERIC_BM,
+    PLATFORM_INTEL_VM,
     map_guest_os,
     map_launch_options,
     map_shape,
     oci_firmware,
+    platform_config_type,
     volume_size_gb,
 )
 from helper_app.oci.seed_image import SeedImageService
@@ -121,6 +125,9 @@ class Provisioner:
         launch_options = map_launch_options(vm, target)
         shape = map_shape(vm, target, self.s.default_shape, self.s.max_memory_gb_per_ocpu)
         job.launch_options = launch_options
+        # Secure Boot on the source -> shielded instance; decided up front so an unsuitable shape fails
+        # before any OCI resource exists
+        platform_config = _secure_boot_platform_config(shape.shape) if launch_options.secure_boot else None
         if not job.disks:
             job.disks = [
                 DiskState(index=d.index, label=d.label, capacity_bytes=d.capacity_bytes, is_boot=(d.index == 0))
@@ -145,7 +152,8 @@ class Provisioner:
         if not job.instance_id:
             display = target.display_name or vm.name
             step("launch_instance", f"Launching {display} ({shape.shape}, {shape.ocpus:g} OCPU, "
-                                               f"{shape.memory_gb:g} GB, firmware {firmware})")
+                                               f"{shape.memory_gb:g} GB, firmware {firmware}"
+                                               f"{', Secure Boot' if platform_config else ''})")
             details = M.LaunchInstanceDetails(
                 availability_domain=target.availability_domain,
                 compartment_id=target.compartment_id,
@@ -178,6 +186,8 @@ class Provisioner:
                 },
                 metadata={},
             )
+            if platform_config is not None:
+                details.platform_config = platform_config
             if vm.is_windows or os_meta.is_windows:
                 lic = target.windows_license_type or WindowsLicenseType.BRING_YOUR_OWN_LICENSE
                 details.licensing_configs = [
@@ -406,6 +416,24 @@ class Provisioner:
             licensing_configs=[M.UpdateInstanceWindowsLicensingConfig(type="WINDOWS", license_type=license_type.value)]
         )
         return self.c.compute.update_instance(instance_id, details).data
+
+
+def _secure_boot_platform_config(shape: str):
+    """``platform_config`` that turns Secure Boot on for the given shape (OCI calls this a shielded
+    instance).  Measured boot and the vTPM are left off: the source VM only told us about Secure Boot."""
+    import oci.core.models as M
+
+    kind = platform_config_type(shape)
+    if kind == PLATFORM_AMD_VM:
+        return M.AmdVmLaunchInstancePlatformConfig(is_secure_boot_enabled=True)
+    if kind == PLATFORM_INTEL_VM:
+        return M.IntelVmLaunchInstancePlatformConfig(is_secure_boot_enabled=True)
+    if kind == PLATFORM_GENERIC_BM:
+        return M.GenericBmLaunchInstancePlatformConfig(is_secure_boot_enabled=True)
+    raise OciError(
+        f"the source VM boots with UEFI Secure Boot, but shape {shape} cannot launch a shielded instance; "
+        "choose an x86 shape (e.g. VM.Standard.E4/E5.Flex, VM.Standard3.Flex, VM.Optimized3.Flex)"
+    )
 
 
 def _hostname_label(name: str) -> str | None:

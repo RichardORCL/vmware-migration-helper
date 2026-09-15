@@ -89,7 +89,8 @@ def collect(job: Job, settings: Settings, ident: HelperIdentity, commit: str,
         f"subnet={job.target.subnet_id} shape={job.target.shape or '(default)'} "
         f"public_ip={job.target.assign_public_ip} license={job.target.windows_license_type} "
         f"volume_vpus_per_gb={job.target.volume_vpus_per_gb}",
-        f"  launch options: {lo.firmware} boot={lo.boot_volume_type.value} nic={lo.network_type.value}" if lo
+        f"  launch options: {lo.firmware} boot={lo.boot_volume_type.value} nic={lo.network_type.value} "
+        f"secure_boot={lo.secure_boot}" if lo
         else "  launch options: -",
         f"  instance={job.instance_id or '-'} seed_image={job.seed_image_id or '-'} "
         f"boot_volume={job.boot_volume_id or '-'}",

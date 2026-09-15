@@ -67,11 +67,20 @@ class FakeCompute:
         check_tags(details, "launch_instance")
         check_volume_size(getattr(details.source_details, "boot_volume_size_in_gbs", None), "launch_instance")
         self.launch_details.append(details)
+        pc = getattr(details, "platform_config", None)
+        if pc is not None and getattr(pc, "is_secure_boot_enabled", False):
+            # OCI: shielded launches need UEFI and an image whose capability schema declares Secure Boot
+            if details.launch_options.firmware != "UEFI_64":
+                raise service_error(400, "InvalidParameter", "Secure Boot requires UEFI_64 firmware", "launch_instance")
+            schemas = [s for s in self.capability_schemas if s.image_id == details.source_details.image_id]
+            if not schemas or not schemas[-1].schema_data["Compute.SecureBoot"].default_value:
+                raise service_error(400, "InvalidParameter",
+                                    "The image does not support Secure Boot (Compute.SecureBoot)", "launch_instance")
         iid = oid("instance")
         inst = NS(id=iid, display_name=details.display_name, lifecycle_state="PROVISIONING",
                   availability_domain=details.availability_domain, compartment_id=details.compartment_id,
                   launch_options=details.launch_options, licensing_configs=details.licensing_configs,
-                  shape=details.shape, shape_config=details.shape_config)
+                  shape=details.shape, shape_config=details.shape_config, platform_config=pc)
         self.instances[iid] = inst
         vnic = details.create_vnic_details
         label = getattr(vnic, "hostname_label", None)

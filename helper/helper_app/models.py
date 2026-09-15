@@ -156,6 +156,7 @@ class LaunchOptionsSpec(BaseModel):
     network_type: NetworkType = NetworkType.PARAVIRTUALIZED
     remote_data_volume_type: str = "PARAVIRTUALIZED"
     is_consistent_volume_naming_enabled: bool = True
+    secure_boot: bool = False  # source had UEFI Secure Boot -> launch as a shielded instance with Secure Boot
 
 
 # --------------------------------------------------------------------------- #

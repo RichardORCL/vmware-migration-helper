@@ -159,7 +159,8 @@ def warnings(spec: VmSpec) -> list[str]:
     if spec.has_snapshots:
         notes.append("VM has snapshots; the export contains the current (consolidated) disk state")
     if spec.secure_boot:
-        notes.append("UEFI Secure Boot is enabled on the source; it is not re-enabled on the OCI instance")
+        notes.append("UEFI Secure Boot is enabled on the source; the OCI instance is launched as a shielded "
+                     "instance with Secure Boot (x86 shape required, the guest's boot loader must be signed)")
     if spec.num_cpu % 2:
         notes.append(f"{spec.num_cpu} vCPUs round up to {(spec.num_cpu + 1) // 2} OCPUs")
     for disk in spec.disks:

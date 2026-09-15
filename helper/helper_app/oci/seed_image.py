@@ -20,7 +20,7 @@ from helper_app.config import Settings
 from helper_app.disk.vmdk_stream import encode_empty_disk
 from helper_app.models import LaunchOptionsSpec
 from helper_app.oci.clients import OciClients, OciError, describe_error
-from helper_app.oci.mapping import OsMetadata, seed_image_tags
+from helper_app.oci.mapping import SEED_TAG_DEFAULTS, OsMetadata, seed_image_tags
 
 log = logging.getLogger(__name__)
 
@@ -52,7 +52,7 @@ class SeedImageService:
     # ------------------------------------------------------------------ public
     def get_or_create(self, os_meta: OsMetadata, firmware: str, launch_options: LaunchOptionsSpec,
                       on_progress: Optional[ProgressCallback] = None) -> str:
-        tags = seed_image_tags(os_meta, firmware)
+        tags = seed_image_tags(os_meta, firmware, launch_options.secure_boot)
         existing = self.find(tags)
         if existing is not None:
             log.info("reusing seed image %s (%s)", existing.id, existing.display_name)
@@ -69,7 +69,7 @@ class SeedImageService:
         ).data
         for img in images:
             ft = img.freeform_tags or {}
-            if all(ft.get(k) == v for k, v in tags.items()):
+            if all(ft.get(k, SEED_TAG_DEFAULTS.get(k)) == v for k, v in tags.items()):
                 return img
         return None
 
@@ -84,6 +84,8 @@ class SeedImageService:
         self._ensure_bucket(namespace, CreateBucketDetails)
 
         display = f"vc-oci-seed-{firmware.lower()}-{os_meta.slug}"
+        if launch_options.secure_boot:
+            display += "-secureboot"
         object_name = f"{display}-{uuid.uuid4().hex[:8]}.vmdk"
         payload = encode_empty_disk(self.s.seed_disk_size_gb * 1024**3)
         log.info("uploading %d byte placeholder VMDK to %s/%s", len(payload), self.s.seed_bucket, object_name)
@@ -251,7 +253,8 @@ class SeedImageService:
             "Storage.RemoteDataVolumeType": enum(["PARAVIRTUALIZED", "ISCSI"], "PARAVIRTUALIZED"),
             "Network.AttachmentType": enum(["PARAVIRTUALIZED", "E1000", "VFIO"], lo.network_type.value),
             "Storage.ConsistentVolumeNaming": boolean(True),
-            "Compute.SecureBoot": boolean(False),
+            # a shielded (Secure Boot) launch is only accepted from an image whose schema declares support
+            "Compute.SecureBoot": boolean(lo.secure_boot),
         }
         details = M.CreateComputeImageCapabilitySchemaDetails(
             compartment_id=self.seed_compartment,
@@ -262,4 +265,4 @@ class SeedImageService:
             schema_data=schema_data,
         )
         self.c.compute.create_compute_image_capability_schema(details)
-        log.info("capability schema applied to %s: firmware=%s", image_id, firmware)
+        log.info("capability schema applied to %s: firmware=%s secure_boot=%s", image_id, firmware, lo.secure_boot)

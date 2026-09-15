@@ -122,4 +122,18 @@ def test_volume_size_gb():
 
 def test_seed_tags():
     tags = m.seed_image_tags(m.map_guest_os("windows2019srvNext_64Guest"), "UEFI_64")
-    assert tags == {"vc-oci-seed": "true", "vc-oci-firmware": "UEFI_64", "vc-oci-os": "windows-server-2022-standard"}
+    assert tags == {"vc-oci-seed": "true", "vc-oci-firmware": "UEFI_64", "vc-oci-os": "windows-server-2022-standard",
+                    "vc-oci-secure-boot": "false"}
+    assert m.seed_image_tags(m.map_guest_os("ubuntu64Guest"), "UEFI_64", secure_boot=True)["vc-oci-secure-boot"] == "true"
+
+
+def test_platform_config_type_by_shape_family():
+    assert m.platform_config_type("VM.Standard.E5.Flex") == m.PLATFORM_AMD_VM
+    assert m.platform_config_type("VM.DenseIO.E4.Flex") == m.PLATFORM_AMD_VM
+    assert m.platform_config_type("VM.Standard3.Flex") == m.PLATFORM_INTEL_VM
+    assert m.platform_config_type("VM.Optimized3.Flex") == m.PLATFORM_INTEL_VM
+    assert m.platform_config_type("VM.Standard2.4") == m.PLATFORM_INTEL_VM
+    assert m.platform_config_type("BM.Standard.E4.128") == m.PLATFORM_GENERIC_BM
+    assert m.platform_config_type("VM.Standard.A1.Flex") is None  # Ampere: no Secure Boot
+    assert m.platform_config_type("VM.Standard.A2.Flex") is None
+    assert m.platform_config_type("") is None

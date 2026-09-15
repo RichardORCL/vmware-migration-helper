@@ -1,6 +1,7 @@
 """Migration orchestration: one thread per job runs the whole pipeline.
 
-    provision OCI target (Provisioner.prepare) -> open NFC lease on the user's vCenter session
+    provision OCI target (Provisioner.prepare) -> shut down the source if it is still powered on
+    (confirmed by the user) -> open NFC lease on the user's vCenter session
     -> for each disk: GET stream-optimized VMDK, decode grains onto the attached OCI volume
        (retried from the beginning on failure) -> finalize (Provisioner.finalize)
 """
@@ -28,6 +29,7 @@ from helper_app.runtime_settings import MAX_CONCURRENT_JOBS
 from helper_app.sessions import UserSession
 from helper_app.vsphere.export import ExportError, NfcExport, match_disk_urls
 from helper_app.vsphere.inventory import esxi_host_name
+from helper_app.vsphere.power import shut_down
 
 log = logging.getLogger(__name__)
 
@@ -250,12 +252,24 @@ class MigrationRunner:
         self.prov.prepare(job, check_cancel=lambda: self._check_cancel(job))
         self._check_cancel(job)
 
-        # 2. export
+        # 2. export - first make sure the source is powered off (shutting it down here, after the OCI side
+        #    is ready, keeps the downtime of a running VM as short as possible)
         self._save(job, JobPhase.EXPORTING, "Checking the source VM")
         vm = session.vc.vm(job.vm.moid)
         power = str(vm.runtime.powerState)
         if power != "poweredOff":
-            raise ExportError(f"VM is {power}; it must stay powered off during the export")
+            if not job.power_off_source:
+                raise ExportError(f"VM is {power}; it must stay powered off during the export")
+            job.step = "power_off"
+            job.power_off_result = shut_down(
+                vm, job.vm.name, timeout_s=self.s.guest_shutdown_timeout_s,
+                notify=lambda msg: self._save(job, message=msg), check_cancel=lambda: self._check_cancel(job),
+            )
+            job.vm.power_state = "poweredOff"
+            self._save(job, message={"guest_shutdown": f"{job.vm.name} shut down cleanly through VMware Tools",
+                                     "powered_off": f"{job.vm.name} powered off"}.get(job.power_off_result, ""))
+        elif job.power_off_source:
+            job.power_off_result = "already_off"  # someone shut it down in the meantime
         nfc_host = self._resolve_nfc_host(job, vm, session)
         job.nfc_host = nfc_host
         self._save(job, message=f"Opening NFC export lease (disk download via {nfc_host})")

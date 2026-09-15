@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     lease_progress_interval_s: int = 60
     lease_ready_timeout_s: int = 300
     disk_retry_attempts: int = 3
+    # Powered-on source VMs are shut down right before the export: guest OS shutdown through VMware Tools,
+    # hard power-off when Tools is not running or the guest has not stopped after this many seconds
+    guest_shutdown_timeout_s: int = 300
 
     # Logging (both adjustable from the Setup page; changes persist in runtime_settings_path)
     log_level: str = "INFO"

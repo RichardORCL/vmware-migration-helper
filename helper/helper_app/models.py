@@ -106,6 +106,9 @@ class VmInspection(BaseModel):
     problems: list[str]
     warnings: list[str]
     os: Optional[GuestOsMapping] = None
+    needs_power_off: bool = Field(default=False, description="VM is powered on: the migration shuts it down "
+                                                             "before the export and must be confirmed")
+    tools_running: bool = Field(default=False, description="VMware Tools is running (graceful shutdown possible)")
 
 
 # --------------------------------------------------------------------------- #
@@ -265,6 +268,8 @@ class Job(BaseModel):
     vm: VmSpec
     vcenter_host: str = ""  # vCenter the VM was inspected on ("host" or "host:port"); tagged onto the instance
     target: OciTarget
+    power_off_source: bool = False  # VM was powered on when the job was created; shut it down before the export
+    power_off_result: Optional[str] = None  # already_off | guest_shutdown | powered_off (hard)
     launch_options: Optional[LaunchOptionsSpec] = None
     seed_image_id: Optional[str] = None
     instance_id: Optional[str] = None
@@ -307,6 +312,11 @@ class JobSummary(BaseModel):
 class CreateJobRequest(BaseModel):
     vm_moid: str
     target: OciTarget
+    power_off_source: bool = Field(
+        default=False,
+        description="Required for a powered-on VM: the user confirmed that the helper shuts it down right "
+                    "before the disk export (guest shutdown via VMware Tools, hard power-off as fallback)",
+    )
 
 
 class InstanceStatus(BaseModel):

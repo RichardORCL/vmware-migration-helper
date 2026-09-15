@@ -219,6 +219,10 @@
     // right panel: the migration job itself
     const rows = [
       ["Step", job.step || "-"],
+      ...(job.power_off_source ? [["Source power-off", { already_off: "was already powered off when the export started",
+        guest_shutdown: "shut down cleanly through VMware Tools before the export",
+        powered_off: "powered off hard before the export (VMware Tools not running or guest did not stop in time)" }[job.power_off_result]
+        || "the VM was powered on when the job was created; it is shut down right before the export"]] : []),
       ["Disk download", job.nfc_host ? `${job.nfc_host}${job.target.nfc_direct_to_esxi ? " (ESXi host, direct)" : ""}${job.target.pipelined_decode ? ", pipelined decode/write" : ""}` : "-"],
       ["Started by", `${job.created_by || "-"} at ${new Date(job.created_at).toLocaleString()}`],
     ];
@@ -384,6 +388,7 @@
       for (const vm of visible) {
         const job = state.jobsByVm[vm.moid];
         const off = vm.power_state === "poweredOff";
+        const on = vm.power_state === "poweredOn";  // migratable: the helper shuts it down before the export
         const active = job && !TERMINAL.includes(job.phase);
         rows.append(el("tr", {},
           el("td", { class: "name" }, vm.name),
@@ -395,7 +400,8 @@
           el("td", {}, job ? el("a", { href: `#/jobs/${job.id}`, class: "phase " + job.phase }, job.phase) : el("span", { class: "muted" }, "-")),
           el("td", {}, active
             ? el("a", { href: `#/jobs/${job.id}`, class: "button secondary small" }, "View job")
-            : el("a", { href: `#/export/${vm.moid}`, class: "button primary small" + (off ? "" : " disabled"), title: off ? "" : "Power off the VM first" }, "Migrate"))));
+            : el("a", { href: `#/export/${vm.moid}`, class: "button primary small" + (off || on ? "" : " disabled"),
+              title: off ? "" : on ? "The VM is powered on: it will be shut down just before the disk export" : "Resume and shut down, or power off the VM first" }, "Migrate"))));
       }
       if (!visible.length) rows.append(el("tr", {}, el("td", { colspan: 8, class: "muted" }, vms.length ? "No virtual machines match the filters." : "No virtual machines found in this inventory.")));
       count.textContent = filtered.length === vms.length ? `${vms.length} virtual machines` : `${filtered.length} of ${vms.length} virtual machines`;
@@ -459,6 +465,7 @@
     for (const p of inspection.problems) problems.append(el("li", {}, p));
     const warnings = document.getElementById("vm-warnings");
     for (const w of inspection.warnings) warnings.append(el("li", {}, w));
+    document.getElementById("power-off-note").hidden = !inspection.needs_power_off;
 
     // populate the target form
     const sel = (name) => form.elements[name];
@@ -626,9 +633,21 @@
         pipelined_decode: fd.get("pipelined_decode") === "on",
         volume_vpus_per_gb: Number(fd.get("volume_vpus_per_gb") || 10),
       };
+      // a running VM is shut down by the migration: make the operator confirm it, naming the VM
+      if (inspection.needs_power_off) {
+        const how = inspection.tools_running
+          ? "It will be shut down through VMware Tools (guest OS shutdown); if it does not stop in time it is powered off hard."
+          : "VMware Tools is NOT running, so it will be POWERED OFF HARD (like pulling the plug).";
+        const ok = confirm(`WARNING: "${vm.name}" is powered on.\n\n` +
+          `Starting this migration will POWER OFF the VM "${vm.name}" right before the disk export ` +
+          `(after the OCI instance and volumes are prepared). ${how}\n\n` +
+          "The VM stays powered off in vSphere afterwards.\n\n" +
+          `Power off "${vm.name}" and migrate it?`);
+        if (!ok) return;
+      }
       submit.disabled = true;
       try {
-        const job = await api("POST", "/jobs", { vm_moid: moid, target });
+        const job = await api("POST", "/jobs", { vm_moid: moid, target, power_off_source: inspection.needs_power_off });
         jobCard.hidden = false;
         stopPolling();
         activePoll = pollJob(job.id, jobView, { onTerminal: () => { submit.disabled = !inspection.can_export; } });

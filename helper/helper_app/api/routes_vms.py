@@ -12,6 +12,7 @@ from helper_app.models import GuestOsMapping, VmInspection, VmSummary
 from helper_app.oci.mapping import map_guest_os, os_version_choices
 from helper_app.sessions import UserSession
 from helper_app.vsphere.inventory import preflight, vm_spec_from_vm, warnings
+from helper_app.vsphere.power import tools_running
 from helper_app.vsphere.session import VCenterError
 
 router = APIRouter(prefix="/api/vms", tags=["vms"])
@@ -41,13 +42,15 @@ async def list_vms(refresh: bool = Query(default=False), session: UserSession = 
 
 def inspect(session: UserSession, moid: str) -> VmInspection:
     try:
-        spec = vm_spec_from_vm(session.vc.vm(moid))
+        vm = session.vc.vm(moid)
+        spec = vm_spec_from_vm(vm)
     except VCenterError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc))
     problems = preflight(spec)
     os_meta = map_guest_os(spec.guest_id, spec.guest_full_name)
     return VmInspection(
         vm=spec, can_export=not problems, problems=problems, warnings=warnings(spec),
+        needs_power_off=spec.power_state == "poweredOn", tools_running=tools_running(vm),
         os=GuestOsMapping(
             operating_system=os_meta.operating_system,
             operating_system_version=os_meta.operating_system_version,

@@ -1,8 +1,9 @@
 # VMware to OCI Compute migration helper
 
-Move **powered-off virtual machines from VMware vSphere (vCenter or a standalone ESXi host) to Oracle
-Cloud Infrastructure compute instances** - disk for disk, straight into OCI block volumes, with no
-VDDK, no OVA export and no intermediate storage.
+Move **virtual machines from VMware vSphere (vCenter or a standalone ESXi host) to Oracle Cloud
+Infrastructure compute instances** - disk for disk, straight into OCI block volumes, with no VDDK, no
+OVA export and no intermediate storage. The copy is taken from a powered-off VM: either you power it
+off beforehand, or the helper shuts it down for you right before the disk export (after confirmation).
 
 The helper is a single VM you deploy in your OCI tenancy. It offers a web UI where you log in with
 your vCenter (or ESXi) credentials, pick the VMs to move, choose where they should land in OCI and
@@ -14,14 +15,16 @@ firmware mode (BIOS/UEFI, Secure Boot), CPU/memory sizing and Windows licensing 
 - **Lift-and-shift of VMware VMs** to OCI compute: Linux and Windows guests, single or multi-disk,
   BIOS or UEFI, from any vCenter or ESXi host the helper can reach over your VPN/FastConnect.
 - **Migrating from several sources** with one helper: the vCenter/ESXi address is entered at login.
-- **Controlled cut-overs**: the source VM stays untouched (it must be powered off during the copy);
-  the target is created, sized and placed (compartment, VCN/subnet, shape, OCPUs/memory) per VM.
+- **Controlled cut-overs**: the source VM's disks stay untouched; a running VM is shut down by the
+  helper only once the OCI side is prepared, right before the copy (guest shutdown through VMware
+  Tools, hard power-off as fallback), which keeps the downtime short. The target is created, sized
+  and placed (compartment, VCN/subnet, shape, OCPUs/memory) per VM.
 - **Batch work**: several migrations run in parallel, further jobs queue; progress, throughput and
   a copy of the diagnostics are available per job.
 - **First boot debugging**: a *Remote console* button on a completed job opens the instance's VNC console
   in the browser (OCI console connection created on the fly, tunnelled through the helper).
 
-Not in scope: running VMs (no live/CBT sync), VMware Workstation/Fusion, Hyper-V or KVM sources, and
+Not in scope: live migration of running VMs (no CBT/delta sync: the VM is off during the copy), VMware Workstation/Fusion, Hyper-V or KVM sources, and
 guest-side reconfiguration (IP addresses, drivers - see the notes on VirtIO drivers for Windows in
 [docs/limitations.md](docs/limitations.md)).
 
@@ -44,10 +47,11 @@ preloaded. Manual deployment with Terraform and all settings are described in
    (`VirtualMachine.Provisioning.ExportOVF` / *Allow disk access*). The vCenter server field is
    pre-filled from the stack but can be changed, so one helper can migrate from several vCenters or
    ESXi hosts.
-3. **Migrate**: power off the VM in vCenter, click *Migrate* under *Source VMs*, choose the instance
-   compartment, the network compartment with its VCN/subnet, an x86 flex shape (sized from the source VM
-   as 2 vCPU = 1 OCPU, or set OCPUs/memory yourself) and (for Windows) the license type, and follow the
-   progress in the *Jobs* view.
+3. **Migrate**: click *Migrate* under *Source VMs*, choose the instance compartment, the network
+   compartment with its VCN/subnet, an x86 flex shape (sized from the source VM as 2 vCPU = 1 OCPU, or
+   set OCPUs/memory yourself) and (for Windows) the license type, and follow the progress in the *Jobs*
+   view. A VM that is still powered on is shut down by the helper right before the disk export; you are
+   asked to confirm this (by VM name) when you start the migration.
 
 ## Networking requirements
 

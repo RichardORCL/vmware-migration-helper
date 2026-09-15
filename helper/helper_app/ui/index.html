@@ -89,6 +89,12 @@
           <a href="#/vms" class="muted">&larr; back to the list</a>
         </div>
         <div id="vm-details" class="kv"></div>
+        <div id="power-off-note" class="callout important" hidden>
+          <strong>This VM is powered on.</strong> Starting the migration <strong>shuts it down</strong> right before
+          the disk export (after the OCI instance and volumes are prepared): a guest OS shutdown through VMware Tools,
+          or a hard power-off if Tools is not running or the guest does not stop in time. The VM is not powered on
+          again afterwards. You will be asked to confirm.
+        </div>
         <div id="windows-driver-note" class="callout important" hidden>
           <strong>Important: Windows guest.</strong> Install the
           <a href="https://docs.oracle.com/en/operating-systems/oracle-linux/kvm-virtio/" target="_blank" rel="noopener">Oracle VirtIO Drivers for Microsoft Windows</a>

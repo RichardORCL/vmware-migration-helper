@@ -77,6 +77,7 @@ To replace the self-signed certificate, put your own into `/etc/vc-oci-helper/se
 | `HELPER_NFC_PIPELINE_DEPTH` | `8` | Chunks buffered between the download and the decode/write thread when a job uses *Decode and write on a separate thread* (memory per disk copy: depth x chunk size) |
 | `HELPER_LEASE_PROGRESS_INTERVAL_S` / `HELPER_LEASE_READY_TIMEOUT_S` | 60 / 300 | Lease keep-alive interval / time to wait for the lease |
 | `HELPER_DISK_RETRY_ATTEMPTS` | `3` | Attempts per disk (each restarts from the beginning) |
+| `HELPER_GUEST_SHUTDOWN_TIMEOUT_S` | `300` | Powered-on source VMs: how long to wait for the guest OS shutdown (via VMware Tools) before powering the VM off hard |
 | `HELPER_SESSION_TTL_S` | `28800` | Idle timeout of web sessions (5 min - 7 days); changeable on the *Setup* page |
 | `HELPER_COOKIE_SECURE` | `true` | Set `false` only for plain-HTTP development |
 | `HELPER_MAX_CONCURRENT_JOBS` | `2` | Migrations copying disks at the same time (1-16, further jobs queue); changeable on the *Setup* page |

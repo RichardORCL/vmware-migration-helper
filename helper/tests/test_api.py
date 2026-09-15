@@ -396,8 +396,9 @@ def test_vm_list_and_inspect(env):
     r = c.get("/api/vms/vm-101")
     assert r.status_code == 200
     body = r.json()
-    assert body["can_export"] is True and body["vm"]["name"] == "web-01"
-    assert c.get("/api/vms/vm-on").json()["can_export"] is False
+    assert body["can_export"] is True and body["vm"]["name"] == "web-01" and body["needs_power_off"] is False
+    on = c.get("/api/vms/vm-on").json()
+    assert on["can_export"] is True and on["needs_power_off"] is True  # migratable, shut down by the job
     assert c.get("/api/vms/vm-nope").status_code == 404
 
     r = c.get("/api/oci/options")
@@ -556,6 +557,43 @@ def test_resume_finalize_after_attach_failure(env):
     inst = env.fake.compute.instances[job["instance_id"]]
     assert inst.lifecycle_state == "RUNNING"
     assert c.post(f"/api/jobs/{job['id']}/finalize").status_code == 409  # nothing left to resume
+
+
+def test_powered_on_vm_is_shut_down_before_export(env):
+    """A running VM can be migrated once the user confirmed the shutdown: the helper shuts it down
+    through VMware Tools right before opening the export lease (after the OCI side is prepared)."""
+    c = env.client
+    login(c)
+    disks = ((2 * MIB, "pvscsi"), (MIB, "pvscsi"))  # sizes of the fake export payloads
+    vm = env.vms["vm-run"] = make_vm(moid="vm-run", name="running-tools", power_state="poweredOn", disks=disks)
+    insp = c.get("/api/vms/vm-run").json()
+    assert insp["can_export"] and insp["needs_power_off"] and insp["tools_running"]
+    r = c.post("/api/jobs", json={"vm_moid": "vm-run", "target": target(), "power_off_source": True})
+    assert r.status_code == 202, r.text
+    assert r.json()["power_off_source"] is True and "shut down" in r.json()["message"]
+    job = wait_phase(c, r.json()["id"], "COMPLETED", "FAILED")
+    assert job["phase"] == "COMPLETED", job
+    assert job["power_off_result"] == "guest_shutdown" and job["vm"]["power_state"] == "poweredOff"
+    assert vm.power_ops == ["ShutdownGuest"] and str(vm.runtime.powerState) == "poweredOff"
+    # the export only started once the VM was off, and it was left powered off
+    assert FakeExport.instances[-1].completed
+    diag = c.get(f"/api/jobs/{job['id']}/diagnostics").text
+    assert "power_off_source=True power_off_result=guest_shutdown" in diag
+
+    # without Tools the VM is powered off hard (the pop-up said so)
+    env.vms["vm-on2"] = make_vm(moid="vm-on2", name="running-notools", power_state="poweredOn", tools_running=False,
+                                disks=disks)
+    assert c.get("/api/vms/vm-on2").json()["tools_running"] is False
+    r = c.post("/api/jobs", json={"vm_moid": "vm-on2", "target": target(), "power_off_source": True})
+    job = wait_phase(c, r.json()["id"], "COMPLETED", "FAILED")
+    assert job["phase"] == "COMPLETED" and job["power_off_result"] == "powered_off", job
+    assert env.vms["vm-on2"].power_ops == ["PowerOffVM_Task"]
+
+    # a powered-off VM confirmed "just in case" is left alone
+    r = c.post("/api/jobs", json={"vm_moid": "vm-101", "target": target(), "power_off_source": True})
+    job = wait_phase(c, r.json()["id"], "COMPLETED", "FAILED")
+    assert job["power_off_source"] is False and job["power_off_result"] is None
+    assert env.vms["vm-101"].power_ops == []
 
 
 def test_windows_requires_license(env):
@@ -726,8 +764,12 @@ def test_pipelined_decode_option(env):
 def test_create_job_validation(env):
     c = env.client
     login(c)
+    # a powered-on VM needs the explicit confirmation that it may be shut down
     r = c.post("/api/jobs", json={"vm_moid": "vm-on", "target": target()})
-    assert r.status_code == 400 and "powered off" in r.text
+    assert r.status_code == 400 and "powered on" in r.text and "running" in r.text
+    env.vms["vm-sus"] = make_vm(moid="vm-sus", name="sleeping", power_state="suspended")
+    r = c.post("/api/jobs", json={"vm_moid": "vm-sus", "target": target(), "power_off_source": True})
+    assert r.status_code == 400 and "suspended" in r.text
     r = c.post("/api/jobs", json={"vm_moid": "vm-101", "target": target(availability_domain="Uocm:EU-FRANKFURT-1-AD-2")})
     assert r.status_code == 400 and "availability domain" in r.text
     assert c.post("/api/jobs", json={"vm_moid": "vm-nope", "target": target()}).status_code == 404

@@ -17,7 +17,8 @@ pick a VM, choose the OCI target and start. The helper:
    right launch options (boot volume type, NIC type, Windows licensing), stops it and detaches its
    boot volume;
 2. creates the data volumes and attaches boot and data volumes to itself;
-3. opens an `HttpNfcLease` (the mechanism behind *Export OVF*) on vCenter and streams each disk as a
+3. shuts the source VM down if it is still powered on (confirmed by the operator when starting the
+   job: guest OS shutdown through VMware Tools, hard power-off as fallback), then opens an `HttpNfcLease` (the mechanism behind *Export OVF*) on vCenter and streams each disk as a
    stream-optimized VMDK straight from vCenter, decoding the compressed grains on the fly and
    `pwrite()`-ing them at their offsets on the attached OCI volumes;
 4. detaches the volumes from itself, attaches them to the target instance and starts it.
@@ -32,6 +33,7 @@ sequenceDiagram
     H->>VC: SmartConnect (per-user session)
     B->>H: list VMs, inspect, start migration
     H->>OCI: seed image, LaunchInstance, stop, detach boot volume, create + attach volumes
+    H->>VC: ShutdownGuest / PowerOffVM (only if the VM is still powered on)
     H->>VC: ExportVm -> HttpNfcLease
     loop each disk
         VC-->>H: stream-optimized VMDK (HTTPS)
@@ -53,8 +55,9 @@ of them.
 | **Standalone ESXi host** (6.5 or later) | a local host user, typically `root` | Connect to the host's own address. Only the VMs registered on that host are listed (folder shows as `ha-datacenter/vm`); the export streams from the host itself. Also useful for hosts still managed by a vCenter that the helper cannot reach. |
 
 Requirements common to both: the account needs `VirtualMachine.Provisioning.ExportOVF` / *Allow disk
-access* on the VMs, the helper must reach the endpoint on 443 (or the port given at login), the VM must
-be powered off, and vSphere Hosted (Workstation/Fusion) or Hyper-V/KVM sources are **not** supported -
+access* on the VMs (plus `VirtualMachine.Interact.PowerOff` when the helper is to shut the VM down), the
+helper must reach the endpoint on 443 (or the port given at login), the VM must be powered off during the
+copy (the helper shuts it down otherwise), and vSphere Hosted (Workstation/Fusion) or Hyper-V/KVM sources are **not** supported -
 see [limitations.md](limitations.md).
 
 ## Networking

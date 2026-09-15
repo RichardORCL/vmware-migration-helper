@@ -31,6 +31,8 @@ def make_vm(
     template=False,
     host="esxi-01.test",
     ips=None,  # {nic index: [ip, ...]} as VMware Tools last reported it (guest.net); None = nothing known
+    tools_running=True,
+    shutdown_polls=1,  # ShutdownGuest: the VM reports poweredOff after this many powerState reads (0 = never)
 ):
     d = vim.vm.device
     devices = []
@@ -91,8 +93,47 @@ def make_vm(
         # like GuestNicInfo: the legacy ipAddress list plus the newer ipConfig entries (same addresses)
         net.append(NS(deviceConfigId=4000 + i, macAddress=f"00:50:56:00:00:{i:02x}", ipAddress=list(addrs),
                       ipConfig=NS(ipAddress=[NS(ipAddress=a, prefixLength=24) for a in addrs])))
-    guest = NS(net=net, ipAddress=(net[0].ipAddress[0] if net and net[0].ipAddress else None))
-    vm = NS(_moId=moid, config=config, runtime=runtime, snapshot=snapshot, name=name, folder_path=folder, guest=guest)
+    guest = NS(net=net, ipAddress=(net[0].ipAddress[0] if net and net[0].ipAddress else None),
+               toolsRunningStatus="guestToolsRunning" if tools_running else "guestToolsNotRunning")
+    vm = NS(_moId=moid, config=config, runtime=runtime, snapshot=snapshot, name=name, folder_path=folder, guest=guest,
+            power_ops=[])
+
+    # power operations like vim.VirtualMachine: ShutdownGuest is asynchronous (the guest stops a little
+    # later, or never), PowerOffVM_Task is a task that stops the VM at once
+    class _Runtime:
+        def __init__(self):
+            self._state = power_state
+            self._pending = None
+            self.host = runtime.host
+
+        @property
+        def powerState(self):  # noqa: N802 - vSphere naming
+            if self._pending is not None:
+                self._pending -= 1
+                if self._pending <= 0:
+                    self._state, self._pending = "poweredOff", None
+            return self._state
+
+        @powerState.setter
+        def powerState(self, value):  # noqa: N802
+            self._state, self._pending = value, None
+
+    vm.runtime = _Runtime()
+
+    def shutdown_guest():
+        vm.power_ops.append("ShutdownGuest")
+        if vm.guest.toolsRunningStatus != "guestToolsRunning":
+            raise vim.fault.ToolsUnavailable()
+        if shutdown_polls:
+            vm.runtime._pending = shutdown_polls
+
+    def power_off_task():
+        vm.power_ops.append("PowerOffVM_Task")
+        vm.runtime.powerState = "poweredOff"
+        return NS(info=NS(state="success"))
+
+    vm.ShutdownGuest = shutdown_guest
+    vm.PowerOffVM_Task = power_off_task
     return vm
 
 

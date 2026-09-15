@@ -47,6 +47,35 @@ def test_vm_spec_guest_ip_addresses():
     assert all(n.ip_addresses == [] for n in vm_spec_from_vm(vm).nics)
 
 
+def test_shut_down_paths():
+    from helper_app.vsphere.power import PowerError, shut_down, tools_running
+
+    msgs = []
+    # already off: nothing happens
+    vm = make_vm()
+    assert shut_down(vm, "web-01", timeout_s=5, notify=msgs.append, poll_s=0) == "already_off"
+    assert vm.power_ops == []
+    # Tools running: guest shutdown, the VM stops after a couple of polls
+    vm = make_vm(power_state="poweredOn", shutdown_polls=3)
+    assert tools_running(vm)
+    assert shut_down(vm, "web-01", timeout_s=5, notify=msgs.append, poll_s=0) == "guest_shutdown"
+    assert vm.power_ops == ["ShutdownGuest"] and str(vm.runtime.powerState) == "poweredOff"
+    assert any("VMware Tools" in m for m in msgs)
+    # Tools running but the guest never stops: hard power-off after the timeout
+    vm = make_vm(power_state="poweredOn", shutdown_polls=0)
+    assert shut_down(vm, "web-01", timeout_s=0.05, notify=msgs.append, poll_s=0.01) == "powered_off"
+    assert vm.power_ops == ["ShutdownGuest", "PowerOffVM_Task"]
+    assert any("did not shut down" in m for m in msgs)
+    # no Tools: straight to power-off
+    vm = make_vm(power_state="poweredOn", tools_running=False)
+    assert not tools_running(vm)
+    assert shut_down(vm, "web-01", timeout_s=5, notify=msgs.append, poll_s=0) == "powered_off"
+    assert vm.power_ops == ["PowerOffVM_Task"]
+    # suspended: refused
+    with pytest.raises(PowerError, match="suspended"):
+        shut_down(make_vm(power_state="suspended"), "web-01", timeout_s=5, notify=msgs.append, poll_s=0)
+
+
 def test_vm_spec_without_host():
     # a VM that vCenter does not (currently) place on a host still inspects fine
     assert vm_spec_from_vm(make_vm(host=None)).host_name == ""
@@ -67,8 +96,10 @@ def test_disk_ordering_ide_before_scsi_and_controller_types():
 def test_preflight_and_warnings():
     spec = vm_spec_from_vm(make_vm(power_state="poweredOn", snapshot=object(), secure_boot=True, num_cpu=3,
                                    disks=((10 * GIB, "pvscsi"),)))
-    problems = preflight(spec)
-    assert any("powered off" in p for p in problems)
+    # powered on is fine (the migration shuts the VM down), suspended is not
+    assert preflight(spec) == []
+    suspended = vm_spec_from_vm(make_vm(power_state="suspended"))
+    assert any("suspended" in p for p in preflight(suspended))
     notes = warnings(spec)
     assert any("snapshots" in n for n in notes)
     assert any("Secure Boot" in n for n in notes)

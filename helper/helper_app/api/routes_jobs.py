@@ -52,6 +52,10 @@ async def create_job(body: CreateJobRequest, request: Request, session: UserSess
     inspection = await asyncio.to_thread(inspect, session, body.vm_moid)
     if not inspection.can_export:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "; ".join(inspection.problems))
+    if inspection.needs_power_off and not body.power_off_source:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            f"{inspection.vm.name} is powered on; confirm that it may be shut down for the "
+                            "migration (power_off_source), or power it off in vCenter first")
     if inspection.vm.is_windows and body.target.windows_license_type is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "a Windows license type must be selected")
     os_meta = map_guest_os(inspection.vm.guest_id, inspection.vm.guest_full_name)
@@ -83,8 +87,10 @@ async def create_job(body: CreateJobRequest, request: Request, session: UserSess
         vm=inspection.vm,
         vcenter_host=info.vcenter_host + (f":{info.vcenter_port}" if info.vcenter_port != 443 else ""),
         target=body.target,
+        power_off_source=inspection.needs_power_off,
         phase=JobPhase.QUEUED,
-        message="Queued",
+        message="Queued" + (" (the VM is shut down right before the disk export)" if inspection.needs_power_off
+                            else ""),
         disks=[DiskState(index=d.index, label=d.label, capacity_bytes=d.capacity_bytes, is_boot=(d.index == 0))
                for d in inspection.vm.disks],
         created_by=session.username,

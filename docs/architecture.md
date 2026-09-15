@@ -75,7 +75,11 @@ lowering it never interrupts a running one), the rest stay **QUEUED** ("Waiting 
      across jobs).
    - A pending cancellation is honoured between provisioning steps.
 2. **EXPORTING**
-   - re-check the VM is powered off, `vm.ExportVm()` on the user's vCenter session, wait for the
+   - re-check the power state; a VM that is still powered on (and whose job carries the operator's
+     `power_off_source` confirmation) is shut down now (`vsphere/power.py`: `ShutdownGuest` when
+     Tools runs, waiting `HELPER_GUEST_SHUTDOWN_TIMEOUT_S`, else/then `PowerOffVM_Task`); the
+     outcome is stored as `job.power_off_result`;
+   - `vm.ExportVm()` on the user's vCenter session, wait for the
      lease to be `ready`, keep it alive with `HttpNfcLeaseProgress` every
      `HELPER_LEASE_PROGRESS_INTERVAL_S`;
    - match lease `deviceUrl`s to the VM disks (controller/bus/unit key, then `disk-N.vmdk` target

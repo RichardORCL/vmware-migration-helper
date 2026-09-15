@@ -191,8 +191,9 @@ def vm_spec_from_vm(vm) -> VmSpec:
 def preflight(spec: VmSpec) -> list[str]:
     """Return blocking problems (empty list means the VM can be exported)."""
     problems = []
-    if spec.power_state != "poweredOff":
-        problems.append(f"VM must be powered off (current state: {spec.power_state})")
+    if spec.power_state not in ("poweredOff", "poweredOn"):
+        # suspended: the helper does not resume VMs; the operator resumes and shuts down (or powers off)
+        problems.append(f"VM is {spec.power_state}; resume and shut it down, or power it off in vCenter")
     if not spec.disks:
         problems.append("VM has no virtual disks")
     return problems

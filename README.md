@@ -1,88 +1,50 @@
-# vCenter to OCI migration helper
+# VMware to OCI Compute migration helper
 
-Migrate powered-off VMware virtual machines from vCenter to Oracle Cloud Infrastructure compute
-instances - **without VDDK, without an OVA download and without temporary storage**.
+Move **powered-off virtual machines from VMware vSphere (vCenter or a standalone ESXi host) to Oracle
+Cloud Infrastructure compute instances** - disk for disk, straight into OCI block volumes, with no
+VDDK, no OVA export and no intermediate storage.
 
-Everything runs on a single helper VM in OCI. You log in to its web UI with your vCenter
-credentials, pick a VM, choose the OCI target and start. The helper:
+The helper is a single VM you deploy in your OCI tenancy. It offers a web UI where you log in with
+your vCenter (or ESXi) credentials, pick the VMs to move, choose where they should land in OCI and
+watch the copy progress. Each migration produces a ready-to-run OCI instance with the original disks,
+firmware mode (BIOS/UEFI, Secure Boot), CPU/memory sizing and Windows licensing settings.
 
-1. registers a tiny *seed* custom image for the VM's firmware (BIOS/UEFI) and operating system
-   (reused for later VMs with the same combination), launches the target instance from it with the
-   right launch options (boot volume type, NIC type, Windows licensing), stops it and detaches its
-   boot volume;
-2. creates the data volumes and attaches boot and data volumes to itself;
-3. opens an `HttpNfcLease` (the mechanism behind *Export OVF*) on vCenter and streams each disk as a
-   stream-optimized VMDK straight from vCenter, decoding the compressed grains on the fly and
-   `pwrite()`-ing them at their offsets on the attached OCI volumes;
-4. detaches the volumes from itself, attaches them to the target instance and starts it.
+## What you can use it for
 
-```mermaid
-sequenceDiagram
-    participant B as Browser
-    participant H as Helper VM (OCI)
-    participant VC as vCenter / ESXi
-    participant OCI as OCI APIs
-    B->>H: log in with vCenter credentials
-    H->>VC: SmartConnect (per-user session)
-    B->>H: list VMs, inspect, start migration
-    H->>OCI: seed image, LaunchInstance, stop, detach boot volume, create + attach volumes
-    H->>VC: ExportVm -> HttpNfcLease
-    loop each disk
-        VC-->>H: stream-optimized VMDK (HTTPS)
-        H->>H: decode grains -> pwrite(/dev/oracleoci/oraclevdX)
-    end
-    H->>OCI: detach from helper, attach to target, start
-    B->>H: poll job progress
-```
+- **Lift-and-shift of VMware VMs** to OCI compute: Linux and Windows guests, single or multi-disk,
+  BIOS or UEFI, from any vCenter or ESXi host the helper can reach over your VPN/FastConnect.
+- **Migrating from several sources** with one helper: the vCenter/ESXi address is entered at login.
+- **Controlled cut-overs**: the source VM stays untouched (it must be powered off during the copy);
+  the target is created, sized and placed (compartment, VCN/subnet, shape, OCPUs/memory) per VM.
+- **Batch work**: several migrations run in parallel, further jobs queue; progress, throughput and
+  a copy of the diagnostics are available per job.
 
-Details: [docs/architecture.md](docs/architecture.md), [docs/os-mapping.md](docs/os-mapping.md),
-[docs/limitations.md](docs/limitations.md).
+Not in scope: running VMs (no live/CBT sync), VMware Workstation/Fusion, Hyper-V or KVM sources, and
+guest-side reconfiguration (IP addresses, drivers - see the notes on VirtIO drivers for Windows in
+[docs/limitations.md](docs/limitations.md)).
 
-## Supported source environments
+## Tested operating systems
 
-The helper talks plain vSphere API (pyVmomi `SmartConnect`) and NFC over HTTPS, so it works with either
-management endpoint. The server address is entered on the login page, so one helper can serve several
-of them.
+Guests that have been migrated with the helper and booted in OCI. Anything with virtio drivers is
+expected to work (Windows needs the Oracle VirtIO drivers installed first, or the *Maximum
+compatibility* preset); the table lists what has actually been verified.
 
-| Source | Log in as | Notes |
-| --- | --- | --- |
-| **vCenter Server** (7.0 or later recommended; 6.5/6.7 work) | a vCenter/SSO user, e.g. `user@vsphere.local` or a domain account | Full inventory (folders, all hosts/clusters). Disks are streamed through the vCenter proxy by default; *Download the disks directly from the ESXi host* (export page, *Advanced*) bypasses it when the helper can reach the hosts on 443. |
-| **Standalone ESXi host** (6.5 or later) | a local host user, typically `root` | Connect to the host's own address. Only the VMs registered on that host are listed (folder shows as `ha-datacenter/vm`); the export streams from the host itself. Also useful for hosts still managed by a vCenter that the helper cannot reach. |
-
-Requirements common to both: the account needs `VirtualMachine.Provisioning.ExportOVF` / *Allow disk
-access* on the VMs, the helper must reach the endpoint on 443 (or the port given at login), the VM must
-be powered off, and vSphere Hosted (Workstation/Fusion) or Hyper-V/KVM sources are **not** supported -
-see [docs/limitations.md](docs/limitations.md).
-
-## Repository layout
-
-```
-helper/
-  helper_app/
-    main.py            FastAPI app: web UI at /ui, REST API at /api
-    config.py          HELPER_* settings (vCenter, NFC, sessions, OCI, job execution)
-    models.py          VmSpec / OciTarget / Job / API payloads
-    sessions.py        web sessions bound to per-user vCenter connections (pinned by running jobs)
-    auth.py            cookie-based session dependency
-    api/               routes_auth, routes_vms, routes_jobs, routes_oci
-    vsphere/           session (pyVmomi login), inventory (VM list, VmSpec, preflight), export (NFC lease)
-    disk/              stream-optimized VMDK decoder/encoder, positional block-device writer
-    oci/               mapping (guest OS / launch options / shape), seed images, provisioning
-    jobs/              SQLite job store, MigrationRunner
-    ui/                vanilla JS single-page UI (login, VM table, export dialog, jobs)
-  deploy/terraform/    Resource Manager stack / Terraform for the helper VM (+ cloud-init)
-  Dockerfile
-  tests/               fakes for OCI, vCenter and NFC; end-to-end tests
-docs/
-```
+| Operating system | Version(s) | Firmware | Result / notes |
+| --- | --- | --- | --- |
+| Oracle Linux | | | |
+| Red Hat Enterprise Linux | | | |
+| Ubuntu | | | |
+| SUSE Linux Enterprise Server | | | |
+| Windows Server | | | |
+| Windows 10 / 11 | | | |
 
 ## Deploy to Oracle Cloud
 
 [![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=https://github.com/RichardORCL/vmware-migration-helper/raw/main/vc-oci-helper-stack.zip)
 
 The button opens *Create stack* in Resource Manager with the committed `vc-oci-helper-stack.zip`
-preloaded. Rebuild the zip after changing anything under `helper/deploy/terraform` with
-`helper/deploy/package_stack.sh` (or `package_stack.ps1`).
+preloaded. Manual deployment with Terraform and all settings are described in
+[docs/install-helper.md](docs/install-helper.md).
 
 ## Quick start
 
@@ -93,40 +55,20 @@ preloaded. Rebuild the zip after changing anything under `helper/deploy/terrafor
 2. **Open the web UI** at `https://<helper-ip>:8443/`, accept the self-signed certificate and log in
    with a vCenter account that can read the inventory and export the VMs
    (`VirtualMachine.Provisioning.ExportOVF` / *Allow disk access*). The vCenter server field is
-   pre-filled from the stack but can be changed, so one helper can migrate from several vCenters.
-3. **Migrate**: power off the VM in vCenter, click *Migrate* in the VM list, choose the instance
+   pre-filled from the stack but can be changed, so one helper can migrate from several vCenters or
+   ESXi hosts.
+3. **Migrate**: power off the VM in vCenter, click *Migrate* under *Source VMs*, choose the instance
    compartment, the network compartment with its VCN/subnet, an x86 flex shape (sized from the source VM
    as 2 vCPU = 1 OCPU, or set OCPUs/memory yourself) and (for Windows) the license type, and follow the
    progress in the *Jobs* view.
 4. **Keep it current**: the *Setup* tab shows the installed commit against the latest on GitHub and
    updates the helper in place (`git pull` + `pip install` + service restart).
 
-### Networking
+## Documentation
 
-| Flow | Port | Notes |
-| --- | --- | --- |
-| Browser -> helper | TCP 8443 | web UI + API, TLS (self-signed by default), restricted by `allowed_source_cidrs` |
-| Helper -> vCenter | TCP 443 | SOAP API and the NFC disk download (vCenter proxies ESXi by default) |
-| Helper -> ESXi hosts | TCP 443 | Only with *Download the disks directly from the ESXi host* (per migration) or `HELPER_NFC_HOST_OVERRIDE`; bypasses the vCenter proxy, usually several times faster |
-| Helper -> OCI | TCP 443 | Compute, Block Storage, Object Storage APIs (service gateway or NAT) |
-
-## Development
-
-```bash
-python -m venv .venv && . .venv/bin/activate
-pip install -e "./helper[dev]"
-cd helper && pytest && ruff check .
-```
-
-Run locally against OCI with a config-file profile (the vCenter part needs a reachable vCenter):
-
-```bash
-HELPER_OCI_AUTH=config_file HELPER_INSTANCE_ID=ocid1.instance... HELPER_COMPARTMENT_ID=... \
-HELPER_AVAILABILITY_DOMAIN=... HELPER_REGION=eu-frankfurt-1 HELPER_TENANCY_ID=... \
-HELPER_VCENTER_HOST=vcenter.example.com HELPER_COOKIE_SECURE=false HELPER_DB_PATH=./jobs.db \
-vc-oci-helper
-```
-
-The test-suite exercises the complete pipeline against in-memory fakes of the OCI SDK, vCenter and
-the NFC download, including a simulated mid-stream failure with retry, cancellation and a logout
-during a running export.
+- [docs/how-it-works.md](docs/how-it-works.md) - migration mechanism, supported source environments,
+  network flows, repository layout, development setup
+- [docs/install-helper.md](docs/install-helper.md) - deployment, IAM, configuration reference
+- [docs/architecture.md](docs/architecture.md) - internals of the migration pipeline
+- [docs/os-mapping.md](docs/os-mapping.md) - guest OS, launch option and shape mapping tables
+- [docs/limitations.md](docs/limitations.md) - known limitations and troubleshooting

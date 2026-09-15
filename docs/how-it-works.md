@@ -1,0 +1,114 @@
+# How the helper works
+
+Technical overview of the migration helper: the copy mechanism, the supported source endpoints, the
+network flows, the repository layout and how to develop on it. For the step-by-step internals see
+[architecture.md](architecture.md); for the guest OS / launch option / shape tables see
+[os-mapping.md](os-mapping.md); for known limitations and troubleshooting see
+[limitations.md](limitations.md); for deployment and configuration see [install-helper.md](install-helper.md).
+
+## Migration mechanism
+
+Migrations run **without VDDK, without an OVA download and without temporary storage**. Everything
+runs on a single helper VM in OCI. You log in to its web UI with your vCenter (or ESXi) credentials,
+pick a VM, choose the OCI target and start. The helper:
+
+1. registers a tiny *seed* custom image for the VM's firmware (BIOS/UEFI) and operating system
+   (reused for later VMs with the same combination), launches the target instance from it with the
+   right launch options (boot volume type, NIC type, Windows licensing), stops it and detaches its
+   boot volume;
+2. creates the data volumes and attaches boot and data volumes to itself;
+3. opens an `HttpNfcLease` (the mechanism behind *Export OVF*) on vCenter and streams each disk as a
+   stream-optimized VMDK straight from vCenter, decoding the compressed grains on the fly and
+   `pwrite()`-ing them at their offsets on the attached OCI volumes;
+4. detaches the volumes from itself, attaches them to the target instance and starts it.
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant H as Helper VM (OCI)
+    participant VC as vCenter / ESXi
+    participant OCI as OCI APIs
+    B->>H: log in with vCenter credentials
+    H->>VC: SmartConnect (per-user session)
+    B->>H: list VMs, inspect, start migration
+    H->>OCI: seed image, LaunchInstance, stop, detach boot volume, create + attach volumes
+    H->>VC: ExportVm -> HttpNfcLease
+    loop each disk
+        VC-->>H: stream-optimized VMDK (HTTPS)
+        H->>H: decode grains -> pwrite(/dev/oracleoci/oraclevdX)
+    end
+    H->>OCI: detach from helper, attach to target, start
+    B->>H: poll job progress
+```
+
+## Supported source environments
+
+The helper talks plain vSphere API (pyVmomi `SmartConnect`) and NFC over HTTPS, so it works with either
+management endpoint. The server address is entered on the login page, so one helper can serve several
+of them.
+
+| Source | Log in as | Notes |
+| --- | --- | --- |
+| **vCenter Server** (7.0 or later recommended; 6.5/6.7 work) | a vCenter/SSO user, e.g. `user@vsphere.local` or a domain account | Full inventory (folders, all hosts/clusters). Disks are streamed through the vCenter proxy by default; *Download the disks directly from the ESXi host* (export page, *Advanced*) bypasses it when the helper can reach the hosts on 443. |
+| **Standalone ESXi host** (6.5 or later) | a local host user, typically `root` | Connect to the host's own address. Only the VMs registered on that host are listed (folder shows as `ha-datacenter/vm`); the export streams from the host itself. Also useful for hosts still managed by a vCenter that the helper cannot reach. |
+
+Requirements common to both: the account needs `VirtualMachine.Provisioning.ExportOVF` / *Allow disk
+access* on the VMs, the helper must reach the endpoint on 443 (or the port given at login), the VM must
+be powered off, and vSphere Hosted (Workstation/Fusion) or Hyper-V/KVM sources are **not** supported -
+see [limitations.md](limitations.md).
+
+## Networking
+
+| Flow | Port | Notes |
+| --- | --- | --- |
+| Browser -> helper | TCP 8443 | web UI + API, TLS (self-signed by default), restricted by `allowed_source_cidrs` |
+| Helper -> vCenter | TCP 443 | SOAP API and the NFC disk download (vCenter proxies ESXi by default) |
+| Helper -> ESXi hosts | TCP 443 | Only with *Download the disks directly from the ESXi host* (per migration) or `HELPER_NFC_HOST_OVERRIDE`; bypasses the vCenter proxy, usually several times faster |
+| Helper -> OCI | TCP 443 | Compute, Block Storage, Object Storage APIs (service gateway or NAT) |
+
+## Repository layout
+
+```
+helper/
+  helper_app/
+    main.py            FastAPI app: web UI at /ui, REST API at /api
+    config.py          HELPER_* settings (vCenter, NFC, sessions, OCI, job execution)
+    models.py          VmSpec / OciTarget / Job / API payloads
+    sessions.py        web sessions bound to per-user vCenter connections (pinned by running jobs)
+    auth.py            cookie-based session dependency
+    runtime_settings.py  Setup page overrides (logging, concurrency, session timeout) persisted to JSON
+    api/               routes_auth, routes_vms, routes_jobs, routes_oci, routes_setup
+    vsphere/           session (pyVmomi login), inventory (VM list, VmSpec, preflight), export (NFC lease)
+    disk/              stream-optimized VMDK decoder/encoder, positional block-device writer
+    oci/               mapping (guest OS / launch options / shape), seed images, provisioning
+    jobs/              SQLite job store, MigrationRunner
+    ui/                vanilla JS single-page UI (login, Source VMs, export dialog, jobs, setup)
+  deploy/terraform/    Resource Manager stack / Terraform for the helper VM (+ cloud-init)
+  Dockerfile
+  tests/               fakes for OCI, vCenter and NFC; end-to-end tests
+docs/
+```
+
+## Development
+
+```bash
+python -m venv .venv && . .venv/bin/activate
+pip install -e "./helper[dev]"
+cd helper && pytest && ruff check .
+```
+
+Run locally against OCI with a config-file profile (the vCenter part needs a reachable vCenter):
+
+```bash
+HELPER_OCI_AUTH=config_file HELPER_INSTANCE_ID=ocid1.instance... HELPER_COMPARTMENT_ID=... \
+HELPER_AVAILABILITY_DOMAIN=... HELPER_REGION=eu-frankfurt-1 HELPER_TENANCY_ID=... \
+HELPER_VCENTER_HOST=vcenter.example.com HELPER_COOKIE_SECURE=false HELPER_DB_PATH=./jobs.db \
+vc-oci-helper
+```
+
+The test-suite exercises the complete pipeline against in-memory fakes of the OCI SDK, vCenter and
+the NFC download, including a simulated mid-stream failure with retry, cancellation and a logout
+during a running export.
+
+Rebuild the Resource Manager stack zip after changing anything under `helper/deploy/terraform` with
+`helper/deploy/package_stack.sh` (or `package_stack.ps1`).

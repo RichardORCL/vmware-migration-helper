@@ -20,9 +20,10 @@ from helper_app.config import Settings
 from helper_app.disk.pipeline import PipelinedDecoder
 from helper_app.disk.vmdk_stream import DecodeStats, StreamOptimizedDecoder, VmdkFormatError
 from helper_app.disk.writer import BlockDeviceWriter
+from helper_app.guest.initramfs import InitramfsFixer
 from helper_app.jobs.progress import RateMeter
 from helper_app.jobs.store import JobStore, utcnow
-from helper_app.models import DiskState, DiskStatus, Job, JobPhase
+from helper_app.models import DiskState, DiskStatus, GuestFixup, Job, JobPhase
 from helper_app.oci.clients import describe_error
 from helper_app.oci.provision import Provisioner
 from helper_app.runtime_settings import MAX_CONCURRENT_JOBS
@@ -44,6 +45,10 @@ class JobCancelled(RuntimeError):
     pass
 
 
+# (boot volume device, progress callback) -> outcome; see helper_app.guest.initramfs
+GuestFixer = Callable[[str, Callable[[str], None]], GuestFixup]
+
+
 class MigrationRunner:
     def __init__(
         self,
@@ -51,11 +56,13 @@ class MigrationRunner:
         store: JobStore,
         provisioner: Provisioner,
         export_factory: Optional[Callable[[object], NfcExport]] = None,
+        guest_fixer: Optional[GuestFixer] = None,
     ):
         self.s = settings
         self.store = store
         self.prov = provisioner
         self.export_factory = export_factory or self._default_export_factory
+        self.guest_fixer: GuestFixer = guest_fixer or InitramfsFixer().rebuild
         # The pool only provides threads; how many migrations copy at the same time is gated by
         # ``settings.max_concurrent_jobs`` in _acquire_slot, so the limit can be changed at runtime.
         self.pool = ThreadPoolExecutor(max_workers=max(MAX_POOL_WORKERS, settings.max_concurrent_jobs),
@@ -295,10 +302,37 @@ class MigrationRunner:
                 job.transfer.finished_at = utcnow()
                 job.transfer.throughput_bps = 0.0
 
-        # 3. finalize
-        self._save(job, JobPhase.FINALIZING, "All disks copied; attaching volumes to the target instance")
+        # 3. guest fix-up on the copied boot volume (still attached to the helper): make sure the initramfs
+        #    knows virtio, otherwise RHEL-family guests built on VMware drop into the dracut emergency shell
+        self._check_cancel(job)
+        self._guest_fixup(job)
+
+        # 4. finalize
+        self._save(job, JobPhase.FINALIZING, "Attaching volumes to the target instance")
         self.prov.finalize(job)
         self._save(job, message=f"Migration complete: instance {job.instance_id}")
+
+    def _guest_fixup(self, job: Job) -> None:
+        if not job.target.rebuild_initramfs:
+            job.guest_fixup = GuestFixup(status="skipped", detail="disabled for this job")
+            return
+        if job.vm.is_windows:
+            job.guest_fixup = GuestFixup(status="skipped", detail="Windows guest (VirtIO drivers are installed inside "
+                                                                  "Windows, see the note on the export page)")
+            return
+        boot = next((d for d in job.disks if d.is_boot), job.disks[0])
+        if not boot.device:
+            job.guest_fixup = GuestFixup(status="skipped", detail="boot volume device unknown")
+            return
+        job.step = "guest_fixup"
+        self._save(job, JobPhase.FINALIZING, "All disks copied; checking the guest initramfs for virtio drivers")
+        try:
+            job.guest_fixup = self.guest_fixer(boot.device, lambda msg: self._save(job, message=f"Guest fix-up: {msg}"))
+        except Exception as exc:  # noqa: BLE001 - a fix-up problem must not fail the migration
+            log.exception("guest fix-up for job %s crashed", job.id)
+            job.guest_fixup = GuestFixup(status="failed", detail=describe_error(exc))
+        fx = job.guest_fixup
+        self._save(job, message=f"Guest fix-up {fx.status.replace('_', ' ')}: {fx.detail}")
 
     def _resolve_nfc_host(self, job: Job, vm, session: UserSession) -> str:
         """Host substituted for the ``*`` placeholder in the lease URLs.

@@ -180,6 +180,13 @@ class OciTarget(BaseModel):
         description="Volume performance units per GB for the boot and block volumes created for the VM: "
                     "10 = Balanced, 20 = Higher Performance, 30 = Ultra High Performance",
     )
+    rebuild_initramfs: bool = Field(
+        default=True,
+        description="Linux guests: after the copy, mount the target boot volume on the helper and rebuild the "
+                    "initramfs of every installed kernel with virtio drivers (chroot + dracut) when it lacks "
+                    "them, so hostonly initramfs images built on VMware (RHEL/CentOS/Oracle Linux) boot in OCI. "
+                    "Skipped for Windows and for guests without dracut; never fails the migration",
+    )
 
     @field_validator("private_ip", mode="before")
     @classmethod
@@ -277,6 +284,15 @@ class TransferStats(BaseModel):
         return self.bytes_received / d if d else None
 
 
+class GuestFixup(BaseModel):
+    """Outcome of the post-copy guest fix-up (initramfs rebuild with virtio drivers) on the target boot volume."""
+
+    status: Literal["done", "not_needed", "skipped", "failed"]
+    detail: str  # what was done, or why not
+    kernels: list[str] = Field(default_factory=list, description="Kernel versions whose initramfs was rebuilt")
+    log: list[str] = Field(default_factory=list, description="Step-by-step notes for diagnostics")
+
+
 class Job(BaseModel):
     id: str
     phase: JobPhase = JobPhase.QUEUED
@@ -295,6 +311,7 @@ class Job(BaseModel):
     instance_display_name: Optional[str] = None
     boot_volume_id: Optional[str] = None
     nfc_host: Optional[str] = None  # host the disk streams were downloaded from (vCenter or ESXi)
+    guest_fixup: Optional[GuestFixup] = None  # post-copy initramfs rebuild on the target boot volume
     disks: list[DiskState] = Field(default_factory=list)
     transfer: TransferStats = Field(default_factory=TransferStats)
     created_by: str = ""

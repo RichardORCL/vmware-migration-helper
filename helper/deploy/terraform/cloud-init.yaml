@@ -7,6 +7,8 @@ packages:
   - openssl
   - firewalld
   - git
+  - lvm2 # post-copy guest fix-up: activate the guest's volume group to reach its root fs
+  - util-linux # lsblk, partx, mount, chroot
   - python3.11
   - python3.11-pip
 

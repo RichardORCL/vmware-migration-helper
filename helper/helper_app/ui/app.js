@@ -224,6 +224,12 @@
         guest_shutdown: "shut down cleanly through VMware Tools before the export",
         powered_off: "powered off hard before the export (VMware Tools not running or guest did not stop in time)" }[job.power_off_result]
         || "the VM was powered on when the job was created; it is shut down right before the export"]] : []),
+      ...(job.guest_fixup ? [["Guest fix-up", el("span", {},
+        el("span", { class: "badge " + ({ done: "ok", not_needed: "ok", failed: "warn" }[job.guest_fixup.status] || "") },
+          { done: "done", not_needed: "not needed", skipped: "skipped", failed: "failed" }[job.guest_fixup.status] || job.guest_fixup.status),
+        " ", job.guest_fixup.detail,
+        job.guest_fixup.status === "failed" ? el("div", { class: "muted" },
+          "The instance may stop in the dracut emergency shell; rebuild the initramfs with virtio drivers inside the guest (dracut -f --add-drivers \"virtio_blk virtio_scsi virtio_pci virtio_net\") and migrate again, or check Copy diagnostics for the details.") : null)]] : []),
       ["Disk download", job.nfc_host ? `${job.nfc_host}${job.target.nfc_direct_to_esxi ? " (ESXi host, direct)" : ""}${job.target.pipelined_decode ? ", pipelined decode/write" : ""}` : "-"],
       ["Started by", `${job.created_by || "-"} at ${new Date(job.created_at).toLocaleString()}`],
     ];
@@ -622,6 +628,9 @@
     const isWin = isWindows(vm);
     document.getElementById("windows-fieldset").hidden = !isWin;
     document.getElementById("windows-driver-note").hidden = !isWin;
+    // the initramfs fix-up is a Linux thing (Windows gets its VirtIO drivers installed inside the guest)
+    document.getElementById("rebuild-initramfs-label").hidden = isWin;
+    document.getElementById("rebuild-initramfs-hint").hidden = isWin;
     if (isWin && isWindowsClient(vm)) {
       // OCI has no licenses for client editions; the API refuses OCI_PROVIDED for them
       const ociLic = form.querySelector('input[name="windows_license_type"][value="OCI_PROVIDED"]');
@@ -695,6 +704,7 @@
         network_type_override: fd.get("network_type_override") || null,
         nfc_direct_to_esxi: fd.get("nfc_direct_to_esxi") === "on",
         pipelined_decode: fd.get("pipelined_decode") === "on",
+        rebuild_initramfs: !isWin && fd.get("rebuild_initramfs") === "on",
         volume_vpus_per_gb: Number(fd.get("volume_vpus_per_gb") || 10),
       };
       // a running VM is shut down by the migration: make the operator confirm it, naming the VM

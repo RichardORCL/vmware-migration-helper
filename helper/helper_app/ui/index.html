@@ -188,6 +188,8 @@
             <summary>Advanced: firmware and device model</summary>
             <div class="kv" id="launch-preview"></div>
             <label class="check"><input type="checkbox" name="compatibility_mode"> Maximum compatibility (IDE boot volume + E1000 NIC) for guests without virtio drivers</label>
+            <label class="check" id="rebuild-initramfs-label"><input type="checkbox" name="rebuild_initramfs" checked> Rebuild the Linux initramfs with virtio drivers after the copy</label>
+            <small id="rebuild-initramfs-hint">RHEL, CentOS and Oracle Linux build a <em>hostonly</em> initramfs that only knows VMware's storage drivers, so the copied VM cannot find its root disk in OCI (dracut emergency shell). With this option the helper mounts the copied boot volume, and runs the guest's own <code>dracut</code> in a chroot for every kernel whose initramfs lacks virtio modules. Only the OCI copy is changed; guests without dracut (Ubuntu/Debian) are skipped automatically.</small>
             <label>Boot volume type override
               <select name="boot_volume_type_override">
                 <option value="">(automatic)</option>

@@ -15,7 +15,7 @@ from helper_app.config import Settings
 from helper_app.disk.vmdk_stream import encode_raw_bytes
 from helper_app.jobs.store import JobStore, utcnow
 from helper_app.main import create_app
-from helper_app.models import Job, JobPhase
+from helper_app.models import GuestFixup, Job, JobPhase
 from helper_app.updater import Updater
 from helper_app.vsphere.inventory import vm_spec_from_vm
 
@@ -93,11 +93,23 @@ class Env:
             self.nfc_hosts.append(nfc_host)
             return FakeExport(vm, payloads, fail_once=set(fail_once), block_event=block_event)
 
+        # post-copy guest fix-up: scripted outcome per test (device -> GuestFixup or exception)
+        self.fixups: list[str] = []  # boot devices the fix-up was asked to handle
+        self.fixup_result = GuestFixup(status="done", detail="initramfs rebuilt with virtio drivers for 3.10.0-1160",
+                                       kernels=["3.10.0-1160.el7.x86_64"])
+
+        def guest_fixer(device, notify):
+            self.fixups.append(device)
+            notify("scanning the boot disk")
+            if isinstance(self.fixup_result, Exception):
+                raise self.fixup_result
+            return self.fixup_result
+
         extra = {"tunnel_factory": tunnel_factory} if tunnel_factory else {}
         self.app = create_app(
             settings=self.settings, clients=self.fake.clients(), store=self.store, vcenter=self.vcenter,
             export_factory=export_factory, updater=self.updater, command_runner=self._run_command,
-            scan_devices=self.fake.scan_devices, **extra,
+            scan_devices=self.fake.scan_devices, guest_fixer=guest_fixer, **extra,
         )
 
     # -- fake git / systemd for the updater
@@ -828,6 +840,38 @@ def test_fixed_private_ip(env):
     job = wait_phase(c, r.json()["id"], "COMPLETED", "FAILED")
     assert env.fake.compute.launched_vnics[-1].private_ip is None
     assert "private_ip=dhcp" in c.get(f"/api/jobs/{job['id']}/diagnostics").text
+
+
+def test_guest_fixup_runs_after_copy(env):
+    """The initramfs fix-up runs on the boot volume once all disks are copied; its outcome is recorded and
+    never fails the migration; Windows guests and opted-out jobs skip it."""
+    c = env.client
+    login(c)
+    r = c.post("/api/jobs", json={"vm_moid": "vm-101", "target": target()})
+    job = wait_phase(c, r.json()["id"], "COMPLETED", "FAILED")
+    assert job["phase"] == "COMPLETED", job
+    # ran on the boot volume's disk (the device path is cleared from the record once it is detached)
+    assert env.fixups == [str(Path(env.settings.device_prefix).parent / "sdb")]
+    assert job["guest_fixup"]["status"] == "done" and job["guest_fixup"]["kernels"] == ["3.10.0-1160.el7.x86_64"]
+    assert "power_off" not in job["step"]
+    assert "fixup=done" in c.get(f"/api/jobs/{job['id']}/diagnostics").text
+
+    # a crash inside the fix-up is recorded, the migration still completes
+    env.fixup_result = RuntimeError("mount: /dev/sdb2: unknown filesystem type")
+    r = c.post("/api/jobs", json={"vm_moid": "vm-101", "target": target()})
+    job = wait_phase(c, r.json()["id"], "COMPLETED", "FAILED")
+    assert job["phase"] == "COMPLETED" and job["guest_fixup"]["status"] == "failed"
+    assert "unknown filesystem" in job["guest_fixup"]["detail"]
+
+    # opted out / Windows: skipped without touching the disk
+    n = len(env.fixups)
+    r = c.post("/api/jobs", json={"vm_moid": "vm-101", "target": target(rebuild_initramfs=False)})
+    job = wait_phase(c, r.json()["id"], "COMPLETED", "FAILED")
+    assert job["guest_fixup"] == {"status": "skipped", "detail": "disabled for this job", "kernels": [], "log": []}
+    r = c.post("/api/jobs", json={"vm_moid": "vm-202", "target": target(windows_license_type="BRING_YOUR_OWN_LICENSE")})
+    job = wait_phase(c, r.json()["id"], "COMPLETED", "FAILED")
+    assert job["guest_fixup"]["status"] == "skipped" and "Windows" in job["guest_fixup"]["detail"]
+    assert len(env.fixups) == n
 
 
 def test_cancel_during_copy_cleans_up(tmp_path, fast_retries):

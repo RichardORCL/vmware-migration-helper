@@ -52,6 +52,17 @@ def _num(v) -> str:
     return "-" if v is None else f"{v:.0f}"
 
 
+def _fixup_lines(job: Job) -> str:
+    fx = job.guest_fixup
+    head = (f"  guest fixup={fx.status if fx else '-'} (enabled={job.target.rebuild_initramfs}): "
+            f"{fx.detail if fx else '-'}")
+    if not fx:
+        return head
+    extra = [f"    kernels: {', '.join(fx.kernels)}"] if fx.kernels else []
+    extra += [f"    - {line}" for line in fx.log]
+    return "\n".join([head, *extra])
+
+
 def collect(job: Job, settings: Settings, ident: HelperIdentity, commit: str,
             run: Runner = _default_runner, now: Callable[[], datetime] = lambda: datetime.now(timezone.utc)) -> str:
     """The text block copied to the clipboard."""
@@ -86,6 +97,7 @@ def collect(job: Job, settings: Settings, ident: HelperIdentity, commit: str,
         f"  nfc download: host={job.nfc_host or '-'} direct_to_esxi={job.target.nfc_direct_to_esxi} "
         f"pipelined_decode={job.target.pipelined_decode} chunk_bytes={settings.nfc_chunk_bytes} "
         f"pipeline_depth={settings.nfc_pipeline_depth}",
+        _fixup_lines(job),
         f"  target: compartment={job.target.compartment_id} AD={job.target.availability_domain} "
         f"subnet={job.target.subnet_id} shape={job.target.shape or '(default)'} "
         f"ocpus={job.target.ocpus or 'auto'} memory_gb={job.target.memory_gb or 'auto'} "

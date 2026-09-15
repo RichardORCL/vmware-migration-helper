@@ -41,6 +41,7 @@ def create_app(
     command_runner: Runner = _default_runner,
     scan_devices: DeviceScanner = scan_block_devices,
     tunnel_factory: TunnelFactory = open_vnc_stream,
+    guest_fixer=None,  # post-copy initramfs fix-up (injectable for tests; default: helper_app.guest.initramfs)
 ) -> FastAPI:
     settings = settings or get_settings()
 
@@ -63,7 +64,7 @@ def create_app(
         app.state.provisioner = Provisioner(app.state.clients, settings, app.state.store.put,
                                             scan_devices=scan_devices)
         app.state.runner = MigrationRunner(settings, app.state.store, app.state.provisioner,
-                                           export_factory=export_factory)
+                                           export_factory=export_factory, guest_fixer=guest_fixer)
         app.state.runner.fail_stale_jobs()
         # remote consoles: instance console connections + SSH tunnels bridged into the browser
         app.state.consoles = ConsoleManager(app.state.clients, settings, tunnel_factory=tunnel_factory)

@@ -68,14 +68,23 @@ class FakeCompute:
         check_volume_size(getattr(details.source_details, "boot_volume_size_in_gbs", None), "launch_instance")
         self.launch_details.append(details)
         pc = getattr(details, "platform_config", None)
-        if pc is not None and getattr(pc, "is_secure_boot_enabled", False):
+        shielded = [getattr(pc, f, False) for f in ("is_secure_boot_enabled", "is_measured_boot_enabled",
+                                                   "is_trusted_platform_module_enabled")] if pc else []
+        if any(shielded):
             # OCI: shielded launches need UEFI and an image whose capability schema declares Secure Boot
             if details.launch_options.firmware != "UEFI_64":
                 raise service_error(400, "InvalidParameter", "Secure Boot requires UEFI_64 firmware", "launch_instance")
-            schemas = [s for s in self.capability_schemas if s.image_id == details.source_details.image_id]
+            image = self.images[details.source_details.image_id]
+            schemas = [s for s in self.capability_schemas if s.image_id == image.id]
             if not schemas or not schemas[-1].schema_data["Compute.SecureBoot"].default_value:
                 raise service_error(400, "InvalidParameter",
                                     "The image does not support Secure Boot (Compute.SecureBoot)", "launch_instance")
+            # VM shapes (and Windows anywhere): Secure Boot, Measured Boot and TPM only come as a set
+            if not all(shielded) and (details.shape.upper().startswith("VM.") or image.operating_system == "Windows"):
+                raise service_error(400, "InvalidParameter",
+                                    "Invalid platform configuration for instances secured with Credential Guard. "
+                                    "To use Credential Guard, Secure Boot, Measured Boot, and the Trusted Platform "
+                                    "Module must be enabled.", "launch_instance")
         iid = oid("instance")
         inst = NS(id=iid, display_name=details.display_name, lifecycle_state="PROVISIONING",
                   availability_domain=details.availability_domain, compartment_id=details.compartment_id,

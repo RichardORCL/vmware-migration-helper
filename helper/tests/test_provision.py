@@ -195,7 +195,10 @@ def test_secure_boot_source_launches_shielded_instance(env):
     assert fake.compute.capability_schemas[-1].schema_data["Compute.SecureBoot"].default_value is True
     ld = fake.compute.launch_details[-1]
     assert isinstance(ld.platform_config, M.AmdVmLaunchInstancePlatformConfig)  # VM.Standard.E5.Flex default
+    # VM shapes: OCI only accepts Secure Boot together with Measured Boot and the vTPM
     assert ld.platform_config.is_secure_boot_enabled is True
+    assert ld.platform_config.is_measured_boot_enabled is True
+    assert ld.platform_config.is_trusted_platform_module_enabled is True
     assert ld.launch_options.firmware == "UEFI_64"
 
     # Intel shape family -> Intel platform config
@@ -205,7 +208,32 @@ def test_secure_boot_source_launches_shielded_instance(env):
     prov.prepare(job2)
     ld2 = fake.compute.launch_details[-1]
     assert isinstance(ld2.platform_config, M.IntelVmLaunchInstancePlatformConfig)
+    assert ld2.platform_config.is_measured_boot_enabled and ld2.platform_config.is_trusted_platform_module_enabled
     assert job2.seed_image_id == job.seed_image_id  # the secure-boot seed is reused
+
+    # Windows with Secure Boot (the case OCI reports as "secured with Credential Guard"): all three flags
+    jobw = make_job(make_vm(windows=True, secure_boot=True), make_target())
+    jobw.id = "job000w"
+    store.put(jobw)
+    prov.prepare(jobw)
+    ldw = fake.compute.launch_details[-1]
+    assert ldw.platform_config.is_secure_boot_enabled and ldw.platform_config.is_measured_boot_enabled
+    assert ldw.platform_config.is_trusted_platform_module_enabled
+    assert ldw.licensing_configs[0].license_type == "BRING_YOUR_OWN_LICENSE"
+
+    # bare metal Linux: Secure Boot alone (Measured Boot is VM-only on Linux); bare metal Windows: the set
+    jobbm = make_job(make_vm(secure_boot=True), make_target(shape="BM.Standard.E4.128"))
+    jobbm.id = "job00bm"
+    store.put(jobbm)
+    prov.prepare(jobbm)
+    ldbm = fake.compute.launch_details[-1]
+    assert isinstance(ldbm.platform_config, M.GenericBmLaunchInstancePlatformConfig)
+    assert ldbm.platform_config.is_secure_boot_enabled and not ldbm.platform_config.is_measured_boot_enabled
+    jobbmw = make_job(make_vm(windows=True, secure_boot=True), make_target(shape="BM.Standard.E4.128"))
+    jobbmw.id = "job0bmw"
+    store.put(jobbmw)
+    prov.prepare(jobbmw)
+    assert fake.compute.launch_details[-1].platform_config.is_trusted_platform_module_enabled
 
     # a VM without Secure Boot must not pick up the secure-boot seed, and vice versa
     job3 = make_job(make_vm(), make_target())

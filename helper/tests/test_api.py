@@ -789,9 +789,22 @@ def test_fixed_private_ip(env):
     for ip, text in bad:
         r = c.post("/api/jobs", json={"vm_moid": "vm-101", "target": target(private_ip=ip)})
         assert r.status_code in (400, 422) and text in r.text, (ip, r.text)
+    # the form's pre-check answers the same questions without creating anything
+    check = lambda ip, subnet="ocid1.subnet.oc1..1": c.get("/api/oci/private-ip-check",  # noqa: E731
+                                                              params={"subnet_id": subnet, "ip": ip})
+    r = check("10.0.1.25")
+    assert r.status_code == 200 and r.json()["available"] is True and "free" in r.json()["message"]
+    assert check("10.0.1.1").json() == {"ip": "10.0.1.1", "subnet_id": "ocid1.subnet.oc1..1", "available": False,
+                                        "message": check("10.0.1.1").json()["message"]}
+    assert "reserved" in check("10.0.1.1").json()["message"]
+    assert "not inside" in check("10.0.2.5").json()["message"]
+    assert "not an IPv4" in check("nope").json()["message"]
+    assert check("10.0.1.25", subnet="ocid1.subnet.oc1..nope").status_code == 502
     # in use by another VNIC in that subnet
     env.fake.network.private_ips.append(NS(hostname_label="db-old", subnet_id="ocid1.subnet.oc1..1", vnic_id="v9",
                                            ip_address="10.0.1.25"))
+    r = check(" 10.0.1.25 ")
+    assert r.json()["available"] is False and "already in use" in r.json()["message"] and r.json()["ip"] == "10.0.1.25"
     r = c.post("/api/jobs", json={"vm_moid": "vm-101", "target": target(private_ip="10.0.1.25")})
     assert r.status_code == 400 and "already in use" in r.text and "db-old" in r.text
     # the same address in another subnet is no clash

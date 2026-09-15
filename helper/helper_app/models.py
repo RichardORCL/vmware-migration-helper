@@ -400,6 +400,15 @@ class OciShape(BaseModel):
     max_memory_gb: Optional[float] = None
 
 
+class PrivateIpCheck(BaseModel):
+    """Result of GET /api/oci/private-ip-check: can this fixed address be used in the subnet right now?"""
+
+    ip: str
+    subnet_id: str
+    available: bool
+    message: str  # user facing explanation (why not, or confirmation)
+
+
 class OciOptions(BaseModel):
     region: str
     helper_instance_id: str

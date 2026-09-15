@@ -490,25 +490,63 @@
     // fixed private IP: instant feedback that it fits the selected subnet's CIDR (the API additionally asks
     // OCI whether the address is free; the first two and the last address of a CIDR are reserved by OCI)
     const ipInput = sel("private_ip"); const ipHint = document.getElementById("private-ip-hint");
+    const ipCheckBtn = document.getElementById("private-ip-check");
     const ipHintDefault = ipHint.textContent;
     const ipToInt = (ip) => { const m = /^\s*(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\s*$/.exec(ip); if (!m) return null; const p = m.slice(1).map(Number); return p.some((x) => x > 255) ? null : ((p[0] << 24) | (p[1] << 16) | (p[2] << 8) | p[3]) >>> 0; };
-    const checkPrivateIp = () => {
+    const setIpHint = (text, cls) => { ipHint.textContent = text; ipHint.classList.remove("error", "ok"); if (cls) ipHint.classList.add(cls); };
+    // local (instant) part: syntax and CIDR fit; returns the problem text or "" when OCI may be asked
+    const localIpProblem = () => {
       const raw = ipInput.value.trim(); const subnet = netOptions.subnets.find((s) => s.id === sel("subnet_id").value);
-      ipInput.setCustomValidity(""); ipHint.classList.remove("error");
-      if (!raw) { ipHint.textContent = ipHintDefault; return; }
       const ip = ipToInt(raw); const [base, bits] = (subnet && subnet.cidr_block || "").split("/");
-      let problem = "";
-      if (ip === null) problem = "Enter an IPv4 address such as 10.0.1.25.";
-      else if (subnet && bits !== undefined) {
+      if (ip === null) return "Enter an IPv4 address such as 10.0.1.25.";
+      if (subnet && bits !== undefined) {
         const mask = bits === "0" ? 0 : (~0 << (32 - Number(bits))) >>> 0; const net = (ipToInt(base) & mask) >>> 0; const bcast = (net | (~mask >>> 0)) >>> 0;
-        if ((ip & mask) >>> 0 !== net) problem = `${raw} is outside the subnet ${subnet.name} (${subnet.cidr_block}).`;
-        else if (ip === net || ip === net + 1 || ip === bcast) problem = `${raw} is reserved by OCI in ${subnet.cidr_block} (network address, gateway or broadcast).`;
+        if ((ip & mask) >>> 0 !== net) return `${raw} is outside the subnet ${subnet.name} (${subnet.cidr_block}).`;
+        if (ip === net || ip === net + 1 || ip === bcast) return `${raw} is reserved by OCI in ${subnet.cidr_block} (network address, gateway or broadcast).`;
       }
-      ipInput.setCustomValidity(problem);
-      ipHint.textContent = problem || `${raw} lies in ${subnet ? subnet.cidr_block : "the subnet"}; whether it is free is checked when you start the migration.`;
-      ipHint.classList.toggle("error", !!problem);
+      return "";
+    };
+    // remote part: ask OCI (GET /api/oci/private-ip-check) whether the address is allocated; the answer is
+    // tied to the exact ip+subnet it was given for, so any later edit invalidates it
+    let ipChecked = null;  // { key, available }
+    let ipCheckTimer = null; let ipCheckSeq = 0;
+    const ipKey = () => `${ipInput.value.trim()}@${sel("subnet_id").value}`;
+    const remoteIpCheck = async () => {
+      const key = ipKey(); const [ip, subnetId] = key.split("@");
+      if (!ip || !subnetId || localIpProblem()) return;
+      const seq = ++ipCheckSeq;
+      ipCheckBtn.disabled = true; setIpHint(`Checking with OCI whether ${ip} is free...`);
+      try {
+        const res = await api("GET", `/oci/private-ip-check?subnet_id=${encodeURIComponent(subnetId)}&ip=${encodeURIComponent(ip)}`);
+        if (seq !== ipCheckSeq || key !== ipKey()) return;  // user typed on meanwhile
+        ipChecked = { key, available: res.available };
+        ipInput.setCustomValidity(res.available ? "" : res.message);
+        setIpHint(res.message, res.available ? "ok" : "error");
+      } catch (e) {
+        if (seq !== ipCheckSeq || key !== ipKey()) return;
+        ipChecked = null;
+        setIpHint(`Could not check ${ip} with OCI: ${e.message}. You can retry with Check; the migration verifies it again.`, "error");
+      } finally { if (key === ipKey()) ipCheckBtn.disabled = false; }
+    };
+    const checkPrivateIp = () => {
+      clearTimeout(ipCheckTimer); ipCheckSeq++;
+      const raw = ipInput.value.trim();
+      ipInput.setCustomValidity("");
+      if (!raw) { ipChecked = null; ipCheckBtn.disabled = true; setIpHint(ipHintDefault); return; }
+      const problem = localIpProblem();
+      if (problem) { ipChecked = null; ipCheckBtn.disabled = true; ipInput.setCustomValidity(problem); setIpHint(problem, "error"); return; }
+      ipCheckBtn.disabled = false;
+      if (ipChecked && ipChecked.key === ipKey()) {  // unchanged since the last answer
+        if (!ipChecked.available) ipInput.setCustomValidity(ipHint.textContent);
+        return;
+      }
+      const subnet = netOptions.subnets.find((s) => s.id === sel("subnet_id").value);
+      setIpHint(`${raw} lies in ${subnet ? subnet.cidr_block : "the subnet"}; checking with OCI whether it is free...`);
+      ipCheckTimer = setTimeout(remoteIpCheck, 700);  // a complete address usually means a typing pause
     };
     ipInput.addEventListener("input", checkPrivateIp);
+    ipInput.addEventListener("blur", () => { if (ipCheckTimer && !localIpProblem() && ipInput.value.trim()) { clearTimeout(ipCheckTimer); remoteIpCheck(); } });
+    ipCheckBtn.addEventListener("click", () => { clearTimeout(ipCheckTimer); ipChecked = null; remoteIpCheck(); });
     sel("subnet_id").addEventListener("change", checkPrivateIp);
     const fillNetworks = (o) => {
       netOptions = o;

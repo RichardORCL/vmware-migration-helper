@@ -47,6 +47,11 @@ h2 { font-size: 15px; margin: 0 0 8px; font-weight: 600; }
 .form .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .form .row2 label { margin-bottom: 2px; }
 .form .form-hint { margin-bottom: 8px; }
+/* text input with a button at its right end (e.g. private IP + Check) */
+.form label > .input-row { display: flex; gap: 6px; margin-top: 2px; }
+.form label > .input-row > input[type=text] { flex: 1; min-width: 0; padding: 5px 6px; border: 1px solid var(--border); border-radius: 3px; font: inherit; }
+.form label > .input-row > .button { white-space: nowrap; }
+.form small.ok { color: var(--ok); }
 .form input:invalid { border-color: var(--danger, #c0392b); }
 .form label.attention > select { border-color: var(--danger); }
 .form label.attention > small { color: var(--danger); }

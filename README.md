@@ -61,8 +61,6 @@ preloaded. Manual deployment with Terraform and all settings are described in
    compartment, the network compartment with its VCN/subnet, an x86 flex shape (sized from the source VM
    as 2 vCPU = 1 OCPU, or set OCPUs/memory yourself) and (for Windows) the license type, and follow the
    progress in the *Jobs* view.
-4. **Keep it current**: the *Setup* tab shows the installed commit against the latest on GitHub and
-   updates the helper in place (`git pull` + `pip install` + service restart).
 
 ## Documentation
 

@@ -283,21 +283,32 @@
         <span class="phase" data-phase></span>
         <span class="msg" data-message></span>
       </div>
-      <div class="transfer muted" data-transfer hidden></div>
-      <div class="disks" data-disks></div>
-      <div class="kv" data-oci></div>
-      <div class="actions">
-        <span class="error" data-error></span>
-        <span class="muted" data-copy-state></span>
-        <button class="secondary" data-copy title="Copy the job record, error and relevant helper log lines to the clipboard">Copy diagnostics</button>
-        <a class="button secondary" data-console hidden title="Open the VNC console of the migrated instance in the browser (OCI instance console connection through the helper)">Remote console</a>
-        <button data-resume hidden title="All disks were copied; retry attaching the volumes and starting the instance">Retry finalize</button>
-        <button class="secondary" data-cancel>Cancel</button>
-        <select data-license hidden>
-          <option value="BRING_YOUR_OWN_LICENSE">BYOL</option>
-          <option value="OCI_PROVIDED">OCI provided</option>
-        </select>
-        <button class="secondary" data-license-btn hidden>Change license type</button>
+      <div class="job-sections">
+        <section class="job-section">
+          <h3>Target instance</h3>
+          <div class="kv" data-target></div>
+          <div class="actions">
+            <select data-license hidden>
+              <option value="BRING_YOUR_OWN_LICENSE">BYOL</option>
+              <option value="OCI_PROVIDED">OCI provided</option>
+            </select>
+            <button class="secondary" data-license-btn hidden>Change license type</button>
+            <a class="button secondary" data-console hidden title="Open the VNC console of the migrated instance in the browser (OCI instance console connection through the helper)">Remote console</a>
+          </div>
+        </section>
+        <section class="job-section">
+          <h3>Migration</h3>
+          <div class="transfer muted" data-transfer hidden></div>
+          <div class="disks" data-disks></div>
+          <div class="kv" data-migration></div>
+          <div class="actions">
+            <span class="error" data-error></span>
+            <span class="muted" data-copy-state></span>
+            <button class="secondary" data-copy title="Copy the job record, error and relevant helper log lines to the clipboard">Copy diagnostics</button>
+            <button data-resume hidden title="All disks were copied; retry attaching the volumes and starting the instance">Retry finalize</button>
+            <button class="secondary" data-cancel>Cancel</button>
+          </div>
+        </section>
       </div>
       <details data-diag hidden>
         <summary>Diagnostics text (select all and copy if the clipboard is not available)</summary>

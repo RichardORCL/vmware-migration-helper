@@ -99,7 +99,13 @@ td.ocid { font-family: Consolas, monospace; font-size: 11px; word-break: break-a
 .power.poweredOff { background: #eef1f3; color: var(--fg); }
 .power.suspended { background: #fff4d6; color: var(--warn); }
 
-.job-head { display: flex; gap: 10px; align-items: baseline; margin-bottom: 8px; }
+.job-head { display: flex; gap: 10px; align-items: baseline; margin-bottom: 10px; }
+/* two panels: what was created in OCI | how the migration itself is doing */
+.job-sections { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: start; }
+.job-section { border: 1px solid var(--border); border-radius: 4px; padding: 10px 12px; background: #fafbfc; }
+.job-section h3 { font-size: 13px; margin: 0 0 8px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); }
+.job-section .actions:empty, .job-section .actions:not(:has(> :not([hidden]))) { display: none; }
+@media (max-width: 900px) { .job-sections { grid-template-columns: 1fr; } }
 .transfer { font-size: 13px; margin: -4px 0 8px; font-variant-numeric: tabular-nums; }
 .transfer .bar { margin-top: 4px; }
 .phase { font-weight: 600; padding: 2px 8px; border-radius: 10px; background: #e3eef5; color: var(--primary); text-decoration: none; font-size: 12px; white-space: nowrap; display: inline-block; }

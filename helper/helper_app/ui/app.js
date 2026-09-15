@@ -202,18 +202,22 @@
 
     const terminal = TERMINAL.includes(job.phase);
     const sm = job.summary || {};
-    const rows = [
-      ["Source VM", `${job.vm.name} (${job.vm.moid})${job.vcenter_host ? " on " + job.vcenter_host : ""} - ${job.vm.num_cpu} vCPU, ${fmtBytes(job.vm.memory_mb * 1024 * 1024)} RAM, ${job.vm.disks.length} disk(s)`],
-      ["Step", job.step || "-"],
-      ["Guest OS", `${job.vm.guest_full_name || job.vm.guest_id}${job.target.operating_system_version ? ` - release ${job.target.operating_system_version} (selected)` : ""}`],
-      ["Disk download", job.nfc_host ? `${job.nfc_host}${job.target.nfc_direct_to_esxi ? " (ESXi host, direct)" : ""}${job.target.pipelined_decode ? ", pipelined decode/write" : ""}` : "-"],
-      ["Target instance", job.instance_id ? (job.instance_display_name || job.target.display_name || job.vm.name)
+    // left panel: the instance that is (being) created in OCI
+    kv(root.querySelector("[data-target]"), [
+      ["Name", job.instance_id ? el("strong", {}, job.instance_display_name || job.target.display_name || job.vm.name)
         : `${job.target.display_name || job.vm.name} (not launched yet)`],
       ["Instance", ocidLink("instances", job.instance_id)],
       ["State in OCI", ociStateEl(root, job)],
+      ["Source VM", `${job.vm.name} (${job.vm.moid})${job.vcenter_host ? " on " + job.vcenter_host : ""} - ${job.vm.num_cpu} vCPU, ${fmtBytes(job.vm.memory_mb * 1024 * 1024)} RAM, ${job.vm.disks.length} disk(s)`],
+      ["Guest OS", `${job.vm.guest_full_name || job.vm.guest_id}${job.target.operating_system_version ? ` - release ${job.target.operating_system_version} (selected)` : ""}`],
       ["Shape", `${job.target.shape || "(helper default)"}${job.target.ocpus || job.target.memory_gb ? ` - ${job.target.ocpus ?? "auto"} OCPU / ${job.target.memory_gb ?? "auto"} GB (custom)` : " - sized from the source VM"}`],
-      ["Seed image", job.seed_image_id || "-"],
       ["Launch options", job.launch_options ? `${job.launch_options.firmware}${job.launch_options.secure_boot ? " + Secure Boot (shielded instance, with Measured Boot + vTPM on VM shapes)" : ""}, boot ${job.launch_options.boot_volume_type}, nic ${job.launch_options.network_type}` : "-"],
+      ["Seed image", job.seed_image_id || "-"],
+    ]);
+    // right panel: the migration job itself
+    const rows = [
+      ["Step", job.step || "-"],
+      ["Disk download", job.nfc_host ? `${job.nfc_host}${job.target.nfc_direct_to_esxi ? " (ESXi host, direct)" : ""}${job.target.pipelined_decode ? ", pipelined decode/write" : ""}` : "-"],
       ["Started by", `${job.created_by || "-"} at ${new Date(job.created_at).toLocaleString()}`],
     ];
     if (terminal) {
@@ -225,7 +229,7 @@
       }
     }
     rows.push(["Job id", job.id]);
-    kv(root.querySelector("[data-oci]"), rows);
+    kv(root.querySelector("[data-migration]"), rows);
 
     const cancelBtn = root.querySelector("[data-cancel]");
     cancelBtn.hidden = job.phase === "COMPLETED" || job.phase === "CANCELLED";

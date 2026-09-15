@@ -49,6 +49,26 @@ preloaded. Manual deployment with Terraform and all settings are described in
    as 2 vCPU = 1 OCPU, or set OCPUs/memory yourself) and (for Windows) the license type, and follow the
    progress in the *Jobs* view.
 
+## Networking requirements
+
+All flows are TCP and are initiated by the browser or by the helper; nothing has to reach into your
+on-premises network from OCI, and the target instances need no inbound ports.
+
+| From | To | Port | Purpose |
+| --- | --- | --- | --- |
+| **Helper VM** | **vCenter Server** (or a standalone **ESXi** host given at login) | 443 | vSphere SOAP API and the NFC disk download (vCenter proxies the ESXi hosts by default). Over your VPN / FastConnect; the helper subnet must route to it. |
+| **Helper VM** | **ESXi hosts** | 443 | Only with *Download the disks directly from the ESXi host* (per migration): the helper must resolve and reach the host the VM runs on. Several times faster than the vCenter proxy. |
+| **User's web browser** | **Helper VM** | 8443 | Web UI and API over HTTPS (self-signed certificate by default); the *Remote console* runs over the same port as a WebSocket. Restricted by the stack to `allowed_source_cidrs`. |
+| **Administrator** | **Helper VM** | 22 | Optional SSH administration, same source CIDRs. |
+| **Helper VM** | **OCI APIs** (`iaas`, `objectstorage`, `identity` in the region) | 443 | Compute, Block Storage, Object Storage; reachable through a Service Gateway or NAT gateway. |
+| **Helper VM** | **OCI console connection service** `instance-console.<region>.oci.oraclecloud.com` | 443 | *Remote console* of a migrated instance: SSH tunnel to the instance's VNC console. Public endpoint, so the helper subnet needs a NAT gateway (or Internet Gateway) route; a Service Gateway alone is not enough. |
+| **Helper VM** | GitHub, Oracle Linux yum repositories | 443 | Installation and *Setup -> Update now* (`git`, `pip`); NAT or Internet gateway. |
+
+The Resource Manager stack creates a network security group with the 8443/22 ingress rules for the
+administrators' CIDRs and unrestricted egress; the VCN's route table must provide the paths above
+(VPN/FastConnect to vSphere, Service Gateway and/or NAT gateway to OCI). Details and troubleshooting in
+[docs/how-it-works.md](docs/how-it-works.md#networking).
+
 ## Tested operating systems
 
 Guests that have been migrated with the helper and booted in OCI. Anything with virtio drivers is

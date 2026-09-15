@@ -5,7 +5,7 @@
   const app = document.getElementById("app");
   const nav = document.getElementById("nav");
   const userBox = document.getElementById("user");
-  const state = { me: null, config: null, jobsByVm: {} };
+  const state = { me: null, config: null, jobsByVm: {}, region: "" };
   let activePoll = null;
 
   // ---------------------------------------------------------------------- api
@@ -67,6 +67,12 @@
     || (!/server/i.test(vm.guest_full_name || "") && /^windows(9|1[12])_64/i.test(vm.guest_id || ""));
   const TERMINAL = ["COMPLETED", "FAILED", "CANCELLED"];
   const STEP_LABELS = { seed_image: "Seed image import", launch_instance: "Instance launch" };
+  // OCI console deep link for an instance OCID; the region query parameter makes the console switch to
+  // the helper's region instead of the user's last one
+  const consoleUrl = (kind, ocid) => `https://cloud.oracle.com/compute/${kind}/${encodeURIComponent(ocid)}${state.region ? `?region=${encodeURIComponent(state.region)}` : ""}`;
+  const ocidLink = (kind, ocid, cls) => ocid
+    ? el("a", { href: consoleUrl(kind, ocid), target: "_blank", rel: "noopener", class: cls || null, title: "Open in the OCI console" }, ocid)
+    : "-";
 
   // -------------------------------------------------------------------- auth
   function setUser(me) {
@@ -175,7 +181,7 @@
       ["Step", job.step || "-"],
       ["Guest OS", `${job.vm.guest_full_name || job.vm.guest_id}${job.target.operating_system_version ? ` - release ${job.target.operating_system_version} (selected)` : ""}`],
       ["Disk download", job.nfc_host ? `${job.nfc_host}${job.target.nfc_direct_to_esxi ? " (ESXi host, direct)" : ""}${job.target.pipelined_decode ? ", pipelined decode/write" : ""}` : "-"],
-      ["Instance", job.instance_id || "-"],
+      ["Instance", ocidLink("instances", job.instance_id)],
       ["Shape", `${job.target.shape || "(helper default)"}${job.target.ocpus || job.target.memory_gb ? ` - ${job.target.ocpus ?? "auto"} OCPU / ${job.target.memory_gb ?? "auto"} GB (custom)` : " - sized from the source VM"}`],
       ["Seed image", job.seed_image_id || "-"],
       ["Launch options", job.launch_options ? `${job.launch_options.firmware}${job.launch_options.secure_boot ? " + Secure Boot (shielded instance, with Measured Boot + vTPM on VM shapes)" : ""}, boot ${job.launch_options.boot_volume_type}, nic ${job.launch_options.network_type}` : "-"],
@@ -530,7 +536,7 @@
           ? ` - ${j.transfer.percent || 0}%${j.transfer.throughput_bps ? ", " + fmtRate(j.transfer.throughput_bps) : ""}`
           : !TERMINAL.includes(j.phase) && j.step_percent !== null && j.step_percent !== undefined && !/\d+%/.test(j.message || "")
             ? ` - ${j.step_percent}%` : "")),
-        el("td", { class: "ocid" }, j.instance_id || "-"),
+        el("td", { class: "ocid" }, ocidLink("instances", j.instance_id)),
         el("td", {}, new Date(j.created_at).toLocaleString()), el("td", {}, j.created_by || "-"),
         el("td", {}, el("a", { class: "button secondary small", href: `#/jobs/${j.id}` }, "Details"))))));
     app.append(el("div", { class: "card" }, el("h2", {}, "Migration jobs"),
@@ -677,6 +683,9 @@
     stopPolling();
     if (!state.me) {
       try { setUser(await api("GET", "/auth/me")); } catch (e) { return; /* api() showed the login view */ }
+    }
+    if (!state.region) {
+      try { state.region = (await api("GET", "/health")).region || ""; } catch (_) { /* links work without it */ }
     }
     const hash = location.hash || "#/vms";
     for (const a of nav.querySelectorAll("a")) a.classList.toggle("active", hash.startsWith(a.getAttribute("href")));

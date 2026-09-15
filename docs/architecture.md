@@ -44,7 +44,9 @@ pulled from vCenter including retried attempts; `started_at`/`finished_at` brack
 `bytes_received`, `bytes_written` and `average_bps` for finished jobs; `Job.finished_at` is set when a
 job reaches a terminal phase. Progress is persisted every 128 MiB or 2 seconds, whichever comes first.
 
-`MigrationRunner` runs each job in its own thread (pool size `HELPER_MAX_CONCURRENT_JOBS`):
+`MigrationRunner` runs each job in its own thread; at most `HELPER_MAX_CONCURRENT_JOBS` of them hold a
+migration slot at a time (adjustable on the *Setup* page at runtime - raising it starts queued jobs,
+lowering it never interrupts a running one), the rest stay **QUEUED** ("Waiting for a free migration slot"):
 
 1. **PROVISIONING** (`Provisioner.prepare`)
    - map guest OS -> seed image metadata, firmware -> `BIOS`/`UEFI_64`, device model -> launch

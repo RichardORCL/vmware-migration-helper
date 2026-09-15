@@ -6,7 +6,6 @@ Both can be changed from the Setup page without a restart and are persisted to a
 
 from __future__ import annotations
 
-import json
 import logging
 import sys
 from pathlib import Path
@@ -14,6 +13,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+from helper_app import runtime_settings
 from helper_app.config import Settings
 
 log = logging.getLogger(__name__)
@@ -70,22 +70,20 @@ def apply(settings: Settings) -> None:
 
 def load_overrides(settings: Settings) -> None:
     """Apply persisted overrides (from a previous Setup page change) on top of the environment."""
-    path = Path(settings.runtime_settings_path)
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return
-    except (OSError, ValueError) as exc:
-        log.warning("ignoring unreadable runtime settings %s: %s", path, exc)
+    data = {k: v for k, v in runtime_settings.read(settings).items() if k in LoggingSettings.model_fields}
+    if not data:
         return
     try:
-        override = LoggingSettings.model_validate({k: v for k, v in data.items() if k in LoggingSettings.model_fields})
+        override = LoggingSettings.model_validate({
+            "log_level": data.get("log_level", settings.log_level.upper()),
+            "oci_log_requests": data.get("oci_log_requests", settings.oci_log_requests),
+        })
     except ValueError as exc:
-        log.warning("ignoring invalid runtime settings %s: %s", path, exc)
+        log.warning("ignoring invalid runtime settings %s: %s", settings.runtime_settings_path, exc)
         return
     settings.log_level = override.log_level
     settings.oci_log_requests = override.oci_log_requests
-    log.info("runtime settings loaded from %s: %s", path, override.model_dump())
+    log.info("runtime logging settings loaded from %s: %s", settings.runtime_settings_path, override.model_dump())
 
 
 def current(settings: Settings) -> LoggingStatus:
@@ -100,13 +98,7 @@ def update(settings: Settings, new: LoggingSettings) -> LoggingStatus:
     apply(settings)
     log.warning("logging changed: level=%s oci_log_requests=%s", new.log_level, new.oci_log_requests)
     status = current(settings)
-    path = Path(settings.runtime_settings_path)
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(new.model_dump(), indent=2), encoding="utf-8")
-        status.persisted = True
-    except OSError as exc:
-        status.persisted = False
-        status.warning = f"applied, but could not save to {path} ({exc}); the change is lost on restart"
-        log.warning(status.warning)
+    warning = runtime_settings.write(settings, new.model_dump())
+    status.persisted = warning is None
+    status.warning = warning or ""
     return status

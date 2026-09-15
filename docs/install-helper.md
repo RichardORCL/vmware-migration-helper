@@ -83,9 +83,9 @@ To replace the self-signed certificate, put your own into `/etc/vc-oci-helper/se
 | `HELPER_NFC_PIPELINE_DEPTH` | `8` | Chunks buffered between the download and the decode/write thread when a job uses *Decode and write on a separate thread* (memory per disk copy: depth x chunk size) |
 | `HELPER_LEASE_PROGRESS_INTERVAL_S` / `HELPER_LEASE_READY_TIMEOUT_S` | 60 / 300 | Lease keep-alive interval / time to wait for the lease |
 | `HELPER_DISK_RETRY_ATTEMPTS` | `3` | Attempts per disk (each restarts from the beginning) |
-| `HELPER_SESSION_TTL_S` | `28800` | Idle timeout of web sessions |
+| `HELPER_SESSION_TTL_S` | `28800` | Idle timeout of web sessions (5 min - 7 days); changeable on the *Setup* page |
 | `HELPER_COOKIE_SECURE` | `true` | Set `false` only for plain-HTTP development |
-| `HELPER_MAX_CONCURRENT_JOBS` | `2` | Parallel migrations |
+| `HELPER_MAX_CONCURRENT_JOBS` | `2` | Migrations copying disks at the same time (1-16, further jobs queue); changeable on the *Setup* page |
 | `HELPER_OCI_AUTH` | `instance_principal` | `config_file` for local development (`HELPER_OCI_CONFIG_FILE`, `HELPER_OCI_PROFILE`) |
 | `HELPER_INSTANCE_ID`, `HELPER_COMPARTMENT_ID`, `HELPER_AVAILABILITY_DOMAIN`, `HELPER_REGION`, `HELPER_TENANCY_ID` | auto | Discovered from the instance metadata service when empty |
 | `HELPER_SEED_BUCKET` | `vc-oci-seed-images` | Bucket for seed image imports |
@@ -99,7 +99,7 @@ To replace the self-signed certificate, put your own into `/etc/vc-oci-helper/se
 | `HELPER_TLS_CERT_FILE` / `HELPER_TLS_KEY_FILE` | – | TLS material for 8443 |
 | `HELPER_LOG_LEVEL` | `INFO` | Helper log level (`journalctl -u vc-oci-helper`); changeable on the *Setup* page |
 | `HELPER_OCI_LOG_REQUESTS` | `false` | Dump every OCI SDK request/response including bodies (for analysing `InvalidParameter` errors); changeable on the *Setup* page |
-| `HELPER_RUNTIME_SETTINGS_PATH` | `/var/lib/vc-oci-helper/runtime-settings.json` | Where *Setup* page changes (logging) are persisted; they override the environment on start |
+| `HELPER_RUNTIME_SETTINGS_PATH` | `/var/lib/vc-oci-helper/runtime-settings.json` | Where *Setup* page changes (logging, concurrency, session timeout) are persisted; they override the environment on start |
 | `HELPER_UPDATE_SOURCE_DIR` / `HELPER_UPDATE_VENV_DIR` | `/opt/vc-oci/src` / `/opt/vc-oci/venv` | Git checkout and virtualenv used by the self-update |
 | `HELPER_UPDATE_SERVICE` / `HELPER_UPDATE_LOG_PATH` | `vc-oci-helper` / `/var/lib/vc-oci-helper/update.log` | systemd unit restarted after an update; update log shown in the UI |
 

@@ -653,6 +653,51 @@
       finally { btn.disabled = false; }
     });
 
+    // helper identity; the operation values are taken from the form so a save is reflected at once
+    let info = null;
+    const fmtTtl = (s) => { const h = s / 3600; return h >= 1 ? `${Math.round(h * 10) / 10} h` : `${Math.round(s / 60)} min`; };
+    const renderHelperInfo = () => {
+      if (!info) return;
+      const f = document.getElementById("op-form").elements;
+      state.region = state.region || info.region;
+      kv(document.getElementById("setup-kv"), [
+        ["Version", info.version + (info.commit ? ` (${short(info.commit)})` : "")],
+        ["Region / AD", `${info.region} / ${info.availability_domain}`],
+        ["Instance", ocidLink("instances", info.instance_id)], ["Compartment", info.compartment_id],
+        ["Default vCenter", info.default_vcenter || "(none)"], ["Verify vCenter TLS", info.vcenter_verify_ssl ? "yes" : "no"],
+        ["Seed image bucket", info.seed_bucket], ["Default shape", info.default_shape],
+        ["Concurrent migrations", f.max_concurrent_jobs.value || String(info.max_concurrent_jobs)],
+        ["Session idle timeout", fmtTtl(f.session_ttl_h.value ? Number(f.session_ttl_h.value) * 3600 : info.session_ttl_s)],
+        ["Logged-in sessions", String(info.sessions)], ["Running migrations", String(info.active_jobs)],
+      ]);
+    };
+
+    // operation limits: concurrency and session idle timeout; applied immediately, persisted on the helper
+    const opForm = document.getElementById("op-form"); const opResult = document.getElementById("op-result");
+    const renderOperation = (op) => {
+      const conc = opForm.elements.max_concurrent_jobs, ttl = opForm.elements.session_ttl_h;
+      conc.max = op.max_concurrent_jobs_limit; conc.value = op.max_concurrent_jobs;
+      ttl.min = (op.session_ttl_min_s / 3600).toFixed(1); ttl.max = Math.round(op.session_ttl_max_s / 3600);
+      ttl.value = String(Math.round(op.session_ttl_s / 360) / 10);
+      document.getElementById("op-concurrency-hint").textContent = `Migrations copying disks at the same time (1-${op.max_concurrent_jobs_limit}); further jobs wait in the queue. Lowering it never interrupts a running migration.`;
+      opResult.textContent = op.warning || (op.persisted ? "" : "Defaults from the environment; not changed yet.");
+      opResult.className = op.warning ? "error" : "muted";
+      renderHelperInfo();
+    };
+    opForm.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const btn = document.getElementById("op-save"); btn.disabled = true;
+      try {
+        const op = await api("PUT", "/setup/operation", {
+          max_concurrent_jobs: Number(opForm.elements.max_concurrent_jobs.value),
+          session_ttl_s: Math.round(Number(opForm.elements.session_ttl_h.value) * 3600),
+        });
+        renderOperation(op);
+        if (!op.warning) opResult.textContent = "Saved and applied.";
+      } catch (e) { opResult.textContent = e.message; opResult.className = "error"; }
+      finally { btn.disabled = false; }
+    });
+
     document.getElementById("seed-cleanup").addEventListener("click", async (ev) => {
       const out = document.getElementById("seed-result");
       if (!confirm("Delete all seed images and their staging objects?")) return;
@@ -662,17 +707,10 @@
     });
 
     try {
-      const [info, lg] = await Promise.all([api("GET", "/setup/info"), api("GET", "/setup/logging")]);
+      const [inf, lg, op] = await Promise.all([api("GET", "/setup/info"), api("GET", "/setup/logging"), api("GET", "/setup/operation")]);
+      info = inf;
       renderLogging(lg);
-      kv(document.getElementById("setup-kv"), [
-        ["Version", info.version + (info.commit ? ` (${short(info.commit)})` : "")],
-        ["Region / AD", `${info.region} / ${info.availability_domain}`],
-        ["Instance", info.instance_id], ["Compartment", info.compartment_id],
-        ["Default vCenter", info.default_vcenter || "(none)"], ["Verify vCenter TLS", info.vcenter_verify_ssl ? "yes" : "no"],
-        ["Seed image bucket", info.seed_bucket], ["Default shape", info.default_shape],
-        ["Concurrent migrations", String(info.max_concurrent_jobs)], ["Session idle timeout", `${Math.round(info.session_ttl_s / 3600)} h`],
-        ["Logged-in sessions", String(info.sessions)], ["Running migrations", String(info.active_jobs)],
-      ]);
+      renderOperation(op);
     } catch (e) { if (e.status !== 401) showError(e.message); return; }
     await loadSoftware(true);
     activePoll = () => clearTimeout(timer);

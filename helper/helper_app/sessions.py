@@ -99,6 +99,13 @@ class SessionStore:
         log.info("session created for %s", vc.username)
         return session
 
+    def set_ttl(self, ttl_s: float) -> None:
+        """Change the idle timeout for new *and* existing sessions (Setup page)."""
+        with self._lock:
+            self.ttl_s = ttl_s
+            for s in self._sessions.values():
+                s.ttl_s = ttl_s
+
     def get(self, token: Optional[str]) -> Optional[UserSession]:
         if not token:
             return None

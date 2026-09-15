@@ -14,7 +14,7 @@ from fastapi import FastAPI
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from helper_app import __version__, logging_config
+from helper_app import __version__, logging_config, runtime_settings
 from helper_app.api import routes_auth, routes_jobs, routes_oci, routes_setup, routes_vms
 from helper_app.config import Settings, get_settings
 from helper_app.disk.devices import DeviceScanner, scan_block_devices
@@ -46,6 +46,7 @@ def create_app(
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
         logging_config.configure_stdout()
         logging_config.load_overrides(settings)  # Setup page changes from a previous run
+        runtime_settings.load_operation_overrides(settings)
         logging_config.apply(settings)
         app.state.settings = settings
         app.state.store = store or JobStore(settings.db_path)

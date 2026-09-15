@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 
-from helper_app import __version__, logging_config
+from helper_app import __version__, logging_config, runtime_settings
 from helper_app.auth import require_session
 from helper_app.logging_config import LoggingSettings, LoggingStatus
+from helper_app.runtime_settings import OperationSettings, OperationStatus
 from helper_app.updater import SoftwareStatus, UpdateError
 
+log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/setup", tags=["setup"], dependencies=[Depends(require_session)])
 
 
@@ -55,6 +58,28 @@ def get_logging(request: Request):
 @router.put("/logging", response_model=LoggingStatus)
 def put_logging(body: LoggingSettings, request: Request):
     return logging_config.update(request.app.state.settings, body)
+
+
+@router.get("/operation", response_model=OperationStatus)
+def get_operation(request: Request):
+    return runtime_settings.current(request.app.state.settings)
+
+
+@router.put("/operation", response_model=OperationStatus)
+def put_operation(body: OperationSettings, request: Request):
+    """Concurrency and session idle timeout: applied at once (queued jobs start as slots open, existing
+    logins get the new timeout) and persisted for the next start."""
+    st = request.app.state
+    st.runner.set_max_concurrent(body.max_concurrent_jobs)
+    st.settings.session_ttl_s = body.session_ttl_s
+    st.sessions.set_ttl(body.session_ttl_s)
+    log.warning("operation settings changed: max_concurrent_jobs=%s session_ttl_s=%s",
+                body.max_concurrent_jobs, body.session_ttl_s)
+    status_ = runtime_settings.current(st.settings)
+    warning = runtime_settings.write(st.settings, body.model_dump())
+    status_.persisted = warning is None
+    status_.warning = warning or ""
+    return status_
 
 
 @router.get("/software", response_model=SoftwareStatus)

@@ -256,6 +256,47 @@ def test_logging_settings_apply_and_persist(tmp_path, fast_retries):
         logging.getLogger("oci").setLevel(logging.NOTSET)
 
 
+def test_operation_settings_apply_and_persist(tmp_path, fast_retries):
+    import json
+
+    env = Env(tmp_path)
+    with TestClient(env.app) as c:
+        assert c.get("/api/setup/operation").status_code == 401
+        login(c)
+        op = c.get("/api/setup/operation").json()
+        assert op["max_concurrent_jobs"] == 2 and op["session_ttl_s"] == 8 * 3600 and op["persisted"] is False
+        assert op["max_concurrent_jobs_limit"] == 16
+
+        # bounds are enforced
+        assert c.put("/api/setup/operation", json={"max_concurrent_jobs": 0, "session_ttl_s": 3600}).status_code == 422
+        assert c.put("/api/setup/operation", json={"max_concurrent_jobs": 17, "session_ttl_s": 3600}).status_code == 422
+        assert c.put("/api/setup/operation", json={"max_concurrent_jobs": 2, "session_ttl_s": 60}).status_code == 422
+
+        # logging settings written first must survive in the shared file
+        c.put("/api/setup/logging", json={"log_level": "INFO", "oci_log_requests": False})
+        r = c.put("/api/setup/operation", json={"max_concurrent_jobs": 4, "session_ttl_s": 1800})
+        assert r.status_code == 200, r.text
+        assert r.json()["persisted"] is True and r.json()["max_concurrent_jobs"] == 4
+        st = env.app.state
+        assert st.runner.max_concurrent == 4 and st.settings.max_concurrent_jobs == 4
+        # existing logins get the new idle timeout too
+        assert st.sessions.ttl_s == 1800 and all(s.ttl_s == 1800 for s in st.sessions._sessions.values())
+        assert json.loads(Path(env.settings.runtime_settings_path).read_text()) == {
+            "log_level": "INFO", "oci_log_requests": False, "max_concurrent_jobs": 4, "session_ttl_s": 1800,
+        }
+        info = c.get("/api/setup/info").json()
+        assert info["max_concurrent_jobs"] == 4 and info["session_ttl_s"] == 1800
+
+    # the persisted values override the environment on the next start
+    env2 = Env(tmp_path)
+    assert env2.settings.max_concurrent_jobs == 2
+    with TestClient(env2.app) as c:
+        login(c)
+        op = c.get("/api/setup/operation").json()
+        assert (op["max_concurrent_jobs"], op["session_ttl_s"], op["persisted"]) == (4, 1800, True)
+        assert env2.app.state.runner.max_concurrent == 4 and env2.app.state.sessions.ttl_s == 1800
+
+
 # --------------------------------------------------------------------------- setup / self-update
 def test_setup_info_and_software_status_without_source_install(env):
     c = env.client
@@ -704,6 +745,50 @@ def test_cancel_during_copy_cleans_up(tmp_path, fast_retries):
         helper_atts = [a for a in env.fake.compute.vol_attachments.values()
                        if a.instance_id == env.fake.identity.instance_id]
         assert all(a.lifecycle_state == "DETACHED" for a in helper_atts)
+
+
+def test_concurrency_limit_queues_jobs_and_can_be_raised_at_runtime(tmp_path, fast_retries):
+    gate = threading.Event()
+    env = Env(tmp_path, fail_once=frozenset(), block_event=gate)
+    env.vms["vm-b"] = make_vm(moid="vm-b", name="web-02", disks=((2 * MIB, "pvscsi"),))
+    with TestClient(env.app) as c:
+        login(c)
+        c.put("/api/setup/operation", json={"max_concurrent_jobs": 1, "session_ttl_s": 3600})
+        a = c.post("/api/jobs", json={"vm_moid": "vm-101", "target": target()}).json()["id"]
+        wait_until(lambda: c.get(f"/api/jobs/{a}").json()["disks"][0]["status"] == "COPYING", what="copying")
+        b = c.post("/api/jobs", json={"vm_moid": "vm-b", "target": target()}).json()["id"]
+        wait_until(lambda: "Waiting for a free migration slot" in (c.get(f"/api/jobs/{b}").json()["message"] or ""),
+                   what="second job queued")
+        assert c.get(f"/api/jobs/{b}").json()["phase"] == "QUEUED"
+
+        # raising the limit lets the queued job start without touching the running one
+        c.put("/api/setup/operation", json={"max_concurrent_jobs": 2, "session_ttl_s": 3600})
+        wait_until(lambda: c.get(f"/api/jobs/{b}").json()["phase"] == "EXPORTING", what="second job running")
+        assert c.get(f"/api/jobs/{a}").json()["phase"] == "EXPORTING"
+        gate.set()
+        assert wait_phase(c, a, "COMPLETED", "FAILED")["phase"] == "COMPLETED"
+        assert wait_phase(c, b, "COMPLETED", "FAILED")["phase"] == "COMPLETED"
+
+
+def test_cancel_while_queued_needs_no_cleanup(tmp_path, fast_retries):
+    gate = threading.Event()
+    env = Env(tmp_path, fail_once=frozenset(), block_event=gate)
+    env.vms["vm-b"] = make_vm(moid="vm-b", name="web-02", disks=((2 * MIB, "pvscsi"),))
+    with TestClient(env.app) as c:
+        login(c)
+        c.put("/api/setup/operation", json={"max_concurrent_jobs": 1, "session_ttl_s": 3600})
+        a = c.post("/api/jobs", json={"vm_moid": "vm-101", "target": target()}).json()["id"]
+        wait_until(lambda: c.get(f"/api/jobs/{a}").json()["disks"][0]["status"] == "COPYING", what="copying")
+        b = c.post("/api/jobs", json={"vm_moid": "vm-b", "target": target()}).json()["id"]
+        wait_until(lambda: "Waiting for a free migration slot" in (c.get(f"/api/jobs/{b}").json()["message"] or ""),
+                   what="second job queued")
+        launched = len(env.fake.compute.launch_details)
+        assert c.post(f"/api/jobs/{b}/cancel").status_code == 202
+        job = wait_phase(c, b, "CANCELLED", "COMPLETED", "FAILED")
+        assert job["phase"] == "CANCELLED" and job["instance_id"] is None, job
+        assert len(env.fake.compute.launch_details) == launched  # nothing was provisioned for it
+        gate.set()
+        assert wait_phase(c, a, "COMPLETED", "FAILED")["phase"] == "COMPLETED"
 
 
 def test_logout_keeps_vcenter_session_alive_for_running_job(tmp_path, fast_retries):

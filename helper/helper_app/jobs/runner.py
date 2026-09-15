@@ -24,6 +24,7 @@ from helper_app.jobs.store import JobStore, utcnow
 from helper_app.models import DiskState, DiskStatus, Job, JobPhase
 from helper_app.oci.clients import describe_error
 from helper_app.oci.provision import Provisioner
+from helper_app.runtime_settings import MAX_CONCURRENT_JOBS
 from helper_app.sessions import UserSession
 from helper_app.vsphere.export import ExportError, NfcExport, match_disk_urls
 from helper_app.vsphere.inventory import esxi_host_name
@@ -32,6 +33,9 @@ log = logging.getLogger(__name__)
 
 PROGRESS_SAVE_BYTES = 128 * 1024 * 1024
 PROGRESS_SAVE_SECONDS = 2.0  # also persist progress this often, so slow links still show movement
+# threads for migrations (running or waiting for a slot, bounded by the Setup page limit) plus headroom for
+# cleanups and finalize retries
+MAX_POOL_WORKERS = MAX_CONCURRENT_JOBS + 8
 
 
 class JobCancelled(RuntimeError):
@@ -50,12 +54,16 @@ class MigrationRunner:
         self.store = store
         self.prov = provisioner
         self.export_factory = export_factory or self._default_export_factory
-        self.pool = ThreadPoolExecutor(max_workers=max(1, settings.max_concurrent_jobs),
+        # The pool only provides threads; how many migrations copy at the same time is gated by
+        # ``settings.max_concurrent_jobs`` in _acquire_slot, so the limit can be changed at runtime.
+        self.pool = ThreadPoolExecutor(max_workers=max(MAX_POOL_WORKERS, settings.max_concurrent_jobs),
                                        thread_name_prefix="migration")
         self._sessions: dict[str, UserSession] = {}
         self._running: set[str] = set()
         self._cancel_requested: set[str] = set()
         self._lock = threading.Lock()
+        self._slots = threading.Condition()
+        self._migrating = 0  # migrations holding a slot
 
     def _default_export_factory(self, vm, nfc_host: str) -> NfcExport:
         return NfcExport(
@@ -139,12 +147,45 @@ class MigrationRunner:
         if session is not None:
             session.unpin(job_id)
 
+    # ------------------------------------------------------------ concurrency
+    @property
+    def max_concurrent(self) -> int:
+        return max(1, min(MAX_CONCURRENT_JOBS, int(self.s.max_concurrent_jobs)))
+
+    def set_max_concurrent(self, n: int) -> None:
+        """Change the migration concurrency at once; queued jobs start as slots open up, running ones
+        are never interrupted when the limit shrinks."""
+        with self._slots:
+            self.s.max_concurrent_jobs = max(1, min(MAX_CONCURRENT_JOBS, int(n)))
+            self._slots.notify_all()
+
+    def _acquire_slot(self, job: Job) -> None:
+        waited = False
+        with self._slots:
+            while self._migrating >= self.max_concurrent:
+                if self._cancelled(job.id):
+                    raise JobCancelled()
+                if not waited:
+                    waited = True
+                    self._save(job, message=f"Waiting for a free migration slot "
+                                            f"({self._migrating} of {self.max_concurrent} in use)")
+                self._slots.wait(timeout=1.0)
+            self._migrating += 1
+
+    def _release_slot(self) -> None:
+        with self._slots:
+            self._migrating = max(0, self._migrating - 1)
+            self._slots.notify_all()
+
     def _run_safely(self, job_id: str) -> None:
         job = self.store.get(job_id)
         if job is None:
             self._finish(job_id)
             return
+        slot = False
         try:
+            self._acquire_slot(job)
+            slot = True
             self._run(job)
         except JobCancelled:
             self._save(job, message="Cancelled; cleaning up OCI resources")
@@ -161,6 +202,8 @@ class MigrationRunner:
             job.error = f"step '{job.step}': {detail}" if job.step else detail
             self._save(job, JobPhase.FAILED, f"Failed in step {job.step or '?'}: {detail}")
         finally:
+            if slot:
+                self._release_slot()
             self._finish(job_id)
 
     def _finalize_safely(self, job_id: str) -> None:

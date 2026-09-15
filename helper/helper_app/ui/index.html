@@ -218,6 +218,26 @@
       </section>
 
       <section class="card">
+        <h2>Operation</h2>
+        <form id="op-form" class="form" autocomplete="off">
+          <label>Concurrent migrations
+            <input name="max_concurrent_jobs" type="number" min="1" step="1" required>
+            <small id="op-concurrency-hint">Migrations copying disks at the same time; further jobs wait in the queue.
+              Lowering it never interrupts a running migration.</small>
+          </label>
+          <label>Session idle timeout (hours)
+            <input name="session_ttl_h" type="number" min="0.1" step="0.1" required>
+            <small id="op-ttl-hint">A login ends after this much inactivity in the web UI. Applies to current logins
+              as well; the vCenter connection of a running migration stays open until the job finishes.</small>
+          </label>
+          <div class="actions">
+            <span id="op-result" class="muted"></span>
+            <button type="submit" class="primary" id="op-save">Save</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="card">
         <h2>Logging</h2>
         <form id="log-form" class="form" autocomplete="off">
           <label>Helper log level

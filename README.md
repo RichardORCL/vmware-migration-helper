@@ -23,6 +23,14 @@ Not in scope: running VMs (no live/CBT sync), VMware Workstation/Fusion, Hyper-V
 guest-side reconfiguration (IP addresses, drivers - see the notes on VirtIO drivers for Windows in
 [docs/limitations.md](docs/limitations.md)).
 
+## Deploy to Oracle Cloud
+
+[![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=https://github.com/RichardORCL/vmware-migration-helper/raw/main/vc-oci-helper-stack.zip)
+
+The button opens *Create stack* in Resource Manager with the committed `vc-oci-helper-stack.zip`
+preloaded. Manual deployment with Terraform and all settings are described in
+[docs/install-helper.md](docs/install-helper.md).
+
 ## Tested operating systems
 
 Guests that have been migrated with the helper and booted in OCI. Anything with virtio drivers is
@@ -37,14 +45,6 @@ compatibility* preset); the table lists what has actually been verified.
 | SUSE Linux Enterprise Server | | | |
 | Windows Server | | | |
 | Windows 10 / 11 | | | |
-
-## Deploy to Oracle Cloud
-
-[![Deploy to Oracle Cloud](https://oci-resourcemanager-plugin.plugins.oci.oraclecloud.com/latest/deploy-to-oracle-cloud.svg)](https://cloud.oracle.com/resourcemanager/stacks/create?zipUrl=https://github.com/RichardORCL/vmware-migration-helper/raw/main/vc-oci-helper-stack.zip)
-
-The button opens *Create stack* in Resource Manager with the committed `vc-oci-helper-stack.zip`
-preloaded. Manual deployment with Terraform and all settings are described in
-[docs/install-helper.md](docs/install-helper.md).
 
 ## Quick start
 

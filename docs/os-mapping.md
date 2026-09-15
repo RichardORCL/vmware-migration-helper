@@ -43,8 +43,10 @@ registered as Windows (and require a license type).
 | *Maximum compatibility* checkbox | `IDE` + `E1000` |
 | explicit overrides | win over everything |
 | data volumes | `remoteDataVolumeType` follows the boot volume's device class (`PARAVIRTUALIZED`; `SCSI` for IDE/SCSI; `ISCSI` for iSCSI) because OCI refuses to mix paravirtualized and emulated volumes in one instance; the attachments in the finalize step use the same class |
-| Linux guest | `isConsistentVolumeNamingEnabled = true`; data volumes attached with `device=/dev/oracleoci/oraclevdX` |
-| Windows guest | `isConsistentVolumeNamingEnabled = false`; data volumes attached without a device path (OCI rejects it for Windows) |
+| Linux guest | seed image schema `Storage.ConsistentVolumeNaming = true`; data volumes attached with `device=/dev/oracleoci/oraclevdX` |
+| Windows guest | seed image schema `Storage.ConsistentVolumeNaming = false`; data volumes attached without a device path (OCI rejects it for Windows) |
+
+`isConsistentVolumeNamingEnabled` is never sent in `LaunchOptions`: OCI rejects any value that differs from the image schema ("Overriding ConsistentVolumeNamingEnabled in LaunchOptions is not supported").
 
 Seed images exist per (firmware, OS, Secure Boot, import launch mode): a paravirtualized launch cannot use a seed imported as `EMULATED` and vice versa, so the *Maximum compatibility* preset gets its own `-emulated` seed.
 

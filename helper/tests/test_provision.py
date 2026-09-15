@@ -204,7 +204,9 @@ def test_windows_data_volumes_attach_without_device_path(env):
     job = make_job(make_vm(windows=True, disks=3), make_target(windows_license_type=WindowsLicenseType.OCI_PROVIDED))
     store.put(job)
     prov.prepare(job)
-    assert fake.compute.launch_details[-1].launch_options.is_consistent_volume_naming_enabled is False
+    # the launch never sends the flag (OCI refuses overriding the image); the Windows seed's schema has it off
+    assert fake.compute.launch_details[-1].launch_options.is_consistent_volume_naming_enabled is None
+    assert fake.compute.capability_schemas[-1].schema_data["Storage.ConsistentVolumeNaming"].default_value is False
     for d in job.disks:
         d.status = DiskStatus.COPIED
     prov.finalize(job)
@@ -217,7 +219,8 @@ def test_windows_data_volumes_attach_without_device_path(env):
     job2.id = "job0002"
     store.put(job2)
     prov.prepare(job2)
-    assert fake.compute.launch_details[-1].launch_options.is_consistent_volume_naming_enabled is True
+    assert fake.compute.launch_details[-1].launch_options.is_consistent_volume_naming_enabled is None
+    assert fake.compute.capability_schemas[-1].schema_data["Storage.ConsistentVolumeNaming"].default_value is True
     for d in job2.disks:
         d.status = DiskStatus.COPIED
     prov.finalize(job2)

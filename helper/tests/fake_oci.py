@@ -78,6 +78,15 @@ class FakeCompute:
             raise service_error(400, "InvalidParameter",
                                 "Mixing paravirtualized and emulated volumes in the same VM is not supported",
                                 "launch_instance")
+        # OCI: consistent volume naming comes from the image schema; a differing launch option is refused
+        naming = getattr(lo, "is_consistent_volume_naming_enabled", None)
+        if naming is not None:
+            schemas = [s for s in self.capability_schemas if s.image_id == image.id]
+            image_default = schemas[-1].schema_data["Storage.ConsistentVolumeNaming"].default_value if schemas else True
+            if naming != image_default:
+                raise service_error(400, "InvalidParameter",
+                                    "Overriding ConsistentVolumeNamingEnabled in LaunchOptions is not supported",
+                                    "launch_instance")
         pc = getattr(details, "platform_config", None)
         shielded = [getattr(pc, f, False) for f in ("is_secure_boot_enabled", "is_measured_boot_enabled",
                                                    "is_trusted_platform_module_enabled")] if pc else []

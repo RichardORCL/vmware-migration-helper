@@ -155,6 +155,8 @@ class LaunchOptionsSpec(BaseModel):
     boot_volume_type: BootVolumeType = BootVolumeType.PARAVIRTUALIZED
     network_type: NetworkType = NetworkType.PARAVIRTUALIZED
     remote_data_volume_type: str = "PARAVIRTUALIZED"
+    # informational: comes from the seed image's capability schema (Linux true / Windows false); OCI does not
+    # accept it in LaunchOptions ("Overriding ConsistentVolumeNamingEnabled ... is not supported")
     is_consistent_volume_naming_enabled: bool = True
     secure_boot: bool = False  # source had UEFI Secure Boot -> launch as a shielded instance with Secure Boot
 

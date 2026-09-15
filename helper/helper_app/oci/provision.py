@@ -177,12 +177,14 @@ class Provisioner:
                     boot_volume_size_in_gbs=job.disks[0].size_gb,
                     boot_volume_vpus_per_gb=target.volume_vpus_per_gb,
                 ),
+                # isConsistentVolumeNamingEnabled is deliberately absent: OCI rejects any value that differs
+                # from the image's Storage.ConsistentVolumeNaming ("Overriding ... is not supported"), so the
+                # seed image's schema carries it (true for Linux, false for Windows)
                 launch_options=M.LaunchOptions(
                     firmware=launch_options.firmware,
                     boot_volume_type=launch_options.boot_volume_type.value,
                     network_type=launch_options.network_type.value,
                     remote_data_volume_type=launch_options.remote_data_volume_type,
-                    is_consistent_volume_naming_enabled=launch_options.is_consistent_volume_naming_enabled,
                 ),
                 freeform_tags={
                     "vc-oci-job": job.id,

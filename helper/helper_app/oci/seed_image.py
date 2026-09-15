@@ -130,7 +130,8 @@ class SeedImageService:
                 raise OciError(f"{exc}; {self._import_failure_detail(work_request_id)}") from exc
             if on_progress:
                 on_progress(100, f"Seed image {display} imported; applying capability schema")
-            self._apply_capability_schema(image.id, firmware, launch_options, display, tags, launch_mode)
+            self._apply_capability_schema(image.id, firmware, launch_options, display, tags, launch_mode,
+                                          consistent_naming=not os_meta.is_windows)
             return image.id
         finally:
             try:
@@ -243,10 +244,11 @@ class SeedImageService:
 
     def _apply_capability_schema(
         self, image_id: str, firmware: str, lo: LaunchOptionsSpec, display: str, tags: dict[str, str],
-        launch_mode: str = "PARAVIRTUALIZED",
+        launch_mode: str = "PARAVIRTUALIZED", consistent_naming: bool = True,
     ) -> None:
         """Pin the firmware and allow every device model, so that the explicit ``LaunchOptions`` of each job
-        (which may differ from the import defaults) are accepted at launch."""
+        (which may differ from the import defaults) are accepted at launch.  ``consistent_naming`` (Linux-only
+        /dev/oracleoci paths) cannot be overridden at launch, so it is decided here per seed image."""
         import oci.core.models as M
 
         def enum(values: list[str], default: str):
@@ -261,7 +263,7 @@ class SeedImageService:
             "Storage.BootVolumeType": enum(["PARAVIRTUALIZED", "ISCSI", "SCSI", "IDE"], lo.boot_volume_type.value),
             "Storage.RemoteDataVolumeType": enum(["PARAVIRTUALIZED", "ISCSI"], "PARAVIRTUALIZED"),
             "Network.AttachmentType": enum(["PARAVIRTUALIZED", "E1000", "VFIO"], lo.network_type.value),
-            "Storage.ConsistentVolumeNaming": boolean(True),
+            "Storage.ConsistentVolumeNaming": boolean(consistent_naming),
             # a shielded (Secure Boot) launch is only accepted from an image whose schema declares support
             "Compute.SecureBoot": boolean(lo.secure_boot),
         }

@@ -53,6 +53,7 @@ class FakeCompute:
         self.f = fake
         self.instances: dict[str, NS] = {}
         self.boot_attachments: dict[str, NS] = {}
+        self.launched_vnics: list = []  # CreateVnicDetails of every launch
         self.vol_attachments: dict[str, NS] = {}
         self.images: dict[str, NS] = {}
         self.capability_schemas: list = []
@@ -128,8 +129,10 @@ class FakeCompute:
             return Resp(inst)
         self.pending_transitions[iid] = self.f.launch_outcome
         self.f.work_requests.add("LaunchInstance", details.compartment_id, iid, list(self.f.launch_errors))
-        if label:
-            self.f.network.private_ips.append(NS(hostname_label=label, subnet_id=vnic.subnet_id, vnic_id=oid("vnic")))
+        self.launched_vnics.append(vnic)
+        if label or getattr(vnic, "private_ip", None):
+            self.f.network.private_ips.append(NS(hostname_label=label, subnet_id=vnic.subnet_id, vnic_id=oid("vnic"),
+                                                 ip_address=getattr(vnic, "private_ip", None)))
         bv_id = oid("bootvolume")
         self.f.blockstorage.boot_volumes[bv_id] = NS(id=bv_id, lifecycle_state="AVAILABLE",
                                                      size_in_gbs=details.source_details.boot_volume_size_in_gbs,
@@ -538,8 +541,15 @@ class FakeNetwork:
     def hostnames_in_subnet(self, subnet_id: str) -> set[str]:
         return {ip.hostname_label for ip in self.private_ips if ip.subnet_id == subnet_id and ip.hostname_label}
 
-    def list_private_ips(self, subnet_id=None, **kw):
-        return Resp([ip for ip in self.private_ips if subnet_id is None or ip.subnet_id == subnet_id])
+    def list_private_ips(self, subnet_id=None, ip_address=None, **kw):
+        return Resp([ip for ip in self.private_ips if (subnet_id is None or ip.subnet_id == subnet_id)
+                     and (ip_address is None or getattr(ip, "ip_address", None) == ip_address)])
+
+    def get_subnet(self, subnet_id):
+        for s in self.list_subnets("any").data:
+            if s.id == subnet_id:
+                return Resp(s)
+        raise service_error(404, "NotAuthorizedOrNotFound", f"subnet {subnet_id} not found", "GetSubnet")
 
     def list_vcns(self, compartment_id, **kw):
         self.listed_compartments.append(compartment_id)

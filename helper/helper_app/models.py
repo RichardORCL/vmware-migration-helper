@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
+from ipaddress import IPv4Address
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, Field, computed_field, field_validator
 
 
 # --------------------------------------------------------------------------- #
@@ -146,6 +147,11 @@ class OciTarget(BaseModel):
     memory_gb: Optional[float] = Field(
         default=None, gt=0, le=4096, description="Memory override in GB; derived from the source RAM when omitted"
     )
+    private_ip: Optional[str] = Field(
+        default=None,
+        description="Fixed private IPv4 address for the primary VNIC; must lie in the subnet's CIDR and be free "
+                    "(checked against OCI when the job is created). Empty: OCI assigns one (DHCP)",
+    )
     assign_public_ip: bool = False
     start_after_migration: bool = True
     operating_system_version: Optional[str] = Field(
@@ -174,6 +180,19 @@ class OciTarget(BaseModel):
         description="Volume performance units per GB for the boot and block volumes created for the VM: "
                     "10 = Balanced, 20 = Higher Performance, 30 = Ultra High Performance",
     )
+
+    @field_validator("private_ip", mode="before")
+    @classmethod
+    def _normalise_private_ip(cls, v):
+        if v is None:
+            return None
+        v = str(v).strip()
+        if not v:
+            return None  # empty field on the form: DHCP
+        try:
+            return str(IPv4Address(v))
+        except ValueError as exc:
+            raise ValueError(f"private_ip must be an IPv4 address such as 10.0.1.25 (got {v!r})") from exc
 
 
 class LaunchOptionsSpec(BaseModel):

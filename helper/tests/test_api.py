@@ -776,6 +776,46 @@ def test_create_job_validation(env):
     assert c.get("/api/jobs/nope").status_code == 404
 
 
+def test_fixed_private_ip(env):
+    """A fixed private IP is validated against the subnet (syntax, CIDR, OCI reserved addresses, already
+    allocated) before the job is accepted, and handed to LaunchInstance; empty means DHCP."""
+    from types import SimpleNamespace as NS
+
+    c = env.client
+    login(c)
+    bad = [("10.0.1", "IPv4"), ("10.0.1.300", "IPv4"), ("2001:db8::5", "IPv4"),
+           ("10.0.2.5", "not inside the CIDR 10.0.1.0/24"),  # subnet ocid1.subnet.oc1..1 is 10.0.1.0/24
+           ("10.0.1.0", "reserved"), ("10.0.1.1", "reserved"), ("10.0.1.255", "reserved")]
+    for ip, text in bad:
+        r = c.post("/api/jobs", json={"vm_moid": "vm-101", "target": target(private_ip=ip)})
+        assert r.status_code in (400, 422) and text in r.text, (ip, r.text)
+    # in use by another VNIC in that subnet
+    env.fake.network.private_ips.append(NS(hostname_label="db-old", subnet_id="ocid1.subnet.oc1..1", vnic_id="v9",
+                                           ip_address="10.0.1.25"))
+    r = c.post("/api/jobs", json={"vm_moid": "vm-101", "target": target(private_ip="10.0.1.25")})
+    assert r.status_code == 400 and "already in use" in r.text and "db-old" in r.text
+    # the same address in another subnet is no clash
+    env.fake.network.private_ips.append(NS(hostname_label="x", subnet_id="ocid1.subnet.oc1..2", vnic_id="v8",
+                                           ip_address="10.0.1.26"))
+    r = c.post("/api/jobs", json={"vm_moid": "vm-101", "target": target(private_ip=" 10.0.1.26 ")})
+    assert r.status_code == 202, r.text
+    assert r.json()["target"]["private_ip"] == "10.0.1.26"
+    job = wait_phase(c, r.json()["id"], "COMPLETED", "FAILED")
+    assert job["phase"] == "COMPLETED", job
+    assert env.fake.compute.launched_vnics[-1].private_ip == "10.0.1.26"
+    assert "private_ip=10.0.1.26" in c.get(f"/api/jobs/{job['id']}/diagnostics").text
+    # ... and is now taken
+    win = dict(windows_license_type="BRING_YOUR_OWN_LICENSE")
+    r = c.post("/api/jobs", json={"vm_moid": "vm-202", "target": target(private_ip="10.0.1.26", **win)})
+    assert r.status_code == 400 and "already in use" in r.text
+    # empty / blank -> DHCP (None)
+    r = c.post("/api/jobs", json={"vm_moid": "vm-202", "target": target(private_ip="  ", **win)})
+    assert r.status_code == 202 and r.json()["target"]["private_ip"] is None
+    job = wait_phase(c, r.json()["id"], "COMPLETED", "FAILED")
+    assert env.fake.compute.launched_vnics[-1].private_ip is None
+    assert "private_ip=dhcp" in c.get(f"/api/jobs/{job['id']}/diagnostics").text
+
+
 def test_cancel_during_copy_cleans_up(tmp_path, fast_retries):
     gate = threading.Event()
     env = Env(tmp_path, fail_once=frozenset(), block_event=gate)

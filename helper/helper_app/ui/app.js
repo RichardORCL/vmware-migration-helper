@@ -211,6 +211,7 @@
       ["Source VM", `${job.vm.name} (${job.vm.moid})${job.vcenter_host ? " on " + job.vcenter_host : ""} - ${job.vm.num_cpu} vCPU, ${fmtBytes(job.vm.memory_mb * 1024 * 1024)} RAM, ${job.vm.disks.length} disk(s)`],
       ["Guest OS", `${job.vm.guest_full_name || job.vm.guest_id}${job.target.operating_system_version ? ` - release ${job.target.operating_system_version} (selected)` : ""}`],
       ["Shape", `${job.target.shape || "(helper default)"}${job.target.ocpus || job.target.memory_gb ? ` - ${job.target.ocpus ?? "auto"} OCPU / ${job.target.memory_gb ?? "auto"} GB (custom)` : " - sized from the source VM"}`],
+      ["Network", `${job.target.private_ip ? "private IP " + job.target.private_ip : "private IP assigned by OCI (DHCP)"}${job.target.assign_public_ip ? ", public IP" : ""}`],
       ["Launch options", job.launch_options ? `${job.launch_options.firmware}${job.launch_options.secure_boot ? " + Secure Boot (shielded instance, with Measured Boot + vTPM on VM shapes)" : ""}, boot ${job.launch_options.boot_volume_type}, nic ${job.launch_options.network_type}` : "-"],
       ...(job.target.windows_license_type ? [["Windows license", job.target.windows_license_type === "OCI_PROVIDED"
         ? "OCI provided (change it in the OCI console if needed)" : "Bring your own license (change it in the OCI console if needed)"]] : []),
@@ -484,7 +485,31 @@
       sel("subnet_id").innerHTML = "";
       for (const s of subnets) sel("subnet_id").append(el("option", { value: s.id }, `${s.name} (${s.cidr_block})${s.prohibit_public_ip ? ", private" : ""}${s.availability_domain ? ", " + s.availability_domain : ""}`));
       document.getElementById("subnet-hint").textContent = subnets.length ? "" : (vcnId ? "No subnets in this VCN within the network compartment." : "Select a VCN first.");
+      checkPrivateIp();
     };
+    // fixed private IP: instant feedback that it fits the selected subnet's CIDR (the API additionally asks
+    // OCI whether the address is free; the first two and the last address of a CIDR are reserved by OCI)
+    const ipInput = sel("private_ip"); const ipHint = document.getElementById("private-ip-hint");
+    const ipHintDefault = ipHint.textContent;
+    const ipToInt = (ip) => { const m = /^\s*(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\s*$/.exec(ip); if (!m) return null; const p = m.slice(1).map(Number); return p.some((x) => x > 255) ? null : ((p[0] << 24) | (p[1] << 16) | (p[2] << 8) | p[3]) >>> 0; };
+    const checkPrivateIp = () => {
+      const raw = ipInput.value.trim(); const subnet = netOptions.subnets.find((s) => s.id === sel("subnet_id").value);
+      ipInput.setCustomValidity(""); ipHint.classList.remove("error");
+      if (!raw) { ipHint.textContent = ipHintDefault; return; }
+      const ip = ipToInt(raw); const [base, bits] = (subnet && subnet.cidr_block || "").split("/");
+      let problem = "";
+      if (ip === null) problem = "Enter an IPv4 address such as 10.0.1.25.";
+      else if (subnet && bits !== undefined) {
+        const mask = bits === "0" ? 0 : (~0 << (32 - Number(bits))) >>> 0; const net = (ipToInt(base) & mask) >>> 0; const bcast = (net | (~mask >>> 0)) >>> 0;
+        if ((ip & mask) >>> 0 !== net) problem = `${raw} is outside the subnet ${subnet.name} (${subnet.cidr_block}).`;
+        else if (ip === net || ip === net + 1 || ip === bcast) problem = `${raw} is reserved by OCI in ${subnet.cidr_block} (network address, gateway or broadcast).`;
+      }
+      ipInput.setCustomValidity(problem);
+      ipHint.textContent = problem || `${raw} lies in ${subnet ? subnet.cidr_block : "the subnet"}; whether it is free is checked when you start the migration.`;
+      ipHint.classList.toggle("error", !!problem);
+    };
+    ipInput.addEventListener("input", checkPrivateIp);
+    sel("subnet_id").addEventListener("change", checkPrivateIp);
     const fillNetworks = (o) => {
       netOptions = o;
       const vcnSel = sel("vcn_id");
@@ -618,6 +643,7 @@
         compartment_id: fd.get("compartment_id"),
         availability_domain: options.helper_availability_domain,
         subnet_id: fd.get("subnet_id"),
+        private_ip: (fd.get("private_ip") || "").trim() || null,
         shape: fd.get("shape") || null,
         ocpus: fd.get("ocpus") ? Number(fd.get("ocpus")) : null,
         memory_gb: fd.get("memory_gb") ? Number(fd.get("memory_gb")) : null,

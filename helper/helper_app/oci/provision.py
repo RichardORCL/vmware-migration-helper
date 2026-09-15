@@ -176,6 +176,7 @@ class Provisioner:
                 create_vnic_details=M.CreateVnicDetails(
                     subnet_id=target.subnet_id,
                     assign_public_ip=target.assign_public_ip,
+                    private_ip=target.private_ip or None,  # None: OCI picks a free address (DHCP)
                     display_name=display,
                     hostname_label=self._free_hostname_label(target.subnet_id, display),
                 ),

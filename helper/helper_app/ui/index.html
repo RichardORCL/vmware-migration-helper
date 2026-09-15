@@ -130,6 +130,12 @@
             <select name="subnet_id" required></select>
             <small id="subnet-hint"></small>
           </label>
+          <label>Private IP address
+            <input name="private_ip" type="text" inputmode="decimal" placeholder="automatic (DHCP)" maxlength="15"
+                   pattern="^\s*(\d{1,3}\.){3}\d{1,3}\s*$" title="IPv4 address inside the selected subnet, e.g. 10.0.1.25">
+            <small id="private-ip-hint">Leave empty to let OCI pick a free address from the subnet. A fixed address must lie inside the subnet's CIDR and not be in use; the helper checks both.</small>
+          </label>
+          <label class="check"><input type="checkbox" name="assign_public_ip"> Assign a public IP</label>
           <label>Shape
             <select name="shape"></select>
             <small id="shape-hint"></small>
@@ -150,7 +156,6 @@
             <select name="operating_system_version"></select>
             <small id="os-version-hint"></small>
           </label>
-          <label class="check"><input type="checkbox" name="assign_public_ip"> Assign a public IP</label>
           <label class="check"><input type="checkbox" name="start_after_migration" checked> Start the instance when the copy completes</label>
 
           <fieldset id="windows-fieldset" hidden>

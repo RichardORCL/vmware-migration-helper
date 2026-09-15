@@ -90,7 +90,8 @@ def collect(job: Job, settings: Settings, ident: HelperIdentity, commit: str,
         f"subnet={job.target.subnet_id} shape={job.target.shape or '(default)'} "
         f"ocpus={job.target.ocpus or 'auto'} memory_gb={job.target.memory_gb or 'auto'} "
         f"os_version={job.target.operating_system_version or 'detected'} "
-        f"public_ip={job.target.assign_public_ip} license={job.target.windows_license_type} "
+        f"private_ip={job.target.private_ip or 'dhcp'} public_ip={job.target.assign_public_ip} "
+        f"license={job.target.windows_license_type} "
         f"volume_vpus_per_gb={job.target.volume_vpus_per_gb}",
         f"  launch options: {lo.firmware} boot={lo.boot_volume_type.value} nic={lo.network_type.value} "
         f"secure_boot={lo.secure_boot}" if lo

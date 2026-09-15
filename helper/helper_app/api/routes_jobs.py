@@ -29,6 +29,7 @@ from helper_app.oci.mapping import (
     os_version_choices,
     with_os_version,
 )
+from helper_app.oci.options import PrivateIpError, check_private_ip
 from helper_app.sessions import UserSession
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"], dependencies=[Depends(require_session)])
@@ -77,6 +78,15 @@ async def create_job(body: CreateJobRequest, request: Request, session: UserSess
     if is_arm_shape(shape):
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             f"{shape} is an Ampere (ARM) shape; an x86 guest from vSphere needs an x86 shape")
+    if body.target.private_ip:
+        # fixed address: must fit the subnet and be free right now (OCI would otherwise fail the launch later)
+        try:
+            await asyncio.to_thread(check_private_ip, st.clients, body.target.subnet_id, body.target.private_ip)
+        except PrivateIpError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY,
+                                f"cannot verify private IP {body.target.private_ip}: {describe_error(exc)}")
     active = st.store.active_for_vm(body.vm_moid)
     if active is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, f"job {active.id} for this VM is still {active.phase.value}")

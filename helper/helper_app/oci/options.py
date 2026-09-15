@@ -19,6 +19,33 @@ def _all(fn, **kwargs):
     return oci.pagination.list_call_get_all_results(fn, **kwargs).data
 
 
+class PrivateIpError(ValueError):
+    """The requested fixed private IP cannot be used in the subnet (message is user facing)."""
+
+
+def check_private_ip(c: OciClients, subnet_id: str, ip: str) -> None:
+    """Verify a fixed private IP against OCI: inside the subnet's CIDR, not one of the addresses the
+    Networking service reserves (the first two and the last of the CIDR) and not already allocated to
+    a VNIC in that subnet.  Raises PrivateIpError; other exceptions mean the check itself failed."""
+    from ipaddress import IPv4Address, IPv4Network
+
+    subnet = c.network.get_subnet(subnet_id).data
+    cidr = getattr(subnet, "cidr_block", "") or ""
+    net = IPv4Network(cidr, strict=False)
+    addr = IPv4Address(ip)
+    if addr not in net:
+        raise PrivateIpError(f"{ip} is not inside the CIDR {cidr} of subnet {subnet.display_name or subnet_id}")
+    reserved = {net.network_address, net.network_address + 1, net.broadcast_address}
+    if addr in reserved:
+        raise PrivateIpError(f"{ip} is reserved by OCI in {cidr} (network address, default gateway and broadcast "
+                             "cannot be assigned)")
+    used = _all(c.network.list_private_ips, subnet_id=subnet_id, ip_address=ip)
+    if used:
+        owner = getattr(used[0], "hostname_label", None) or getattr(used[0], "display_name", None)
+        raise PrivateIpError(f"{ip} is already in use in subnet {subnet.display_name or subnet_id}"
+                             + (f" (by {owner})" if owner else ""))
+
+
 def list_compartments(c: OciClients) -> list[OciCompartment]:
     tenancy = c.identity_info.tenancy_id
     result: list[OciCompartment] = []

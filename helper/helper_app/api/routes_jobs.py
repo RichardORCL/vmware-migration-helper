@@ -46,9 +46,11 @@ async def create_job(body: CreateJobRequest, request: Request, session: UserSess
     if active is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, f"job {active.id} for this VM is still {active.phase.value}")
     now = utcnow()
+    info = session.info()
     job = Job(
         id=uuid.uuid4().hex,
         vm=inspection.vm,
+        vcenter_host=info.vcenter_host + (f":{info.vcenter_port}" if info.vcenter_port != 443 else ""),
         target=body.target,
         phase=JobPhase.QUEUED,
         message="Queued",

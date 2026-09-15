@@ -54,7 +54,11 @@ job reaches a terminal phase. Progress is persisted every 128 MiB or 2 seconds, 
      image (`launchMode` PARAVIRTUALIZED, or EMULATED for IDE/E1000), pin its capability schema
      (firmware fixed; all boot volume and NIC types allowed), reuse by freeform tags on later jobs;
    - `LaunchInstance` from the seed image with explicit `launchOptions`, `shapeConfig`, optional
-     `licensingConfigs` (Windows) and a boot volume sized for disk 0;
+     `licensingConfigs` (Windows) and a boot volume sized for disk 0. The instance carries
+     provenance freeform tags: `vc-oci-job`, `vc-oci-source-vcenter` (the vCenter the job was
+     started against, `host[:port]`), `vc-oci-source-esxi-host`, `vc-oci-source-vm`,
+     `vc-oci-source-moid` and `vc-oci-source-vm-details` (sizing: vCPU, RAM, disk count and
+     capacities, NICs, guest OS, firmware/Secure Boot);
    - create one block volume per additional disk and attach them to the target **while it is
      still running** from the seed image, as read/write *shareable* attachments (OCI only attaches
      data volumes to a `RUNNING` instance, and the target has to be stopped for the boot volume

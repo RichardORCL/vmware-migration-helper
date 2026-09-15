@@ -193,11 +193,7 @@ class Provisioner:
                     network_type=launch_options.network_type.value,
                     remote_data_volume_type=launch_options.remote_data_volume_type,
                 ),
-                freeform_tags={
-                    "vc-oci-job": job.id,
-                    "vc-oci-source-vm": vm.name[:100],
-                    "vc-oci-source-moid": vm.moid,
-                },
+                freeform_tags=source_tags(job),
                 metadata={},
             )
             if platform_config is not None:
@@ -500,6 +496,37 @@ class Provisioner:
             licensing_configs=[M.UpdateInstanceWindowsLicensingConfig(type="WINDOWS", license_type=license_type.value)]
         )
         return self.c.compute.update_instance(instance_id, details).data
+
+
+TAG_VALUE_MAX = 256  # OCI freeform tag values are limited to 256 characters (keys to 100)
+
+
+def source_tags(job: Job) -> dict[str, str]:
+    """Freeform tags that record where the instance came from: the job, the source vCenter, the VM and its
+    sizing (vCPU, memory, disks with their capacities, guest OS, firmware)."""
+    vm = job.vm
+    disks = ", ".join(f"{_gb(d.capacity_bytes):g} GB" for d in sorted(vm.disks, key=lambda d: d.index))
+    total = sum(d.capacity_bytes for d in vm.disks)
+    firmware = "UEFI" if vm.firmware.value.lower() == "efi" else "BIOS"
+    if vm.secure_boot:
+        firmware += " Secure Boot"
+    details = (f"{vm.num_cpu} vCPU, {vm.memory_mb / 1024:g} GB RAM, {len(vm.disks)} disk(s) {_gb(total):g} GB "
+               f"[{disks}], {len(vm.nics)} NIC(s), {vm.guest_full_name or vm.guest_id}, {firmware}")
+    tags = {
+        "vc-oci-job": job.id,
+        "vc-oci-source-vm": vm.name[:TAG_VALUE_MAX],
+        "vc-oci-source-moid": vm.moid,
+        "vc-oci-source-vm-details": details[:TAG_VALUE_MAX],
+    }
+    if job.vcenter_host:
+        tags["vc-oci-source-vcenter"] = job.vcenter_host[:TAG_VALUE_MAX]
+    if vm.host_name:
+        tags["vc-oci-source-esxi-host"] = vm.host_name[:TAG_VALUE_MAX]
+    return tags
+
+
+def _gb(n: int) -> float:
+    return round(n / 1024**3, 1)
 
 
 def _is_windows_job(job: Job) -> bool:

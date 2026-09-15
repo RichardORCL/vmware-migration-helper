@@ -167,7 +167,7 @@
     const terminal = TERMINAL.includes(job.phase);
     const sm = job.summary || {};
     const rows = [
-      ["Source VM", `${job.vm.name} (${job.vm.moid})`],
+      ["Source VM", `${job.vm.name} (${job.vm.moid})${job.vcenter_host ? " on " + job.vcenter_host : ""} - ${job.vm.num_cpu} vCPU, ${fmtBytes(job.vm.memory_mb * 1024 * 1024)} RAM, ${job.vm.disks.length} disk(s)`],
       ["Step", job.step || "-"],
       ["Disk download", job.nfc_host ? `${job.nfc_host}${job.target.nfc_direct_to_esxi ? " (ESXi host, direct)" : ""}${job.target.pipelined_decode ? ", pipelined decode/write" : ""}` : "-"],
       ["Instance", job.instance_id || "-"],

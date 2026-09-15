@@ -49,7 +49,7 @@ def make_target(**kw) -> OciTarget:
 
 def make_job(vm: VmSpec, target: OciTarget) -> Job:
     now = utcnow()
-    return Job(id="job0001", vm=vm, target=target, created_at=now, updated_at=now)
+    return Job(id="job0001", vm=vm, vcenter_host="vc.test:4443", target=target, created_at=now, updated_at=now)
 
 
 @pytest.fixture
@@ -107,6 +107,13 @@ def test_prepare_linux_two_disks(env):
     assert ld.create_vnic_details.hostname_label == "app-server-01"
     assert getattr(ld, "platform_config", None) is None  # no Secure Boot on the source -> plain launch
     assert schema["Compute.SecureBoot"].default_value is False
+    # provenance tags: job, source vCenter, VM name/moid and its sizing
+    tags = ld.freeform_tags
+    assert tags["vc-oci-job"] == job.id and tags["vc-oci-source-vm"] == "app-server-01"
+    assert tags["vc-oci-source-moid"] == "vm-42" and tags["vc-oci-source-vcenter"] == "vc.test:4443"
+    assert tags["vc-oci-source-vm-details"] == ("4 vCPU, 16 GB RAM, 2 disk(s) 140 GB [40 GB, 100 GB], 1 NIC(s), "
+                                                "Oracle Linux 8 (64-bit), UEFI")
+    assert all(len(v) <= 256 for v in tags.values())
 
     # the data volume was attached to the target while it still ran from the seed (OCI attaches data volumes
     # to running instances only) as read/write shareable, so it is in place for the guest's first boot

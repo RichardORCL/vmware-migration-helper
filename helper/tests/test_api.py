@@ -407,6 +407,11 @@ def test_full_migration_with_retry(env):
     target_atts = [a for a in fake.compute.vol_attachments.values()
                    if a.instance_id == job["instance_id"] and a.lifecycle_state == "ATTACHED"]
     assert len(target_atts) == 1
+    # the instance is tagged with where it came from: the vCenter of the session, the VM and its sizing
+    assert job["vcenter_host"] == "vc.test"
+    tags = fake.compute.launch_details[-1].freeform_tags
+    assert tags["vc-oci-source-vcenter"] == "vc.test" and tags["vc-oci-source-esxi-host"] == "esxi-01.test"
+    assert tags["vc-oci-source-vm-details"].startswith("4 vCPU, 8 GB RAM, 2 disk(s)"), tags
     # the helper wrote the raw disk content onto its "devices" (files under tmp): the boot volume shows up as
     # a plain /dev/sdX (no device path allowed), the data volume at its consistent path
     helper_atts = [a for a in fake.compute.vol_attachments.values() if a.instance_id == fake.identity.instance_id]

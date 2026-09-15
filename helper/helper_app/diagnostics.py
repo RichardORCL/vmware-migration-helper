@@ -81,7 +81,7 @@ def collect(job: Job, settings: Settings, ident: HelperIdentity, commit: str,
         f"  error: {job.error or '-'}",
         f"  source VM: {job.vm.name} ({job.vm.moid}) guest={job.vm.guest_id} firmware={job.vm.firmware} "
         f"cpu={job.vm.num_cpu} mem_mb={job.vm.memory_mb} disks={len(job.vm.disks)} "
-        f"esxi_host={job.vm.host_name or '-'}",
+        f"vcenter={job.vcenter_host or '-'} esxi_host={job.vm.host_name or '-'}",
         f"  nfc download: host={job.nfc_host or '-'} direct_to_esxi={job.target.nfc_direct_to_esxi} "
         f"pipelined_decode={job.target.pipelined_decode} chunk_bytes={settings.nfc_chunk_bytes} "
         f"pipeline_depth={settings.nfc_pipeline_depth}",

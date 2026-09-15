@@ -238,6 +238,7 @@ class Job(BaseModel):
     message: str = ""
     error: Optional[str] = None
     vm: VmSpec
+    vcenter_host: str = ""  # vCenter the VM was inspected on ("host" or "host:port"); tagged onto the instance
     target: OciTarget
     launch_options: Optional[LaunchOptionsSpec] = None
     seed_image_id: Optional[str] = None

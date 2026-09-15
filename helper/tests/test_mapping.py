@@ -45,7 +45,11 @@ def target(**kw) -> OciTarget:
         # the year shown by vCenter (guestFullName) wins over the guestId encoding
         ("windows9Server64Guest", "Microsoft Windows Server 2022 (64-bit)", "Windows", "Server 2022 Standard", "windows"),
         ("windows9Server64Guest", "Microsoft Windows Server 2016 (64-bit)", "Windows", "Server 2016 Standard", "windows"),
-        ("windows9_64Guest", "Microsoft Windows 10 (64-bit)", "Windows", "10 Enterprise", "windows"),
+        # client editions use OCI's catalog names; CreateImage rejects "10 Enterprise" and the like
+        ("windows9_64Guest", "Microsoft Windows 10 (64-bit)", "Windows", "Windows10", "windows"),
+        ("windows9_64Guest", "", "Windows", "Windows10", "windows"),
+        ("windows9_64Guest", "Microsoft Windows 11 (64-bit)", "Windows", "Windows11", "windows"),  # older vSphere
+        ("windows11_64Guest", "Microsoft Windows 11 (64-bit)", "Windows", "Windows11", "windows"),
         ("otherGuest64", "Other 5.x Linux (64-bit)", "Custom Linux", "5", "linux"),
         ("other3xLinux64Guest", "Other 3.x or later Linux (64-bit)", "Custom Linux", "3", "linux"),
     ],

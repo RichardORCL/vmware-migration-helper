@@ -76,6 +76,9 @@ class Env:
             "vm-202": make_vm(moid="vm-202", name="win-01", guest_id="windows2019srvNext_64Guest",
                               guest_full_name="Microsoft Windows Server 2022 (64-bit)", firmware="bios",
                               disks=((sizes[0], "lsilogic"),), nics=("e1000",), folder="DC1/Windows"),
+            "vm-303": make_vm(moid="vm-303", name="desk-01", guest_id="windows9_64Guest",
+                              guest_full_name="Microsoft Windows 11 (64-bit)", firmware="efi",
+                              disks=((sizes[0], "lsilogicsas"),), folder="DC1/Desktops"),
             "vm-on": make_vm(moid="vm-on", name="running", power_state="poweredOn"),
             "vm-tpl": make_vm(moid="vm-tpl", name="golden", template=True),
         }
@@ -337,7 +340,7 @@ def test_vm_list_and_inspect(env):
     c = env.client
     login(c)
     vms = c.get("/api/vms").json()
-    assert {v["moid"] for v in vms} == {"vm-101", "vm-on", "vm-202"}  # templates hidden
+    assert {v["moid"] for v in vms} == {"vm-101", "vm-on", "vm-202", "vm-303"}  # templates hidden
     web = next(v for v in vms if v["moid"] == "vm-101")
     assert web["folder"] == "DC1/Prod" and web["num_disks"] == 2 and web["power_state"] == "poweredOff"
     assert web["disk_capacity_bytes"] == 3 * MIB
@@ -501,6 +504,23 @@ def test_windows_requires_license_and_license_update(env):
     assert r.json()["licensing_configs"][0]["license_type"] == "OCI_PROVIDED"
     assert c.get(f"/api/jobs/{job['id']}").json()["target"]["windows_license_type"] == "OCI_PROVIDED"
     assert env.fake.compute.instances[job["instance_id"]].lifecycle_state == "STOPPED"
+
+
+def test_windows_client_edition_uses_catalog_version_and_byol(env):
+    """OCI only knows "Windows10"/"Windows11" for client editions (CreateImage rejects "10 Enterprise"), and
+    it has no licenses for them, so OCI_PROVIDED is refused up front."""
+    c = env.client
+    login(c)
+    r = c.post("/api/jobs", json={"vm_moid": "vm-303", "target": target(windows_license_type="OCI_PROVIDED")})
+    assert r.status_code == 400 and "Windows 10/11" in r.text, r.text
+    r = c.post("/api/jobs", json={"vm_moid": "vm-303",
+                                  "target": target(windows_license_type="BRING_YOUR_OWN_LICENSE")})
+    assert r.status_code == 202, r.text
+    job = wait_phase(c, r.json()["id"], "COMPLETED", "FAILED")
+    assert job["phase"] == "COMPLETED", job
+    img = env.fake.compute.images[job["seed_image_id"]]
+    assert (img.operating_system, img.operating_system_version) == ("Windows", "Windows11")
+    assert job["launch_options"]["firmware"] == "UEFI_64"
 
 
 def test_direct_esxi_download_option(env):

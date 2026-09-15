@@ -61,6 +61,10 @@
   const tpl = (id) => document.getElementById(id).content.cloneNode(true);
   const stopPolling = () => { if (activePoll) { activePoll(); activePoll = null; } };
   const isWindows = (vm) => /windows/i.test((vm.guest_id || "") + " " + (vm.guest_full_name || ""));
+  // client editions (mirrors mapping.map_guest_os): "Microsoft Windows 10/11 (64-bit)", or windows9/11/12_64Guest
+  // without a "Server" release in the display name
+  const isWindowsClient = (vm) => /windows\s+(10|11)\b/i.test(vm.guest_full_name || "")
+    || (!/server/i.test(vm.guest_full_name || "") && /^windows(9|1[12])_64/i.test(vm.guest_id || ""));
   const TERMINAL = ["COMPLETED", "FAILED", "CANCELLED"];
   const STEP_LABELS = { seed_image: "Seed image import", launch_instance: "Instance launch" };
 
@@ -369,6 +373,13 @@
     const isWin = isWindows(vm);
     document.getElementById("windows-fieldset").hidden = !isWin;
     document.getElementById("windows-driver-note").hidden = !isWin;
+    if (isWin && isWindowsClient(vm)) {
+      // OCI has no licenses for client editions; the API refuses OCI_PROVIDED for them
+      const ociLic = form.querySelector('input[name="windows_license_type"][value="OCI_PROVIDED"]');
+      ociLic.disabled = true; ociLic.checked = false;
+      form.querySelector('input[name="windows_license_type"][value="BRING_YOUR_OWN_LICENSE"]').checked = true;
+      document.getElementById("windows-license-hint").textContent = "Windows 10/11: OCI does not provide licenses for client editions, so the instance is registered as BYOL (check your Microsoft license terms for running the desktop OS in a cloud).";
+    }
     document.getElementById("esxi-host-hint").textContent = vm.host_name ? `(${vm.host_name})` : "";
     sel("nfc_direct_to_esxi").disabled = !vm.host_name;
     if (options.compartments.some((c) => c.id === options.helper_compartment_id)) sel("compartment_id").value = options.helper_compartment_id;

@@ -13,7 +13,8 @@ from helper_app import diagnostics
 from helper_app.api.routes_vms import inspect
 from helper_app.auth import require_session
 from helper_app.jobs.store import utcnow
-from helper_app.models import CreateJobRequest, DiskState, Job, JobPhase, LicenseUpdateRequest
+from helper_app.models import CreateJobRequest, DiskState, Job, JobPhase, LicenseUpdateRequest, WindowsLicenseType
+from helper_app.oci.mapping import WINDOWS_CLIENT_VERSIONS, map_guest_os
 from helper_app.sessions import UserSession
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"], dependencies=[Depends(require_session)])
@@ -39,6 +40,11 @@ async def create_job(body: CreateJobRequest, request: Request, session: UserSess
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "; ".join(inspection.problems))
     if inspection.vm.is_windows and body.target.windows_license_type is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "a Windows license type must be selected")
+    os_meta = map_guest_os(inspection.vm.guest_id, inspection.vm.guest_full_name)
+    if (os_meta.operating_system_version in WINDOWS_CLIENT_VERSIONS
+            and body.target.windows_license_type == WindowsLicenseType.OCI_PROVIDED):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "OCI does not provide licenses for Windows 10/11; select Bring your own license")
     helper_ad = st.clients.identity_info.availability_domain
     if body.target.availability_domain != helper_ad:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"the availability domain must be the helper's ({helper_ad})")

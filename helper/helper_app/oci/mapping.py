@@ -45,9 +45,13 @@ _WINDOWS_VERSIONS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"windows9srv|windows9server"), "Server 2016 Standard"),
     (re.compile(r"windows8srv|windows8server"), "Server 2012 R2 Standard"),
     (re.compile(r"windows7srv|windows7server"), "Server 2008 R2 Standard"),
-    (re.compile(r"windows1[12]_64|windows11|windows12"), "11 Enterprise"),
-    (re.compile(r"windows9_64|windows9"), "10 Enterprise"),
+    # client editions: OCI's CreateImage/UpdateImage only accept the catalog names "Windows10" / "Windows11"
+    # ("Invalid operatingSystemVersion: 10 Enterprise (The operating system version is not supported.)")
+    (re.compile(r"windows1[12]_64|windows11|windows12"), "Windows11"),
+    (re.compile(r"windows9_64|windows9"), "Windows10"),
 ]
+
+WINDOWS_CLIENT_VERSIONS = {"Windows10", "Windows11"}
 
 _LINUX_RULES: list[tuple[re.Pattern[str], str, str | None]] = [
     # pattern, operating_system, fixed version (None -> derive from the numeric suffix)
@@ -80,6 +84,11 @@ def map_guest_os(guest_id: str, guest_full_name: str = "") -> OsMetadata:
         if m:
             ver = f"Server {m.group(1)}{' R2' if m.group(2) else ''} Standard"
             return OsMetadata("Windows", ver, "windows")
+        # client editions likewise ("Microsoft Windows 11 (64-bit)"); vSphere still reports Windows 11 as
+        # windows9_64Guest on older releases, so the displayed name is the reliable source
+        m = re.search(r"windows\s+(10|11)\b", full)
+        if m:
+            return OsMetadata("Windows", f"Windows{m.group(1)}", "windows")
         for pattern, version in _WINDOWS_VERSIONS:
             if pattern.search(gid):
                 return OsMetadata("Windows", version, "windows")

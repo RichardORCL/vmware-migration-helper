@@ -281,8 +281,14 @@ class FakeCompute:
             raise service_error(400, "MissingParameter",
                                 "Missing launchOptions: launchOptions must be provided when using CUSTOM launchMode",
                                 "create_image")
-        iid = oid("image")
         src = details.image_source_details
+        # OCI: Windows versions come from its catalog; client editions are "Windows10"/"Windows11" only
+        if src.operating_system == "Windows" and not (
+                src.operating_system_version.startswith("Server ") or src.operating_system_version in ("Windows10", "Windows11")):
+            raise service_error(400, "InvalidParameter",
+                                f"Invalid operatingSystemVersion: {src.operating_system_version} (The operating "
+                                "system version is not supported.)", "create_image")
+        iid = oid("image")
         img = NS(id=iid, display_name=details.display_name, compartment_id=details.compartment_id,
                  lifecycle_state="IMPORTING", freeform_tags=dict(details.freeform_tags or {}),
                  launch_mode=details.launch_mode, operating_system=src.operating_system,

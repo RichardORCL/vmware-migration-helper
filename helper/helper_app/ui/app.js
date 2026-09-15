@@ -368,6 +368,7 @@
     sel("display_name").value = vm.name;
     const isWin = isWindows(vm);
     document.getElementById("windows-fieldset").hidden = !isWin;
+    document.getElementById("windows-driver-note").hidden = !isWin;
     document.getElementById("esxi-host-hint").textContent = vm.host_name ? `(${vm.host_name})` : "";
     sel("nfc_direct_to_esxi").disabled = !vm.host_name;
     if (options.compartments.some((c) => c.id === options.helper_compartment_id)) sel("compartment_id").value = options.helper_compartment_id;

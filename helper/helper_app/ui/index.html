@@ -79,6 +79,15 @@
           <a href="#/vms" class="muted">&larr; back to the list</a>
         </div>
         <div id="vm-details" class="kv"></div>
+        <div id="windows-driver-note" class="callout important" hidden>
+          <strong>Important: Windows guest.</strong> Install the
+          <a href="https://docs.oracle.com/en/operating-systems/oracle-linux/kvm-virtio/" target="_blank" rel="noopener">Oracle VirtIO Drivers for Microsoft Windows</a>
+          inside the VM <strong>before</strong> you migrate it. OCI presents the boot disk and the NIC as
+          paravirtualized (virtio) devices; without the drivers Windows does not find its boot disk
+          (<code>INACCESSIBLE_BOOT_DEVICE</code>) and has no network after the migration.
+          If the drivers cannot be installed up front, tick <em>Maximum compatibility</em> below (IDE disk + E1000 NIC)
+          and install them after the first boot in OCI.
+        </div>
         <ul id="vm-problems" class="problems"></ul>
         <ul id="vm-warnings" class="warnings"></ul>
       </section>

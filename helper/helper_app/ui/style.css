@@ -64,6 +64,9 @@ button.secondary, .button.secondary { background: #fff; color: var(--primary); }
 button.small, .button.small { padding: 3px 10px; font-size: 12px; }
 button:disabled, .button.disabled { opacity: .5; cursor: default; pointer-events: none; }
 .error { color: var(--danger); flex: 1; }
+.callout { margin: 10px 0 4px; padding: 10px 12px; border-radius: 3px; border: 1px solid var(--border); border-left-width: 4px; }
+.callout.important { background: #fff4d6; border-color: #e0c56a; border-left-color: var(--warn); color: #4a3a00; }
+.callout a { font-weight: 600; }
 .problems li { color: var(--danger); }
 .warnings li { color: var(--warn); }
 ul { margin: 6px 0 0; padding-left: 18px; }

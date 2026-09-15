@@ -38,6 +38,22 @@ sequenceDiagram
 Details: [docs/architecture.md](docs/architecture.md), [docs/os-mapping.md](docs/os-mapping.md),
 [docs/limitations.md](docs/limitations.md).
 
+## Supported source environments
+
+The helper talks plain vSphere API (pyVmomi `SmartConnect`) and NFC over HTTPS, so it works with either
+management endpoint. The server address is entered on the login page, so one helper can serve several
+of them.
+
+| Source | Log in as | Notes |
+| --- | --- | --- |
+| **vCenter Server** (7.0 or later recommended; 6.5/6.7 work) | a vCenter/SSO user, e.g. `user@vsphere.local` or a domain account | Full inventory (folders, all hosts/clusters). Disks are streamed through the vCenter proxy by default; *Download the disks directly from the ESXi host* (export page, *Advanced*) bypasses it when the helper can reach the hosts on 443. |
+| **Standalone ESXi host** (6.5 or later) | a local host user, typically `root` | Connect to the host's own address. Only the VMs registered on that host are listed (folder shows as `ha-datacenter/vm`); the export streams from the host itself. Also useful for hosts still managed by a vCenter that the helper cannot reach. |
+
+Requirements common to both: the account needs `VirtualMachine.Provisioning.ExportOVF` / *Allow disk
+access* on the VMs, the helper must reach the endpoint on 443 (or the port given at login), the VM must
+be powered off, and vSphere Hosted (Workstation/Fusion) or Hyper-V/KVM sources are **not** supported -
+see [docs/limitations.md](docs/limitations.md).
+
 ## Repository layout
 
 ```

@@ -56,6 +56,8 @@
       <div class="toolbar">
         <h2>Source VMs</h2>
         <input id="vm-filter" type="search" placeholder="Filter by name, folder or guest OS">
+        <select id="vm-folder" class="filter" title="VM folder"><option value="">All folders</option></select>
+        <select id="vm-os" class="filter" title="Guest OS"><option value="">All guest OSes</option></select>
         <label class="check"><input type="checkbox" id="vm-off-only"> powered off only</label>
         <button class="secondary small" id="vm-refresh">Refresh</button>
         <span id="vm-count" class="muted"></span>
@@ -67,6 +69,14 @@
         </thead>
         <tbody id="vm-rows"></tbody>
       </table>
+      <div id="vm-pager" class="pager" hidden>
+        <button class="secondary small" id="vm-prev">&lsaquo; Previous</button>
+        <span id="vm-page-info" class="muted"></span>
+        <button class="secondary small" id="vm-next">Next &rsaquo;</button>
+        <label class="muted">Per page
+          <select id="vm-page-size"><option>25</option><option selected>50</option><option>100</option><option>200</option></select>
+        </label>
+      </div>
     </section>
   </template>
 

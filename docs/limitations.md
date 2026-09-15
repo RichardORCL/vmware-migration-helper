@@ -3,7 +3,8 @@
 ## Known limitations
 
 - **Powered-off only.** The UI only offers *Migrate* for powered-off VMs; the helper re-checks the power state right before opening the NFC lease. Templates are hidden.
-- **One vCenter, one availability domain.** The helper is configured for a single vCenter (`HELPER_VCENTER_HOST`). Boot volumes cannot leave their AD, so target instances are created in the helper's AD. Deploy one helper per vCenter/AD pair if needed.
+- **Sources: vCenter Server or a standalone ESXi host** (see the README). `HELPER_VCENTER_HOST` is only the default pre-filled on the login page; any reachable vCenter or ESXi endpoint can be entered there. Other hypervisors (Workstation/Fusion, Hyper-V, KVM) are not supported.
+- **One availability domain.** Boot volumes cannot leave their AD, so target instances are created in the helper's AD. Deploy one helper per AD if needed.
 - **Guest drivers.** The disk content is copied verbatim. Linux guests need virtio drivers (in-tree since kernel 2.6.25; check the initramfs includes `virtio_blk`/`virtio_scsi`/`virtio_net`). Windows guests need the [Oracle VirtIO Drivers for Microsoft Windows](https://docs.oracle.com/en/operating-systems/oracle-linux/kvm-virtio/) installed before the export (the export page shows this as an *Important* note for Windows VMs), or use the *Maximum compatibility* preset (IDE + E1000) and install the drivers afterwards.
 - **Secure Boot** on the source (`efiSecureBootEnabled`) is matched: the instance is launched as a *shielded instance* from a seed image whose capability schema declares `Compute.SecureBoot`. On VM shapes OCI only offers Secure Boot together with Measured Boot and a vTPM, so all three are enabled (a Windows guest therefore gets a vTPM it may not have had on vSphere; on bare metal, Linux gets Secure Boot alone). This needs an x86 shape (AMD E-series, Intel Standard3/Optimized3, or bare metal); Ampere A1/A2 shapes are refused up front. Shielded instances cannot be live-migrated by OCI. The guest must boot through a boot loader signed for the Microsoft UEFI CA (shim-based Linux distributions, Windows); a guest that booted with custom Secure Boot keys on vSphere will not start in OCI.
 - **Snapshots** are consolidated by the export (the current disk state is copied); snapshot history is not migrated.
@@ -11,11 +12,11 @@
 - **Retries restart a disk from the beginning** because NFC downloads cannot be resumed; progress of already copied disks is kept. A job that fails *after* all disks were copied (attach or start rejected by OCI) offers **Retry finalize** in the job view, which re-runs only the attach/start step against the existing volumes.
 - **Windows targets get no consistent device paths** (`/dev/oracleoci/oraclevdX` is a Linux feature; OCI rejects the attribute for Windows instances). Data disks show up in Windows in attachment order.
 - **Data volumes stay attached as *read/write shareable*.** OCI only attaches data volumes to a running instance, so they are attached while the target still runs from the seed image and the helper takes a second, shareable attachment for the copy; the guest then boots with every disk present. The target's attachments keep the shareable flag afterwards (harmless as long as nothing else attaches the volume; detach and re-attach as plain read/write if you want the guard back). With *Maximum compatibility* (emulated attachments, which cannot be shared) the target is started first and the data disks are hot-plugged; with *start after migration* off it is soft-stopped again afterwards.
-- **Concurrency** is bounded by the helper's 32 attachment slots (`HELPER_MAX_CONCURRENT_JOBS` defaults to 2).
+- **Concurrency** is bounded by the helper's 32 attachment slots (`HELPER_MAX_CONCURRENT_JOBS` defaults to 2, adjustable up to 16 on the *Setup* page; further jobs queue).
 - **Helper restarts abort running jobs.** The export runs on the in-memory vCenter session of the user who started it; after a service restart such jobs are marked `FAILED` and must be cleaned up and restarted.
 - **Seed image import time.** The first job for a new firmware/OS combination waits for a custom image import (minutes). Later jobs reuse the image.
 - **Windows licensing** is honoured because the seed image is registered as Windows; OCI applies its own eligibility rules for `OCI_PROVIDED`.
-- **Session idle timeout** (`HELPER_SESSION_TTL_S`, 8 h) logs the browser out, but never interrupts a running migration.
+- **Session idle timeout** (`HELPER_SESSION_TTL_S`, 8 h, adjustable on the *Setup* page) logs the browser out, but never interrupts a running migration.
 
 ## Troubleshooting
 

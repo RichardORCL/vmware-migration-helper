@@ -30,6 +30,10 @@ h2 { font-size: 15px; margin: 0 0 8px; font-weight: 600; }
 .toolbar { display: flex; gap: 12px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
 .toolbar h2 { margin: 0; flex: 0 0 auto; }
 .toolbar input[type=search] { flex: 1; min-width: 200px; padding: 5px 8px; border: 1px solid var(--border); border-radius: 3px; font: inherit; }
+.toolbar select.filter { max-width: 260px; padding: 5px 6px; border: 1px solid var(--border); border-radius: 3px; font: inherit; background: #fff; }
+.pager { display: flex; gap: 10px; align-items: center; justify-content: flex-end; margin-top: 10px; flex-wrap: wrap; }
+.pager label { display: flex; gap: 6px; align-items: center; font-size: 12px; }
+.pager select { padding: 3px 4px; border: 1px solid var(--border); border-radius: 3px; font: inherit; }
 .export { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .export #job-card { grid-column: 1 / -1; }
 @media (max-width: 900px) { .export { grid-template-columns: 1fr; } }

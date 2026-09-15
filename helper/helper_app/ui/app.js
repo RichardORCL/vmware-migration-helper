@@ -274,18 +274,48 @@
     const rows = document.getElementById("vm-rows");
     const filter = document.getElementById("vm-filter");
     const offOnly = document.getElementById("vm-off-only");
+    const folderSel = document.getElementById("vm-folder");
+    const osSel = document.getElementById("vm-os");
     const count = document.getElementById("vm-count");
     const err = document.getElementById("vm-error");
+    const pager = document.getElementById("vm-pager");
+    const pageInfo = document.getElementById("vm-page-info");
+    const prevBtn = document.getElementById("vm-prev"), nextBtn = document.getElementById("vm-next");
+    const pageSizeSel = document.getElementById("vm-page-size");
     let vms = [];
+    let page = 0;
+    const pageSize = () => Number(pageSizeSel.value) || 50;
+    const osOf = (vm) => vm.guest_full_name || vm.guest_id || "(unknown)";
+
+    // folder / guest OS dropdowns are built from the inventory; the current choice survives a refresh
+    const fillFilters = () => {
+      const fill = (sel, values, all) => {
+        const previous = sel.value;
+        sel.innerHTML = "";
+        sel.append(el("option", { value: "" }, all));
+        for (const v of values) sel.append(el("option", { value: v }, v));
+        sel.value = values.includes(previous) ? previous : "";
+      };
+      const uniq = (list) => [...new Set(list)].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+      fill(folderSel, uniq(vms.map((vm) => vm.folder || "(no folder)")), `All folders (${new Set(vms.map((vm) => vm.folder || "(no folder)")).size})`);
+      fill(osSel, uniq(vms.map(osOf)), `All guest OSes (${new Set(vms.map(osOf)).size})`);
+    };
+
+    const matches = (vm) => {
+      if (offOnly.checked && vm.power_state !== "poweredOff") return false;
+      if (folderSel.value && (vm.folder || "(no folder)") !== folderSel.value) return false;
+      if (osSel.value && osOf(vm) !== osSel.value) return false;
+      const q = filter.value.trim().toLowerCase();
+      return !q || `${vm.name} ${vm.folder} ${vm.guest_full_name}`.toLowerCase().includes(q);
+    };
 
     const render = () => {
-      const q = filter.value.trim().toLowerCase();
+      const filtered = vms.filter(matches);
+      const size = pageSize(), pages = Math.max(1, Math.ceil(filtered.length / size));
+      page = Math.min(page, pages - 1);
+      const start = page * size, visible = filtered.slice(start, start + size);
       rows.innerHTML = "";
-      let shown = 0;
-      for (const vm of vms) {
-        if (offOnly.checked && vm.power_state !== "poweredOff") continue;
-        if (q && !`${vm.name} ${vm.folder} ${vm.guest_full_name}`.toLowerCase().includes(q)) continue;
-        shown++;
+      for (const vm of visible) {
         const job = state.jobsByVm[vm.moid];
         const off = vm.power_state === "poweredOff";
         const active = job && !TERMINAL.includes(job.phase);
@@ -301,8 +331,15 @@
             ? el("a", { href: `#/jobs/${job.id}`, class: "button secondary small" }, "View job")
             : el("a", { href: `#/export/${vm.moid}`, class: "button primary small" + (off ? "" : " disabled"), title: off ? "" : "Power off the VM first" }, "Migrate"))));
       }
-      count.textContent = `${shown} of ${vms.length} virtual machines`;
+      if (!visible.length) rows.append(el("tr", {}, el("td", { colspan: 8, class: "muted" }, vms.length ? "No virtual machines match the filters." : "No virtual machines found in this inventory.")));
+      count.textContent = filtered.length === vms.length ? `${vms.length} virtual machines` : `${filtered.length} of ${vms.length} virtual machines`;
+      // pagination: only when the filtered list does not fit on one page
+      pager.hidden = filtered.length <= size && page === 0;
+      pageInfo.textContent = filtered.length ? `${start + 1}-${Math.min(start + size, filtered.length)} of ${filtered.length} (page ${page + 1} of ${pages})` : "";
+      prevBtn.disabled = page === 0;
+      nextBtn.disabled = page >= pages - 1;
     };
+    const resetPage = () => { page = 0; render(); };
 
     const load = async (refresh) => {
       err.textContent = ""; count.textContent = "Loading inventory...";
@@ -311,11 +348,17 @@
         vms = list;
         state.jobsByVm = {};
         for (const j of jobs) if (!state.jobsByVm[j.vm.moid]) state.jobsByVm[j.vm.moid] = j; // jobs are newest first
+        fillFilters();
         render();
       } catch (e) { if (e.status !== 401) err.textContent = e.message; count.textContent = ""; }
     };
-    filter.addEventListener("input", render);
-    offOnly.addEventListener("change", render);
+    filter.addEventListener("input", resetPage);
+    offOnly.addEventListener("change", resetPage);
+    folderSel.addEventListener("change", resetPage);
+    osSel.addEventListener("change", resetPage);
+    pageSizeSel.addEventListener("change", resetPage);
+    prevBtn.addEventListener("click", () => { page = Math.max(0, page - 1); render(); rows.closest("table").scrollIntoView({ block: "start" }); });
+    nextBtn.addEventListener("click", () => { page += 1; render(); rows.closest("table").scrollIntoView({ block: "start" }); });
     document.getElementById("vm-refresh").addEventListener("click", () => load(true));
     await load(false);
   }

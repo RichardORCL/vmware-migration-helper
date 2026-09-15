@@ -468,6 +468,20 @@ def test_full_migration_with_retry(env):
     fake = env.fake
     inst = fake.compute.instances[job["instance_id"]]
     assert inst.lifecycle_state == "RUNNING"
+    # the job view asks OCI for the live state of the target instance (name + lifecycle state)
+    assert job["instance_display_name"] == "web-01"
+    st = c.get(f"/api/jobs/{job_id}/instance")
+    assert st.status_code == 200, st.text
+    assert st.json()["lifecycle_state"] == "RUNNING" and st.json()["display_name"] == "web-01"
+    assert st.json()["instance_id"] == job["instance_id"] and st.json()["checked_at"]
+    fake.compute.instance_action(job["instance_id"], "STOP")  # someone stops it in the console
+    assert c.get(f"/api/jobs/{job_id}/instance").json()["lifecycle_state"] == "STOPPED"
+    fake.compute.instance_action(job["instance_id"], "START")
+    assert c.get(f"/api/jobs/{job_id}/instance").json()["lifecycle_state"] == "RUNNING"
+    inst_404 = service_error(404, "NotAuthorizedOrNotFound", "instance not found", "GetInstance")
+    fake.compute.get_instance = lambda iid, _e=inst_404: (_ for _ in ()).throw(_e)
+    assert c.get(f"/api/jobs/{job_id}/instance").json()["lifecycle_state"] == "NOT_FOUND"
+    del fake.compute.get_instance
     target_atts = [a for a in fake.compute.vol_attachments.values()
                    if a.instance_id == job["instance_id"] and a.lifecycle_state == "ATTACHED"]
     assert len(target_atts) == 1

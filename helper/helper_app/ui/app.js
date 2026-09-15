@@ -207,7 +207,10 @@
       ["Step", job.step || "-"],
       ["Guest OS", `${job.vm.guest_full_name || job.vm.guest_id}${job.target.operating_system_version ? ` - release ${job.target.operating_system_version} (selected)` : ""}`],
       ["Disk download", job.nfc_host ? `${job.nfc_host}${job.target.nfc_direct_to_esxi ? " (ESXi host, direct)" : ""}${job.target.pipelined_decode ? ", pipelined decode/write" : ""}` : "-"],
+      ["Target instance", job.instance_id ? (job.instance_display_name || job.target.display_name || job.vm.name)
+        : `${job.target.display_name || job.vm.name} (not launched yet)`],
       ["Instance", ocidLink("instances", job.instance_id)],
+      ["State in OCI", ociStateEl(root, job)],
       ["Shape", `${job.target.shape || "(helper default)"}${job.target.ocpus || job.target.memory_gb ? ` - ${job.target.ocpus ?? "auto"} OCPU / ${job.target.memory_gb ?? "auto"} GB (custom)` : " - sized from the source VM"}`],
       ["Seed image", job.seed_image_id || "-"],
       ["Launch options", job.launch_options ? `${job.launch_options.firmware}${job.launch_options.secure_boot ? " + Secure Boot (shielded instance, with Measured Boot + vTPM on VM shapes)" : ""}, boot ${job.launch_options.boot_volume_type}, nic ${job.launch_options.network_type}` : "-"],
@@ -281,6 +284,45 @@
     }
     if (opts.onTerminal && terminal) opts.onTerminal(job);
     return job.phase === "COMPLETED" || job.phase === "CANCELLED";
+  }
+
+  // Live lifecycle state of the target instance, asked from OCI through the helper.  The job record is
+  // re-rendered every few seconds; the state is cached on the job element and refreshed at most every
+  // OCI_STATE_TTL ms (and keeps refreshing for finished jobs while their page stays open).
+  const OCI_STATE_TTL = 15000;
+  const OCI_STATE_CLASS = { RUNNING: "ok", PROVISIONING: "", STARTING: "", STOPPING: "warn", STOPPED: "warn",
+    CREATING_IMAGE: "", MOVING: "", TERMINATING: "bad", TERMINATED: "bad", NOT_FOUND: "bad" };
+  function ociStateEl(root, job) {
+    const span = el("span", { "data-oci-state": "" });
+    if (!job.instance_id) { span.textContent = "-"; return span; }
+    const c = root._ociState;
+    if (c && c.id === job.instance_id) fillOciState(span, c);
+    else span.textContent = "checking...";
+    if (!c || c.id !== job.instance_id || Date.now() - c.at > OCI_STATE_TTL) refreshOciState(root, job);
+    return span;
+  }
+  function fillOciState(span, c) {
+    span.innerHTML = "";
+    if (c.error) { span.append(el("span", { class: "badge bad" }, "unknown"), ` ${c.error}`); return; }
+    const cls = OCI_STATE_CLASS[c.state];
+    span.append(el("span", { class: "badge" + (cls ? " " + cls : "") }, c.state),
+      el("span", { class: "muted" }, ` checked ${new Date(c.at).toLocaleTimeString()}`));
+  }
+  async function refreshOciState(root, job) {
+    if (root._ociPending) return;
+    root._ociPending = true;
+    const cache = { id: job.instance_id, at: Date.now() };
+    try {
+      const st = await api("GET", `/jobs/${job.id}/instance`);
+      cache.state = st.lifecycle_state; cache.at = new Date(st.checked_at).getTime() || cache.at;
+    } catch (e) { if (e.status === 401) return; cache.error = e.message; }
+    finally { root._ociPending = false; }
+    root._ociState = cache;
+    root.querySelectorAll("[data-oci-state]").forEach((s) => fillOciState(s, cache));
+    if (TERMINAL.includes(job.phase)) {  // job polling stopped; keep the instance state alive on its own
+      clearTimeout(root._ociTimer);
+      root._ociTimer = setTimeout(() => { if (root.isConnected) refreshOciState(root, job); }, OCI_STATE_TTL);
+    }
   }
 
   function pollJob(jobId, container, opts) {

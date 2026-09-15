@@ -13,7 +13,16 @@ from helper_app import diagnostics
 from helper_app.api.routes_vms import inspect
 from helper_app.auth import require_session
 from helper_app.jobs.store import utcnow
-from helper_app.models import CreateJobRequest, DiskState, Job, JobPhase, LicenseUpdateRequest, WindowsLicenseType
+from helper_app.models import (
+    CreateJobRequest,
+    DiskState,
+    InstanceStatus,
+    Job,
+    JobPhase,
+    LicenseUpdateRequest,
+    WindowsLicenseType,
+)
+from helper_app.oci.clients import describe_error
 from helper_app.oci.mapping import (
     WINDOWS_CLIENT_VERSIONS,
     is_arm_shape,
@@ -91,6 +100,24 @@ async def create_job(body: CreateJobRequest, request: Request, session: UserSess
 @router.get("/{job_id}", response_model=Job)
 def get_job(job_id: str, request: Request):
     return _get_job(request, job_id)
+
+
+@router.get("/{job_id}/instance", response_model=InstanceStatus)
+async def job_instance(job_id: str, request: Request):
+    """Current OCI lifecycle state of the target instance (the job record only knows what the helper did)."""
+    st = request.app.state
+    job = _get_job(request, job_id)
+    if not job.instance_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no OCI instance associated with this job yet")
+    try:
+        inst = (await asyncio.to_thread(st.clients.compute.get_instance, job.instance_id)).data
+    except Exception as exc:  # noqa: BLE001
+        if getattr(exc, "status", None) == 404:  # terminated instances disappear from the API after a while
+            return InstanceStatus(instance_id=job.instance_id, display_name=job.instance_display_name,
+                                  lifecycle_state="NOT_FOUND", checked_at=utcnow())
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, describe_error(exc))
+    return InstanceStatus(instance_id=job.instance_id, display_name=inst.display_name or job.instance_display_name,
+                          lifecycle_state=inst.lifecycle_state, checked_at=utcnow())
 
 
 @router.get("/{job_id}/diagnostics", response_class=PlainTextResponse)

@@ -311,6 +311,15 @@ class LicenseUpdateRequest(BaseModel):
     license_type: WindowsLicenseType
 
 
+class InstanceStatus(BaseModel):
+    """Live state of the job's target instance as OCI reports it (GET /api/jobs/{id}/instance)."""
+
+    instance_id: str
+    display_name: Optional[str] = None
+    lifecycle_state: str  # OCI lifecycle state, or NOT_FOUND when OCI no longer knows the OCID
+    checked_at: datetime
+
+
 # --------------------------------------------------------------------------- #
 # Authentication
 # --------------------------------------------------------------------------- #

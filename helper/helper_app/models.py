@@ -49,6 +49,8 @@ class NicSpec(BaseModel):
     adapter_type: str = Field(description="vmxnet3 | vmxnet2 | e1000 | e1000e | pcnet32 | unknown")
     mac_address: str = ""
     network: str = ""
+    ip_addresses: list[str] = Field(default_factory=list,
+                                    description="Last addresses VMware Tools reported for this adapter, if known")
 
 
 class VmSpec(BaseModel):

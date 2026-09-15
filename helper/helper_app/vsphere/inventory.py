@@ -67,6 +67,48 @@ def _network_name(nic) -> str:
 _CONTROLLER_ORDER = {"ide": 0, "buslogic": 1, "lsilogic": 1, "lsilogicsas": 1, "pvscsi": 1, "sata": 2, "nvme": 3}
 
 
+def _is_link_local(ip: str) -> bool:
+    low = ip.lower()
+    return low.startswith("169.254.") or low.startswith("fe80:")
+
+
+def guest_ip_addresses(vm) -> dict[int, list[str]]:
+    """Addresses VMware Tools reported per adapter, keyed by the adapter's device key (``guest.net`` /
+    GuestNicInfo).  vCenter keeps the last report of a powered-off VM, so this usually works for the
+    VMs we migrate; an empty dict means nothing is known.  Link-local addresses are dropped, IPv4 first."""
+    try:
+        guest = vm.guest
+        entries = list(getattr(guest, "net", None) or [])
+    except Exception:  # noqa: BLE001 - property fetch may fail on a stale object
+        return {}
+    by_mac: dict[str, int] = {}
+    try:
+        for dev in vm.config.hardware.device:
+            mac = getattr(dev, "macAddress", None)
+            if mac:
+                by_mac[str(mac).lower()] = int(dev.key)
+    except Exception:  # noqa: BLE001
+        pass
+    result: dict[int, list[str]] = {}
+    for entry in entries:
+        key = getattr(entry, "deviceConfigId", None)
+        if key is None or int(key) < 0:
+            key = by_mac.get(str(getattr(entry, "macAddress", "") or "").lower())
+        if key is None:
+            continue
+        ips = [str(ip) for ip in (getattr(entry, "ipAddress", None) or []) if ip]
+        ip_config = getattr(entry, "ipConfig", None)
+        for addr in (getattr(ip_config, "ipAddress", None) or []):  # newer Tools report here
+            ip = str(getattr(addr, "ipAddress", "") or "")
+            if ip and ip not in ips:
+                ips.append(ip)
+        ips = [ip for ip in ips if not _is_link_local(ip)]
+        ips.sort(key=lambda ip: (":" in ip, ip))  # IPv4 before IPv6, stable otherwise
+        if ips:
+            result.setdefault(int(key), []).extend(ip for ip in ips if ip not in result.get(int(key), []))
+    return result
+
+
 def esxi_host_name(vm) -> str:
     """Name of the ESXi host the VM is registered on (``vm.runtime.host.name``), '' when unknown."""
     try:
@@ -117,9 +159,11 @@ def vm_spec_from_vm(vm) -> VmSpec:
         spec.index = idx
         disk_specs.append(spec)
 
+    guest_ips = guest_ip_addresses(vm)
     nics = [
         NicSpec(label=dev.deviceInfo.label if dev.deviceInfo else "nic", adapter_type=_nic_type(dev),
-                mac_address=getattr(dev, "macAddress", "") or "", network=_network_name(dev))
+                mac_address=getattr(dev, "macAddress", "") or "", network=_network_name(dev),
+                ip_addresses=guest_ips.get(int(dev.key), []))
         for dev in hardware.device
         if isinstance(dev, d.VirtualEthernetCard)
     ]

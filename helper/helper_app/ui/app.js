@@ -449,7 +449,11 @@
       ["CPU / memory", `${vm.num_cpu} vCPU / ${fmtBytes(vm.memory_mb * 1024 * 1024)}`],
       ["Firmware", vm.firmware.toUpperCase() + (vm.secure_boot ? " (secure boot)" : "")],
       ["Disks", vm.disks.map((d) => `${d.label}: ${fmtBytes(d.capacity_bytes)} on ${d.controller_type}`).join("; ")],
-      ["Network", vm.nics.map((n) => `${n.label}: ${n.adapter_type}`).join("; ") || "-"],
+      // one line per adapter: type, port group and the last addresses VMware Tools reported (when vCenter knows them)
+      ["Network", vm.nics.length ? el("span", {}, ...vm.nics.map((n) => el("div", {},
+        `${n.label}: ${n.adapter_type}${n.network ? " on " + n.network : ""}`,
+        n.ip_addresses && n.ip_addresses.length ? el("span", {}, " - ", el("strong", {}, n.ip_addresses.join(", ")))
+          : el("span", { class: "muted" }, " - IP address unknown")))) : "-"],
     ]);
     const problems = document.getElementById("vm-problems");
     for (const p of inspection.problems) problems.append(el("li", {}, p));

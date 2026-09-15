@@ -21,8 +21,30 @@ def test_vm_spec_from_vm_basic():
     assert spec.disks[1].nfc_key_hint == "ParaVirtualSCSIController0:1"
     assert spec.disks[0].thin_provisioned and spec.disks[0].backing_file.endswith("web-01.vmdk")
     assert spec.nics[0].adapter_type == "vmxnet3" and spec.nics[0].network == "VM Network"
+    assert spec.nics[0].ip_addresses == []  # nothing reported by VMware Tools
     assert spec.host_name == "esxi-01.test"
     assert preflight(spec) == []
+
+
+def test_vm_spec_guest_ip_addresses():
+    from types import SimpleNamespace as NS
+
+    from helper_app.vsphere.inventory import guest_ip_addresses
+
+    vm = make_vm(nics=("vmxnet3", "e1000"),
+                 ips={0: ["fe80::1", "2001:db8::10", "10.1.2.3", "169.254.1.1"], 1: ["192.168.0.9"]})
+    spec = vm_spec_from_vm(vm)
+    # link-local dropped, IPv4 first, per adapter
+    assert spec.nics[0].ip_addresses == ["10.1.2.3", "2001:db8::10"]
+    assert spec.nics[1].ip_addresses == ["192.168.0.9"]
+    # older Tools do not set deviceConfigId: the entry is matched by MAC address instead
+    vm.guest.net[0].deviceConfigId = -1
+    assert guest_ip_addresses(vm)[4000] == ["10.1.2.3", "2001:db8::10"]
+    # no guest info at all (Tools never ran, or the property is not readable) -> unknown, no error
+    vm.guest = NS(net=None)
+    assert all(n.ip_addresses == [] for n in vm_spec_from_vm(vm).nics)
+    del vm.guest
+    assert all(n.ip_addresses == [] for n in vm_spec_from_vm(vm).nics)
 
 
 def test_vm_spec_without_host():

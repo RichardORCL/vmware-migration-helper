@@ -30,6 +30,7 @@ def make_vm(
     folder="DC1/Prod",
     template=False,
     host="esxi-01.test",
+    ips=None,  # {nic index: [ip, ...]} as VMware Tools last reported it (guest.net); None = nothing known
 ):
     d = vim.vm.device
     devices = []
@@ -85,7 +86,13 @@ def make_vm(
     config = NS(name=name, instanceUuid="5023-abcd", guestId=guest_id, guestFullName=guest_full_name,
                 firmware=firmware, hardware=hardware, bootOptions=boot_options, template=template)
     runtime = NS(powerState=power_state, host=NS(name=host) if host else None)
-    vm = NS(_moId=moid, config=config, runtime=runtime, snapshot=snapshot, name=name, folder_path=folder)
+    net = []
+    for i, addrs in (ips or {}).items():
+        # like GuestNicInfo: the legacy ipAddress list plus the newer ipConfig entries (same addresses)
+        net.append(NS(deviceConfigId=4000 + i, macAddress=f"00:50:56:00:00:{i:02x}", ipAddress=list(addrs),
+                      ipConfig=NS(ipAddress=[NS(ipAddress=a, prefixLength=24) for a in addrs])))
+    guest = NS(net=net, ipAddress=(net[0].ipAddress[0] if net and net[0].ipAddress else None))
+    vm = NS(_moId=moid, config=config, runtime=runtime, snapshot=snapshot, name=name, folder_path=folder, guest=guest)
     return vm
 
 

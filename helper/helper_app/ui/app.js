@@ -101,14 +101,23 @@
       if (configured && !recent.includes(configured)) datalist.append(el("option", { value: configured }));
       form.elements.vcenter.value = recent[0] || configured;
     } catch (e) { err.textContent = e.message; }
-    if (form.elements.vcenter.value) form.elements.username.focus();
+    // the last user name that logged in to the selected vCenter is remembered in this browser
+    const prefillUser = () => {
+      const u = lastUsername(form.elements.vcenter.value.trim());
+      if (u && !form.elements.username.value) form.elements.username.value = u;
+    };
+    prefillUser();
+    form.elements.vcenter.addEventListener("change", () => { form.elements.username.value = ""; prefillUser(); });
+    if (form.elements.vcenter.value) (form.elements.username.value ? form.elements.password : form.elements.username).focus();
     form.addEventListener("submit", async (ev) => {
       ev.preventDefault();
       err.textContent = ""; btn.disabled = true;
       const vcenter = form.elements.vcenter.value.trim();
+      const username = form.elements.username.value.trim();
       try {
-        const me = await api("POST", "/auth/login", { username: form.elements.username.value, password: form.elements.password.value, vcenter_host: vcenter });
+        const me = await api("POST", "/auth/login", { username, password: form.elements.password.value, vcenter_host: vcenter });
         rememberVcenter(vcenter);
+        rememberUsername(vcenter, username);
         setUser(me);
         route();
       } catch (e) { err.textContent = e.message; }
@@ -123,6 +132,20 @@
     if (!host) return;
     const list = [host, ...recentVcenters().filter((h) => h !== host)].slice(0, 8);
     try { localStorage.setItem("vcoci.recentVcenters", JSON.stringify(list)); } catch (_) { /* private mode */ }
+  }
+  // user names only (never passwords), keyed by vCenter host; "" holds the last one used anywhere
+  function lastUsernames() {
+    try { return JSON.parse(localStorage.getItem("vcoci.lastUsernames") || "{}") || {}; } catch (_) { return {}; }
+  }
+  function lastUsername(host) {
+    const map = lastUsernames();
+    return map[host] || map[""] || "";
+  }
+  function rememberUsername(host, username) {
+    if (!username) return;
+    const map = lastUsernames();
+    map[host] = username; map[""] = username;
+    try { localStorage.setItem("vcoci.lastUsernames", JSON.stringify(map)); } catch (_) { /* private mode */ }
   }
 
   document.getElementById("logout-btn").addEventListener("click", async () => {

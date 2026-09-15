@@ -195,6 +195,10 @@ class _Session:
         if any(n.fstype == "LVM2_member" for n in nodes):
             self.activate_lvm()
             nodes = self.lsblk()
+            nodes = self.add_logical_volumes(nodes)
+        nodes = self.probe_unknown_fstypes(nodes)
+        listed = ", ".join(f"{n.path} ({n.type}, {n.fstype or 'no fs'})" for n in nodes if n.type != "disk")
+        self.note(f"block devices: {listed or 'none'}")
 
         root_node = self.find_root(nodes)
         self.note(f"guest root file system on {root_node.path} ({root_node.fstype})")
@@ -266,6 +270,33 @@ class _Session:
         self.sh(["udevadm", "settle"], timeout_s=30, ok=False)
         self.note(f"activated guest volume group(s) {', '.join(guest_vgs)}")
 
+    def add_logical_volumes(self, nodes: list[BlockNode]) -> list[BlockNode]:
+        """lsblk may not show the LVs we just activated (or show them without a file system type when udev
+        has not probed them yet); ask LVM itself for their device-mapper paths."""
+        r = self.sh(["lvs", "--config", self.lvm_config, "--noheadings", "-o", "lv_dm_path", *self.vgs], ok=False)
+        if r.returncode != 0:
+            self.note(f"lvs failed ({_tail(r.stderr)}); relying on lsblk only")
+            return nodes
+        known = {n.path for n in nodes}
+        for line in r.stdout.splitlines():
+            path = line.strip()
+            if path and path not in known:
+                nodes.append(BlockNode(path=path, type="lvm", fstype="", uuid="", label=""))
+        return nodes
+
+    def probe_unknown_fstypes(self, nodes: list[BlockNode]) -> list[BlockNode]:
+        """Fill in FSTYPE/UUID/LABEL with a direct blkid probe where lsblk (udev cache) has nothing."""
+        out = []
+        for n in nodes:
+            if n.type in ("part", "lvm") and not n.fstype:
+                r = self.sh(["blkid", "-p", "-o", "export", n.path], ok=False)
+                if r.returncode == 0:
+                    kv = dict(ln.split("=", 1) for ln in r.stdout.splitlines() if "=" in ln)
+                    n = n._replace(fstype=kv.get("TYPE", ""), uuid=kv.get("UUID", n.uuid),
+                                   label=kv.get("LABEL", n.label))
+            out.append(n)
+        return out
+
     def find_root(self, nodes: list[BlockNode]) -> BlockNode:
         candidates = [n for n in nodes if n.fstype in ROOT_FS_TYPES and n.type in ("part", "lvm", "disk")]
         # LVs first: when both exist, the plain partition is usually /boot
@@ -277,10 +308,14 @@ class _Session:
             except Fail as exc:
                 self.note(f"cannot mount {n.path}: {exc}")
                 continue
-            if (self.mnt / "etc" / "fstab").exists() and (
-                    (self.mnt / "lib" / "modules").is_dir() or (self.mnt / "usr" / "lib" / "modules").is_dir()):
+            has_fstab = (self.mnt / "etc" / "fstab").exists()
+            has_modules = (self.mnt / "lib" / "modules").is_dir() or (self.mnt / "usr" / "lib" / "modules").is_dir()
+            if has_fstab and has_modules:
                 self.sh(["mount", "-o", "remount,rw", str(self.mnt)])
                 return n
+            top = ", ".join(sorted(p.name for p in self.mnt.iterdir())[:12])
+            self.note(f"{n.path} is not the root fs (fstab={'yes' if has_fstab else 'no'}, "
+                      f"lib/modules={'yes' if has_modules else 'no'}; contains: {top or 'nothing'})")
             self.umount(self.mnt)
         if any(n.fstype == "crypto_LUKS" for n in nodes):
             raise Skip("the guest root file system is LUKS encrypted; rebuild the initramfs inside the guest")

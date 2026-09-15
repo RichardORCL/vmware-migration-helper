@@ -25,8 +25,11 @@ class FakeShell:
     so the fixer's file checks work on a real (temporary) directory."""
 
     def __init__(self, layout: str = "lvm", boot_fstab="UUID=boot-uuid", virtio_in=(), tools_running=True,
-                 lvm_foreign_vgs=("ocivolume",), dracut=True, dracut_rc=0, fail_mount=(), old_dracut=False):
+                 lvm_foreign_vgs=("ocivolume",), dracut=True, dracut_rc=0, fail_mount=(), old_dracut=False,
+                 udev_stale=False, lsblk_hides_lvs=False):
         self.layout = layout
+        self.udev_stale = udev_stale  # lsblk shows the LVs but without FSTYPE (udev has not probed them)
+        self.lsblk_hides_lvs = lsblk_hides_lvs  # lsblk does not list the LVs at all
         self.boot_fstab = boot_fstab
         self.virtio_in = set(virtio_in)  # kernels whose initramfs already has virtio
         self.foreign = lvm_foreign_vgs
@@ -47,9 +50,11 @@ class FakeShell:
                 {"name": "/dev/sdb1", "type": "part", "fstype": "xfs", "uuid": "boot-uuid", "label": None},
                 {"name": "/dev/sdb2", "type": "part", "fstype": "LVM2_member", "uuid": "pv-uuid", "label": None,
                  "children": [
-                     {"name": "/dev/mapper/rhel-root", "type": "lvm", "fstype": "xfs", "uuid": "root-uuid"},
-                     {"name": "/dev/mapper/rhel-swap", "type": "lvm", "fstype": "swap", "uuid": "swap-uuid"},
-                 ] if "rhel" in self.active_vgs else []},
+                     {"name": "/dev/mapper/rhel-root", "type": "lvm", "fstype": None if self.udev_stale else "xfs",
+                      "uuid": None if self.udev_stale else "root-uuid"},
+                     {"name": "/dev/mapper/rhel-swap", "type": "lvm", "fstype": None if self.udev_stale else "swap",
+                      "uuid": None if self.udev_stale else "swap-uuid"},
+                 ] if "rhel" in self.active_vgs and not self.lsblk_hides_lvs else []},
             ]
         elif self.layout == "plain":
             disk["children"] = [
@@ -114,6 +119,15 @@ class FakeShell:
             else:
                 self.active_vgs.remove(vg)
             return CmdResult(0, "", "")
+        if cmd == "lvs":
+            assert "--config" in argv and argv[-1] in self.active_vgs
+            return CmdResult(0, "  /dev/mapper/rhel-root\n  /dev/mapper/rhel-swap\n", "")
+        if cmd == "blkid":
+            assert "-p" in argv, "direct probe expected (udev cache is what failed us)"
+            probes = {"/dev/mapper/rhel-root": "TYPE=xfs\nUUID=root-uuid\n",
+                      "/dev/mapper/rhel-swap": "TYPE=swap\nUUID=swap-uuid\n"}
+            self.probed = getattr(self, "probed", []) + [argv[-1]]
+            return CmdResult(0, probes[argv[-1]], "") if argv[-1] in probes else CmdResult(2, "", "")
         if cmd == "mount":
             if "--bind" in argv:
                 self.mounted[argv[-1]] = argv[-2]
@@ -199,6 +213,29 @@ def test_rhel_lvm_root_rebuilt(base):
     # xfs mounted with nouuid (the same image may be attached twice)
     root_mount = next(c for c in shell.calls if c[0] == "mount" and c[-2] == "/dev/mapper/rhel-root")
     assert "nouuid" in root_mount[2]
+
+
+def test_lvs_found_even_when_udev_has_not_probed_them(base):
+    """What happened on the first real RHEL 7 run: lsblk listed the freshly activated LVs without a file
+    system type, so the root LV was not a candidate.  blkid -p fills the gap."""
+    shell = FakeShell(layout="lvm", udev_stale=True)
+    result, msgs = run(shell, base)
+    assert result.status == "done" and result.kernels == [OLD_KERNEL, RHEL_KERNEL], result
+    assert "/dev/mapper/rhel-root" in shell.probed
+    assert any("block devices:" in m and "/dev/mapper/rhel-root (lvm, xfs)" in m for m in msgs)
+    # lsblk does not even list the LVs: lvs supplies them
+    shell = FakeShell(layout="lvm", lsblk_hides_lvs=True)
+    result, msgs = run(shell, base)
+    assert result.status == "done", result
+    assert any(c[0] == "lvs" for c in shell.calls)
+    assert any("guest root file system on /dev/mapper/rhel-root" in m for m in msgs)
+
+
+def test_rejected_candidates_are_explained(base):
+    shell = FakeShell(layout="plain", boot_fstab="")
+    _, msgs = run(shell, base)
+    # /dev/sdb1 (the boot partition) was probed first and rejected with a reason
+    assert any("/dev/sdb1 is not the root fs (fstab=no" in m for m in msgs)
 
 
 def test_plain_partitions_and_boot_on_root(base):

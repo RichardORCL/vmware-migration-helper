@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import math
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Optional
 
 from helper_app.models import BootVolumeType, Firmware, LaunchOptionsSpec, NetworkType, OciTarget, VmSpec
@@ -23,6 +23,9 @@ class OsMetadata:
     operating_system: str
     operating_system_version: str
     family: str  # "linux" | "windows"
+    # False when vSphere does not encode the release (e.g. ubuntu64Guest / "Ubuntu Linux (64-bit)") and the
+    # version is only a guess; the UI then asks the user to pick it
+    version_detected: bool = True
 
     @property
     def is_windows(self) -> bool:
@@ -70,6 +73,12 @@ _LINUX_RULES: list[tuple[re.Pattern[str], str, str | None]] = [
 ]
 
 _FULLNAME_VERSION = re.compile(r"(\d+(?:\.\d+)?)")
+_BITNESS = re.compile(r"\(?\b(32|64)-bit\)?")
+
+
+def _no_bitness(full_name: str) -> str:
+    """'Rocky Linux (64-bit)' -> 'Rocky Linux ' so the bitness is not mistaken for a release."""
+    return _BITNESS.sub("", full_name)
 
 
 def map_guest_os(guest_id: str, guest_full_name: str = "") -> OsMetadata:
@@ -92,22 +101,61 @@ def map_guest_os(guest_id: str, guest_full_name: str = "") -> OsMetadata:
         for pattern, version in _WINDOWS_VERSIONS:
             if pattern.search(gid):
                 return OsMetadata("Windows", version, "windows")
-        return OsMetadata("Windows", "Server 2019 Standard", "windows")
+        return OsMetadata("Windows", "Server 2019 Standard", "windows", version_detected=False)
 
     for pattern, os_name, fixed in _LINUX_RULES:
         m = pattern.search(gid)
         if m:
             version = fixed
+            detected = version is None  # numeric suffix in the guestId names the release
             if version is None:
                 version = m.group(1)
-            if os_name == "Ubuntu":
-                fm = re.search(r"(\d\d\.\d\d)", full)
-                if fm:
-                    version = fm.group(1)
-            return OsMetadata(os_name, version, "linux")
+            # guestIds without a release (ubuntu64Guest, rockylinux_64Guest, ...): the display name may
+            # carry it ("Ubuntu 24.04 LTS", "Rocky Linux 9") when VMware Tools reported it
+            fm = re.search(r"(\d\d\.\d\d)" if os_name == "Ubuntu" else r"\b(\d+)(?:\.\d+)?\b", _no_bitness(full))
+            if not detected and fm:
+                version, detected = fm.group(1), True
+            return OsMetadata(os_name, version, "linux", version_detected=detected)
 
-    fm = _FULLNAME_VERSION.search(full)
-    return OsMetadata("Custom Linux", fm.group(1) if fm else "unknown", "linux")
+    fm = _FULLNAME_VERSION.search(_no_bitness(full))
+    return OsMetadata("Custom Linux", fm.group(1) if fm else "unknown", "linux", version_detected=fm is not None)
+
+
+# Releases OCI knows for the image metadata (operatingSystem / operatingSystemVersion); offered as the
+# choices when vSphere does not tell us which one the guest runs.  OCI does not publish a closed list for
+# Linux, so these are the releases with OCI platform images / documented custom image support.
+OS_VERSION_CHOICES: dict[str, list[str]] = {
+    "Ubuntu": ["18.04", "20.04", "22.04", "24.04", "26.04"],
+    "Rocky Linux": ["8", "9", "10"],
+    "AlmaLinux": ["8", "9", "10"],
+    "openSUSE": ["15"],
+    "Fedora": ["40", "41", "42", "43", "44"],
+    "Oracle Linux": ["6", "7", "8", "9", "10"],
+    "Red Hat Enterprise Linux": ["7", "8", "9", "10"],
+    "CentOS": ["7", "8"],
+    "Debian": ["10", "11", "12", "13"],
+    "SUSE Linux Enterprise Server": ["12", "15", "16"],
+    "Windows": [
+        "Server 2012 R2 Standard", "Server 2016 Standard", "Server 2019 Standard", "Server 2022 Standard",
+        "Server 2025 Standard", "Windows10", "Windows11",
+    ],
+}
+
+
+def os_version_choices(os_meta: OsMetadata) -> list[str]:
+    """Selectable releases for the guest's OS (empty when we have no catalog, e.g. Custom Linux).  A version
+    detected from vSphere that is not in the catalog is kept selectable."""
+    choices = list(OS_VERSION_CHOICES.get(os_meta.operating_system, []))
+    if choices and os_meta.version_detected and os_meta.operating_system_version not in choices:
+        choices.append(os_meta.operating_system_version)
+    return choices
+
+
+def with_os_version(os_meta: OsMetadata, version: Optional[str]) -> OsMetadata:
+    """Apply the release the user picked in the target form (no-op when empty)."""
+    if not version:
+        return os_meta
+    return replace(os_meta, operating_system_version=version.strip(), version_detected=True)
 
 
 def oci_firmware(firmware: Firmware) -> str:

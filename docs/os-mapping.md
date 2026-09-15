@@ -9,8 +9,8 @@ Implemented in `helper/helper_app/oci/mapping.py`.
 | `oracleLinuxN_64Guest` | Oracle Linux | N |
 | `rhelN_64Guest` | Red Hat Enterprise Linux | N |
 | `centosN_64Guest` | CentOS | N |
-| `rockylinux*` / `almalinux*` | Rocky Linux / AlmaLinux | 9 |
-| `ubuntu64Guest` | Ubuntu | from `guestFullName` (e.g. 24.04), else 22.04 |
+| `rockylinux*` / `almalinux*` | Rocky Linux / AlmaLinux | from `guestFullName` (e.g. "Rocky Linux 9"), else **user selects** (8 / 9 / 10) |
+| `ubuntu64Guest` | Ubuntu | from `guestFullName` (e.g. "Ubuntu 24.04 LTS"), else **user selects** (18.04 / 20.04 / 22.04 / 24.04 / 26.04) |
 | `debianN_64Guest` | Debian | N |
 | `slesN_64Guest` | SUSE Linux Enterprise Server | N |
 | any Windows guest whose `guestFullName` says `Server 20xx [R2]` | Windows | Server 20xx [R2] Standard (the year vCenter shows for the source VM) |
@@ -20,8 +20,20 @@ Implemented in `helper/helper_app/oci/mapping.py`.
 | `windows9Server64Guest` | Windows | Server 2016 Standard |
 | `windows8Server64Guest` | Windows | Server 2012 R2 Standard |
 | `windows9_64Guest` / `windows11_64Guest` (or "Microsoft Windows 10/11" in the display name) | Windows | `Windows10` / `Windows11`. `CreateImage` rejects these, so the seed is imported without OS metadata and then registered with `UpdateImage` (the same two-step procedure Oracle documents for Windows 10/11 imports). Client editions must be BYOL: OCI provides no licenses for them. |
-| other `windows*` | Windows | Server 2019 Standard |
-| anything else | Custom Linux | first number in `guestFullName` |
+| other `windows*` | Windows | **user selects** (defaults to Server 2019 Standard) |
+| anything else | Custom Linux | first number in `guestFullName` (ignoring `(64-bit)`) |
+
+### When vSphere does not name the release
+
+Some guestIds carry no release (`ubuntu64Guest`, `rockylinux_64Guest`, `almalinux_64Guest`,
+`fedora64Guest`, ...) and vCenter shows only e.g. "Ubuntu Linux (64-bit)" for a powered-off VM. The
+inspection (`GET /api/vms/{moid}`) then returns `os.version_detected = false` together with
+`os.version_choices` (the releases OCI has platform images / documented custom-image support for, see
+`OS_VERSION_CHOICES` in `mapping.py`), and the export page shows a required *Guest OS version* dropdown.
+The choice is sent as `target.operating_system_version`; `POST /api/jobs` refuses the job without it.
+For guests whose release *was* detected the dropdown is shown pre-selected so a wrong detection can
+still be corrected. The value only affects the OCI image metadata (`operatingSystem` /
+`operatingSystemVersion`) and the seed image identity - it does not change how the disks are copied.
 
 vSphere identifies a new Windows Server release as `<previous>srvNext` until the next major vSphere
 release: `windows2019srvNext_64Guest` is Windows Server 2022 (vSphere 7.0 U2+) and

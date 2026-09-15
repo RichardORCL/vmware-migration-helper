@@ -8,7 +8,8 @@ import time
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from helper_app.auth import require_session
-from helper_app.models import VmInspection, VmSummary
+from helper_app.models import GuestOsMapping, VmInspection, VmSummary
+from helper_app.oci.mapping import map_guest_os, os_version_choices
 from helper_app.sessions import UserSession
 from helper_app.vsphere.inventory import preflight, vm_spec_from_vm, warnings
 from helper_app.vsphere.session import VCenterError
@@ -44,7 +45,16 @@ def inspect(session: UserSession, moid: str) -> VmInspection:
     except VCenterError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc))
     problems = preflight(spec)
-    return VmInspection(vm=spec, can_export=not problems, problems=problems, warnings=warnings(spec))
+    os_meta = map_guest_os(spec.guest_id, spec.guest_full_name)
+    return VmInspection(
+        vm=spec, can_export=not problems, problems=problems, warnings=warnings(spec),
+        os=GuestOsMapping(
+            operating_system=os_meta.operating_system,
+            operating_system_version=os_meta.operating_system_version,
+            version_detected=os_meta.version_detected,
+            version_choices=os_version_choices(os_meta),
+        ),
+    )
 
 
 @router.get("/{moid}", response_model=VmInspection)

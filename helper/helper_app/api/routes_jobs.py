@@ -14,7 +14,13 @@ from helper_app.api.routes_vms import inspect
 from helper_app.auth import require_session
 from helper_app.jobs.store import utcnow
 from helper_app.models import CreateJobRequest, DiskState, Job, JobPhase, LicenseUpdateRequest, WindowsLicenseType
-from helper_app.oci.mapping import WINDOWS_CLIENT_VERSIONS, is_arm_shape, map_guest_os
+from helper_app.oci.mapping import (
+    WINDOWS_CLIENT_VERSIONS,
+    is_arm_shape,
+    map_guest_os,
+    os_version_choices,
+    with_os_version,
+)
 from helper_app.sessions import UserSession
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"], dependencies=[Depends(require_session)])
@@ -41,6 +47,13 @@ async def create_job(body: CreateJobRequest, request: Request, session: UserSess
     if inspection.vm.is_windows and body.target.windows_license_type is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "a Windows license type must be selected")
     os_meta = map_guest_os(inspection.vm.guest_id, inspection.vm.guest_full_name)
+    if not os_meta.version_detected and not body.target.operating_system_version and os_version_choices(os_meta):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"vSphere does not report which {os_meta.operating_system} release the guest runs; select the "
+            f"OS version ({', '.join(os_version_choices(os_meta))})",
+        )
+    os_meta = with_os_version(os_meta, body.target.operating_system_version)
     if (os_meta.operating_system_version in WINDOWS_CLIENT_VERSIONS
             and body.target.windows_license_type == WindowsLicenseType.OCI_PROVIDED):
         raise HTTPException(status.HTTP_400_BAD_REQUEST,

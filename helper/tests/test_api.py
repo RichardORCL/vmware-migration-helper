@@ -598,6 +598,31 @@ def test_volume_performance_option(env):
     assert env.fake.blockstorage.volumes[job["disks"][1]["volume_id"]].vpus_per_gb == 20
 
 
+def test_os_version_selection_when_vsphere_does_not_report_it(env):
+    c = env.client
+    login(c)
+    env.vms["vm-ubu"] = make_vm(moid="vm-ubu", name="ubu-01", guest_id="ubuntu64Guest",
+                                guest_full_name="Ubuntu Linux (64-bit)", disks=((2 * MIB, "pvscsi"),))
+    # the inspection tells the UI to ask for the release and which ones OCI knows
+    osinfo = c.get("/api/vms/vm-ubu").json()["os"]
+    assert osinfo["operating_system"] == "Ubuntu" and osinfo["version_detected"] is False
+    assert osinfo["version_choices"] == ["18.04", "20.04", "22.04", "24.04", "26.04"]
+    # a guest whose guestId names the release needs no choice
+    osinfo = c.get("/api/vms/vm-101").json()["os"]
+    assert osinfo["version_detected"] is True and osinfo["operating_system_version"] == "8"
+
+    r = c.post("/api/jobs", json={"vm_moid": "vm-ubu", "target": target()})
+    assert r.status_code == 400 and "select the OS version" in r.json()["detail"], r.text
+
+    r = c.post("/api/jobs", json={"vm_moid": "vm-ubu", "target": target(operating_system_version="24.04")})
+    assert r.status_code == 202, r.text
+    job = wait_phase(c, r.json()["id"], "COMPLETED", "FAILED")
+    assert job["phase"] == "COMPLETED", job
+    img = env.fake.compute.images[job["seed_image_id"]]
+    assert (img.operating_system, img.operating_system_version) == ("Ubuntu", "24.04")
+    assert "os_version=24.04" in c.get(f"/api/jobs/{job['id']}/diagnostics").text
+
+
 def test_arm_shape_is_refused(env):
     c = env.client
     login(c)

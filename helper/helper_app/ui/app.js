@@ -173,6 +173,7 @@
     const rows = [
       ["Source VM", `${job.vm.name} (${job.vm.moid})${job.vcenter_host ? " on " + job.vcenter_host : ""} - ${job.vm.num_cpu} vCPU, ${fmtBytes(job.vm.memory_mb * 1024 * 1024)} RAM, ${job.vm.disks.length} disk(s)`],
       ["Step", job.step || "-"],
+      ["Guest OS", `${job.vm.guest_full_name || job.vm.guest_id}${job.target.operating_system_version ? ` - release ${job.target.operating_system_version} (selected)` : ""}`],
       ["Disk download", job.nfc_host ? `${job.nfc_host}${job.target.nfc_direct_to_esxi ? " (ESXi host, direct)" : ""}${job.target.pipelined_decode ? ", pipelined decode/write" : ""}` : "-"],
       ["Instance", job.instance_id || "-"],
       ["Shape", `${job.target.shape || "(helper default)"}${job.target.ocpus || job.target.memory_gb ? ` - ${job.target.ocpus ?? "auto"} OCPU / ${job.target.memory_gb ?? "auto"} GB (custom)` : " - sized from the source VM"}`],
@@ -410,6 +411,25 @@
     sel("memory_gb").addEventListener("input", renderSizing);
     fillShapes(options);
     sel("display_name").value = vm.name;
+    // guest OS release recorded on the OCI image: vSphere encodes it for most guests, but not for e.g.
+    // ubuntu64Guest ("Ubuntu Linux (64-bit)"), where the user has to pick it from OCI's list
+    const osInfo = inspection.os;
+    const osLabel = document.getElementById("os-version-label"), osSel = sel("operating_system_version");
+    if (osInfo && osInfo.version_choices.length) {
+      osLabel.hidden = false;
+      osSel.innerHTML = "";
+      if (!osInfo.version_detected) osSel.append(el("option", { value: "" }, `Select the ${osInfo.operating_system} release...`));
+      for (const v of osInfo.version_choices) osSel.append(el("option", { value: v }, `${osInfo.operating_system} ${v}`));
+      osSel.value = osInfo.version_detected ? osInfo.operating_system_version : "";
+      osSel.required = !osInfo.version_detected;
+      osLabel.classList.toggle("attention", !osInfo.version_detected);
+      osSel.addEventListener("change", () => osLabel.classList.toggle("attention", !osSel.value));
+      document.getElementById("os-version-hint").textContent = osInfo.version_detected
+        ? `Detected from vCenter (${vm.guest_full_name || vm.guest_id}); change it if the guest runs another release.`
+        : `vCenter only reports "${vm.guest_full_name || vm.guest_id}" without the release. Select the one installed in the guest; OCI records it on the image and uses it for OS-specific defaults.`;
+    } else {
+      osLabel.hidden = true; osSel.required = false;
+    }
     const isWin = isWindows(vm);
     document.getElementById("windows-fieldset").hidden = !isWin;
     document.getElementById("windows-driver-note").hidden = !isWin;
@@ -476,6 +496,7 @@
         ocpus: fd.get("ocpus") ? Number(fd.get("ocpus")) : null,
         memory_gb: fd.get("memory_gb") ? Number(fd.get("memory_gb")) : null,
         display_name: fd.get("display_name") || null,
+        operating_system_version: osLabel.hidden ? null : (fd.get("operating_system_version") || null),
         assign_public_ip: fd.get("assign_public_ip") === "on",
         start_after_migration: fd.get("start_after_migration") === "on",
         windows_license_type: isWin ? fd.get("windows_license_type") : null,

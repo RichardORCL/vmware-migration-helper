@@ -34,6 +34,7 @@ from helper_app.oci.mapping import (
     oci_firmware,
     platform_config_type,
     volume_size_gb,
+    with_os_version,
 )
 from helper_app.oci.seed_image import SeedImageService
 
@@ -127,7 +128,7 @@ class Provisioner:
             )
 
         job.phase = JobPhase.PROVISIONING
-        os_meta = map_guest_os(vm.guest_id, vm.guest_full_name)
+        os_meta = with_os_version(map_guest_os(vm.guest_id, vm.guest_full_name), target.operating_system_version)
         firmware = oci_firmware(vm.firmware)
         launch_options = map_launch_options(vm, target)
         shape = map_shape(vm, target, self.s.default_shape, self.s.max_memory_gb_per_ocpu)

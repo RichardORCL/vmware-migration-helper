@@ -44,6 +44,8 @@ h2 { font-size: 15px; margin: 0 0 8px; font-weight: 600; }
 .form .row2 label { margin-bottom: 2px; }
 .form .form-hint { margin-bottom: 8px; }
 .form input:invalid { border-color: var(--danger, #c0392b); }
+.form label.attention > select { border-color: var(--danger); }
+.form label.attention > small { color: var(--danger); }
 .form input[readonly] { background: #f3f5f7; color: var(--muted); }
 .setup { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .setup .card:first-child { grid-column: 1 / -1; }

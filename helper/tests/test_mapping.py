@@ -59,6 +59,34 @@ def test_map_guest_os(guest_id, full, os, version, family):
     assert (meta.operating_system, meta.operating_system_version, meta.family) == (os, version, family)
 
 
+def test_os_version_detection_and_choices():
+    # ubuntu64Guest carries no release: the version is a guess and the user must pick from OCI's list
+    meta = m.map_guest_os("ubuntu64Guest", "Ubuntu Linux (64-bit)")
+    assert meta.version_detected is False
+    assert m.os_version_choices(meta) == ["18.04", "20.04", "22.04", "24.04", "26.04"]
+    # ... unless VMware Tools put it into the display name
+    assert m.map_guest_os("ubuntu64Guest", "Ubuntu 24.04 LTS").version_detected is True
+    # the bitness in the display name is not a release
+    rocky = m.map_guest_os("rockylinux_64Guest", "Rocky Linux (64-bit)")
+    assert (rocky.operating_system_version, rocky.version_detected) == ("9", False)
+    rocky9 = m.map_guest_os("rockylinux_64Guest", "Rocky Linux 9 (64-bit)")
+    assert (rocky9.operating_system_version, rocky9.version_detected) == ("9", True)
+    # a release encoded in the guestId is trusted
+    assert m.map_guest_os("oracleLinux9_64Guest").version_detected is True
+    assert m.map_guest_os("windows2022srv_64Guest").version_detected is True
+    assert m.map_guest_os("windowsUnknownGuest").version_detected is False
+    # detected releases outside the catalog stay selectable
+    ol = m.map_guest_os("oraclelinux5_64Guest")
+    assert m.os_version_choices(ol)[-1] == "5"
+    # no catalog for generic Linux -> nothing to choose from
+    assert m.os_version_choices(m.map_guest_os("otherGuest64", "Other Linux (64-bit)")) == []
+
+    picked = m.with_os_version(meta, "24.04")
+    assert (picked.operating_system, picked.operating_system_version, picked.version_detected) == ("Ubuntu", "24.04", True)
+    assert m.with_os_version(meta, None) is meta
+    assert picked.slug == "ubuntu-24-04"
+
+
 def test_windows_from_full_name_only():
     meta = m.map_guest_os("otherGuest", "Microsoft Windows Server 2012 R2 (64-bit)")
     assert meta.operating_system == "Windows"

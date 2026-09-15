@@ -130,6 +130,10 @@
           <label>Instance name
             <input name="display_name" type="text" maxlength="255">
           </label>
+          <label id="os-version-label" hidden>Guest OS version
+            <select name="operating_system_version"></select>
+            <small id="os-version-hint"></small>
+          </label>
           <label class="check"><input type="checkbox" name="assign_public_ip"> Assign a public IP</label>
           <label class="check"><input type="checkbox" name="start_after_migration" checked> Start the instance when the copy completes</label>
 

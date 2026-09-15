@@ -88,11 +88,22 @@ class VmSummary(BaseModel):
     is_template: bool = False
 
 
+class GuestOsMapping(BaseModel):
+    """How the guest OS will be recorded on the OCI image, and whether the user has to pick the release."""
+
+    operating_system: str
+    operating_system_version: str
+    version_detected: bool = Field(description="False when vSphere does not report the release and the "
+                                               "version is a default that the user should confirm or change")
+    version_choices: list[str] = Field(default_factory=list, description="Releases OCI knows for this OS")
+
+
 class VmInspection(BaseModel):
     vm: VmSpec
     can_export: bool
     problems: list[str]
     warnings: list[str]
+    os: Optional[GuestOsMapping] = None
 
 
 # --------------------------------------------------------------------------- #
@@ -132,6 +143,11 @@ class OciTarget(BaseModel):
     )
     assign_public_ip: bool = False
     start_after_migration: bool = True
+    operating_system_version: Optional[str] = Field(
+        default=None, max_length=64,
+        description="Release recorded on the OCI image (e.g. Ubuntu '24.04'); required when vSphere does not "
+                    "report it (VmInspection.os.version_detected is false), otherwise overrides the detected one",
+    )
     windows_license_type: Optional[WindowsLicenseType] = None
     compatibility_mode: bool = Field(
         default=False, description="Force IDE boot volume + E1000 NIC for guests without virtio drivers"

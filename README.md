@@ -31,21 +31,6 @@ The button opens *Create stack* in Resource Manager with the committed `vc-oci-h
 preloaded. Manual deployment with Terraform and all settings are described in
 [docs/install-helper.md](docs/install-helper.md).
 
-## Tested operating systems
-
-Guests that have been migrated with the helper and booted in OCI. Anything with virtio drivers is
-expected to work (Windows needs the Oracle VirtIO drivers installed first, or the *Maximum
-compatibility* preset); the table lists what has actually been verified.
-
-| Operating system | Version(s) | Firmware | Result / notes |
-| --- | --- | --- | --- |
-| Oracle Linux | | | |
-| Red Hat Enterprise Linux | | | |
-| Ubuntu | | | |
-| SUSE Linux Enterprise Server | | | |
-| Windows Server | | | |
-| Windows 10 / 11 | | | |
-
 ## Quick start
 
 1. **Deploy the helper** in OCI with the Resource Manager stack (button above, or
@@ -61,6 +46,21 @@ compatibility* preset); the table lists what has actually been verified.
    compartment, the network compartment with its VCN/subnet, an x86 flex shape (sized from the source VM
    as 2 vCPU = 1 OCPU, or set OCPUs/memory yourself) and (for Windows) the license type, and follow the
    progress in the *Jobs* view.
+
+## Tested operating systems
+
+Guests that have been migrated with the helper and booted in OCI. Anything with virtio drivers is
+expected to work (Windows needs the Oracle VirtIO drivers installed first, or the *Maximum
+compatibility* preset); the table lists what has actually been verified.
+
+| Operating system | Version(s) | Firmware | Result / notes |
+| --- | --- | --- | --- |
+| Oracle Linux | | | |
+| Red Hat Enterprise Linux | | | |
+| Ubuntu | | | |
+| SUSE Linux Enterprise Server | | | |
+| Windows Server | | | |
+| Windows 10 / 11 | | | |
 
 ## Documentation
 

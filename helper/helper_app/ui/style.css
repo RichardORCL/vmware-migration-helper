@@ -76,6 +76,8 @@ pre.log { background: #1b2a32; color: #d7e0e5; padding: 10px; border-radius: 3px
 button, .button { font: inherit; padding: 6px 14px; border-radius: 3px; border: 1px solid var(--primary); cursor: pointer; text-decoration: none; display: inline-block; line-height: 1.2; }
 button.primary, .button.primary { background: var(--primary); color: #fff; }
 button.secondary, .button.secondary { background: #fff; color: var(--primary); }
+button.secondary.danger, .button.secondary.danger { color: var(--danger); border-color: var(--danger); }
+hr.sep { border: 0; border-top: 1px solid var(--border); margin: 14px 0; }
 button.small, .button.small { padding: 3px 10px; font-size: 12px; }
 button:disabled, .button.disabled { opacity: .5; cursor: default; pointer-events: none; }
 .error { color: var(--danger); flex: 1; }

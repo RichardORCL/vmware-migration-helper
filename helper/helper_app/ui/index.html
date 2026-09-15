@@ -286,6 +286,15 @@
           <span id="seed-result" class="muted"></span>
           <button class="secondary" id="seed-cleanup">Delete seed images</button>
         </div>
+        <hr class="sep">
+        <p class="muted">Job history: removes finished job records from the helper's database (the <em>Jobs</em> page).
+          Running or queued jobs are kept. Only the records are deleted - OCI resources a failed job left behind
+          (instance, volumes) are not touched; open the job and use <em>Clean up OCI resources</em> for that first.</p>
+        <div class="actions">
+          <span id="jobs-purge-result" class="muted"></span>
+          <button class="secondary" id="jobs-purge-failed">Delete failed jobs</button>
+          <button class="secondary danger" id="jobs-purge-all">Delete all jobs</button>
+        </div>
       </section>
     </div>
   </template>

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
@@ -11,6 +12,7 @@ from pydantic import BaseModel
 from helper_app import __version__, logging_config, runtime_settings
 from helper_app.auth import require_session
 from helper_app.logging_config import LoggingSettings, LoggingStatus
+from helper_app.models import JobPhase
 from helper_app.runtime_settings import OperationSettings, OperationStatus
 from helper_app.updater import SoftwareStatus, UpdateError
 
@@ -48,6 +50,25 @@ def setup_info(request: Request):
         "sessions": len(st.sessions),
         "active_jobs": _active_jobs(request),
     }
+
+
+class JobsPurgeResult(BaseModel):
+    scope: Literal["failed", "all"]
+    deleted: int  # job records removed
+    kept_active: int  # jobs still running/queued (never deleted)
+
+
+@router.delete("/jobs", response_model=JobsPurgeResult)
+def purge_jobs(request: Request, scope: Literal["failed", "all"] = "failed"):
+    """Remove job records from the helper: ``failed`` = FAILED and CANCELLED jobs, ``all`` = every finished
+    job (COMPLETED too).  Running or queued jobs are never touched.  Only the records disappear; OCI
+    resources a failed job left behind (instance, volumes) are not cleaned up here - cancel the job first
+    for that."""
+    st = request.app.state
+    phases = {JobPhase.FAILED, JobPhase.CANCELLED} if scope == "failed" else None
+    deleted = st.store.delete_finished(phases)
+    log.info("deleted %d %s job record(s) on request of the Setup page", deleted, scope)
+    return JobsPurgeResult(scope=scope, deleted=deleted, kept_active=_active_jobs(request))
 
 
 @router.get("/logging", response_model=LoggingStatus)

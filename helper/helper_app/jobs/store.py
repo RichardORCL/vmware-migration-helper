@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from helper_app.models import Job
+from helper_app.models import Job, JobPhase
 
 
 def utcnow() -> datetime:
@@ -50,6 +50,17 @@ class JobStore:
         with self._lock:
             row = self._conn.execute("SELECT data FROM jobs WHERE id = ?", (job_id,)).fetchone()
         return Job.model_validate_json(row[0]) if row else None
+
+    def delete_finished(self, phases: Optional[set[JobPhase]] = None) -> int:
+        """Delete the records of finished jobs (all terminal phases, or only ``phases``); jobs still in
+        flight are never removed.  Returns the number of deleted records."""
+        wanted = {p for p in (phases or set(JobPhase)) if p.terminal}
+        if not wanted:
+            return 0
+        marks = ",".join("?" * len(wanted))
+        with self._lock:
+            cur = self._conn.execute(f"DELETE FROM jobs WHERE phase IN ({marks})", [p.value for p in wanted])
+        return cur.rowcount
 
     def list(self, vm_moid: Optional[str] = None, limit: int = 200) -> list[Job]:
         with self._lock:

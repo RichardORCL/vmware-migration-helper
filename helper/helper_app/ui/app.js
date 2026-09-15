@@ -988,6 +988,24 @@
       catch (e) { out.textContent = e.message; } finally { ev.target.disabled = false; }
     });
 
+    // job history: delete the records of failed (FAILED + CANCELLED) or of all finished jobs
+    const purgeBtns = ["jobs-purge-failed", "jobs-purge-all"].map((id) => document.getElementById(id));
+    const purge = async (scope) => {
+      const out = document.getElementById("jobs-purge-result");
+      const what = scope === "failed" ? "all FAILED and CANCELLED jobs" : "ALL finished jobs (completed, failed and cancelled)";
+      if (!confirm(`Delete the records of ${what} from the helper?\n\n` +
+        "Running or queued jobs are kept. This only removes the job history: OCI resources a failed job may have " +
+        "left behind (instance, volumes) are NOT cleaned up - use 'Clean up OCI resources' on such jobs first if needed.\n\n" +
+        "This cannot be undone.")) return;
+      purgeBtns.forEach((b) => { b.disabled = true; }); out.textContent = "Deleting...";
+      try {
+        const r = await api("DELETE", `/setup/jobs?scope=${scope}`);
+        out.textContent = `Deleted ${r.deleted} job record(s)${r.kept_active ? `; ${r.kept_active} active job(s) kept` : ""}.`;
+      } catch (e) { out.textContent = e.message; } finally { purgeBtns.forEach((b) => { b.disabled = false; }); }
+    };
+    purgeBtns[0].addEventListener("click", () => purge("failed"));
+    purgeBtns[1].addEventListener("click", () => purge("all"));
+
     try {
       const [inf, lg, op] = await Promise.all([api("GET", "/setup/info"), api("GET", "/setup/logging"), api("GET", "/setup/operation")]);
       info = inf;

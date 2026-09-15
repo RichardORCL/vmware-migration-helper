@@ -117,4 +117,5 @@ The same thing by hand: `sudo /usr/local/sbin/vc-oci-helper-install && sudo syst
 - Seed images accumulate one per firmware/OS combination. Delete them from the *Setup* tab, with `DELETE /api/seed-images` (logged in) or from the console (tag `vc-oci-seed=true`).
 - Jobs are stored in `HELPER_DB_PATH`. A failed job leaves its OCI resources in place for inspection; *Clean up OCI resources* in the job view (`POST /api/jobs/{id}/cancel`) terminates the instance and deletes the volumes.
 - After a restart of the service, jobs that were running are marked `FAILED` (their vCenter session is gone); clean them up and start again.
+- The job history can be trimmed from the *Setup* tab: *Delete failed jobs* removes `FAILED` and `CANCELLED` records, *Delete all jobs* every finished record (`DELETE /api/setup/jobs?scope=failed|all`). Running or queued jobs are never deleted, and only the records go - OCI resources of a failed job are not cleaned up by this.
 - The helper supports up to 32 attached volumes at once, which bounds `HELPER_MAX_CONCURRENT_JOBS`.

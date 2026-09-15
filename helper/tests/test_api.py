@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
+import uuid
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -940,3 +941,36 @@ def test_seed_image_cleanup_endpoint(env):
     wait_phase(c, r.json()["id"], "COMPLETED", "FAILED")
     r = c.delete("/api/seed-images")
     assert r.status_code == 200 and len(r.json()["deleted"]) == 1
+
+
+def test_purge_job_records(tmp_path, fast_retries):
+    """Setup page: delete failed (FAILED + CANCELLED) or all finished job records; active jobs stay."""
+    gate = threading.Event()
+    env = Env(tmp_path, fail_once=frozenset(), block_event=gate)
+    with TestClient(env.app) as c:
+        assert c.delete("/api/setup/jobs").status_code == 401
+        login(c)
+        # one completed, one failed, one cancelled and one that is still copying (blocked on the gate)
+        store = env.app.state.store
+        done = c.post("/api/jobs", json={"vm_moid": "vm-101", "target": target()}).json()
+        gate.set()
+        wait_phase(c, done["id"], "COMPLETED")
+        gate.clear()
+        for phase in (JobPhase.FAILED, JobPhase.CANCELLED):
+            store.put(Job.model_validate({**done, "id": uuid.uuid4().hex, "phase": phase.value}))
+        running = c.post("/api/jobs", json={"vm_moid": "vm-303", "target": target(
+            windows_license_type="BRING_YOUR_OWN_LICENSE")}).json()
+        wait_phase(c, running["id"], "EXPORTING")
+        assert len(c.get("/api/jobs").json()) == 4
+
+        assert c.delete("/api/setup/jobs?scope=bogus").status_code == 422
+        r = c.delete("/api/setup/jobs?scope=failed")
+        assert r.status_code == 200 and r.json() == {"scope": "failed", "deleted": 2, "kept_active": 1}
+        assert {j["phase"] for j in c.get("/api/jobs").json()} == {"COMPLETED", "EXPORTING"}
+        r = c.delete("/api/setup/jobs?scope=all")
+        assert r.json() == {"scope": "all", "deleted": 1, "kept_active": 1}
+        left = c.get("/api/jobs").json()
+        assert [j["id"] for j in left] == [running["id"]]  # the active job is never deleted
+        assert c.delete("/api/setup/jobs").json()["deleted"] == 0  # default scope: failed; nothing left
+        gate.set()
+        wait_phase(c, running["id"], "COMPLETED", "FAILED")

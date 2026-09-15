@@ -109,6 +109,25 @@ def test_map_shape():
     assert m.map_shape(vm(num_cpu=3, memory_mb=4096), target(), "x").ocpus == 2.0
 
 
+def test_map_shape_user_overrides():
+    # explicit sizing wins over the source-derived mapping and is not clamped (OCI validates it)
+    s = m.map_shape(vm(num_cpu=4, memory_mb=8192), target(ocpus=6, memory_gb=96), "x")
+    assert (s.ocpus, s.memory_gb) == (6.0, 96.0)
+    # one side only: the other is still derived, memory keeps following the (overridden) OCPU ratio
+    s = m.map_shape(vm(num_cpu=2, memory_mb=256 * 1024), target(ocpus=8), "x")
+    assert (s.ocpus, s.memory_gb) == (8.0, 256.0)
+    s = m.map_shape(vm(num_cpu=4, memory_mb=8192), target(memory_gb=32), "x")
+    assert (s.ocpus, s.memory_gb) == (2.0, 32.0)
+
+
+def test_is_arm_shape():
+    assert m.is_arm_shape("VM.Standard.A1.Flex") and m.is_arm_shape("BM.Standard.A2.150")
+    assert not m.is_arm_shape("VM.Standard.E5.Flex")
+    assert not m.is_arm_shape("VM.Standard3.Flex")
+    assert not m.is_arm_shape("VM.GPU.A10.1")  # Intel host with NVIDIA A10 cards
+    assert not m.is_arm_shape("")
+
+
 def test_volume_size_gb():
     assert m.volume_size_gb(10 * 1024**3) == 50
     assert m.volume_size_gb(50 * 1024**3) == 50

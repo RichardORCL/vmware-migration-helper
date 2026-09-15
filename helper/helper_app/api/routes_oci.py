@@ -15,10 +15,16 @@ router = APIRouter(prefix="/api", tags=["oci"], dependencies=[Depends(require_se
 
 
 @router.get("/oci/options", response_model=OciOptions)
-async def oci_options(request: Request, compartment_id: Optional[str] = None):
+async def oci_options(
+    request: Request,
+    compartment_id: Optional[str] = None,
+    network_compartment_id: Optional[str] = None,
+):
     st = request.app.state
     try:
-        return await asyncio.to_thread(build_options, st.clients, st.settings, compartment_id)
+        return await asyncio.to_thread(
+            build_options, st.clients, st.settings, compartment_id, network_compartment_id
+        )
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"OCI inventory failed: {exc}")
 

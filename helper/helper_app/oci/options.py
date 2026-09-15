@@ -8,6 +8,7 @@ from typing import Optional
 from helper_app.config import Settings
 from helper_app.models import OciCompartment, OciOptions, OciShape, OciSubnet, OciVcn
 from helper_app.oci.clients import OciClients
+from helper_app.oci.mapping import is_arm_shape
 
 log = logging.getLogger(__name__)
 
@@ -102,8 +103,8 @@ def list_flex_shapes(c: OciClients, compartment_id: str, availability_domain: st
     shapes = _all(c.compute.list_shapes, compartment_id=compartment_id, availability_domain=availability_domain)
     seen: dict[str, OciShape] = {}
     for s in shapes:
-        if not s.shape.startswith("VM.") or s.shape in seen:
-            continue
+        if not s.shape.startswith("VM.") or s.shape in seen or is_arm_shape(s.shape):
+            continue  # x86 VM shapes only: an Ampere (aarch64) instance cannot boot a vSphere guest
         is_flex = bool(getattr(s, "is_flexible", False)) or s.shape.endswith(".Flex")
         oc = getattr(s, "ocpu_options", None)
         mem = getattr(s, "memory_options", None)
@@ -119,10 +120,19 @@ def list_flex_shapes(c: OciClients, compartment_id: str, availability_domain: st
     return sorted(flex, key=lambda x: x.name)
 
 
-def build_options(c: OciClients, settings: Settings, compartment_id: Optional[str] = None) -> OciOptions:
+def build_options(
+    c: OciClients,
+    settings: Settings,
+    compartment_id: Optional[str] = None,
+    network_compartment_id: Optional[str] = None,
+) -> OciOptions:
+    """``compartment_id`` is where the instance goes (shapes are listed there); the VCNs and subnets come
+    from ``network_compartment_id`` (defaults to the instance compartment) - networks commonly live in a
+    shared compartment."""
     ident = c.identity_info
     comp = compartment_id or ident.compartment_id
-    vcns = list_vcns(c, comp)
+    net_comp = network_compartment_id or comp
+    vcns = list_vcns(c, net_comp)
     return OciOptions(
         region=ident.region,
         helper_instance_id=ident.instance_id,
@@ -132,6 +142,6 @@ def build_options(c: OciClients, settings: Settings, compartment_id: Optional[st
         compartments=list_compartments(c),
         availability_domains=list_availability_domains(c),
         vcns=vcns,
-        subnets=list_subnets(c, comp, vcns),
+        subnets=list_subnets(c, net_comp, vcns),
         shapes=list_flex_shapes(c, comp, ident.availability_domain),
     )

@@ -175,6 +175,7 @@
       ["Step", job.step || "-"],
       ["Disk download", job.nfc_host ? `${job.nfc_host}${job.target.nfc_direct_to_esxi ? " (ESXi host, direct)" : ""}${job.target.pipelined_decode ? ", pipelined decode/write" : ""}` : "-"],
       ["Instance", job.instance_id || "-"],
+      ["Shape", `${job.target.shape || "(helper default)"}${job.target.ocpus || job.target.memory_gb ? ` - ${job.target.ocpus ?? "auto"} OCPU / ${job.target.memory_gb ?? "auto"} GB (custom)` : " - sized from the source VM"}`],
       ["Seed image", job.seed_image_id || "-"],
       ["Launch options", job.launch_options ? `${job.launch_options.firmware}${job.launch_options.secure_boot ? " + Secure Boot (shielded instance, with Measured Boot + vTPM on VM shapes)" : ""}, boot ${job.launch_options.boot_volume_type}, nic ${job.launch_options.network_type}` : "-"],
       ["Started by", `${job.created_by || "-"} at ${new Date(job.created_at).toLocaleString()}`],
@@ -341,7 +342,10 @@
 
     // populate the target form
     const sel = (name) => form.elements[name];
-    for (const c of options.compartments) sel("compartment_id").append(el("option", { value: c.id }, c.path || c.name));
+    for (const c of options.compartments) {
+      sel("compartment_id").append(el("option", { value: c.id }, c.path || c.name));
+      sel("network_compartment_id").append(el("option", { value: c.id }, c.path || c.name));
+    }
     for (const ad of options.availability_domains) sel("availability_domain").append(el("option", { value: ad }, ad + (ad === options.helper_availability_domain ? " (helper)" : "")));
     sel("availability_domain").value = options.helper_availability_domain;
     // VCN -> subnet: the subnet list is filtered by the selected VCN
@@ -351,7 +355,7 @@
       const subnets = netOptions.subnets.filter((s) => s.vcn_id === vcnId);
       sel("subnet_id").innerHTML = "";
       for (const s of subnets) sel("subnet_id").append(el("option", { value: s.id }, `${s.name} (${s.cidr_block})${s.prohibit_public_ip ? ", private" : ""}${s.availability_domain ? ", " + s.availability_domain : ""}`));
-      document.getElementById("subnet-hint").textContent = subnets.length ? "" : (vcnId ? "No subnets in this VCN within the selected compartment." : "Select a VCN first.");
+      document.getElementById("subnet-hint").textContent = subnets.length ? "" : (vcnId ? "No subnets in this VCN within the network compartment." : "Select a VCN first.");
     };
     const fillNetworks = (o) => {
       netOptions = o;
@@ -366,9 +370,44 @@
     };
     sel("vcn_id").addEventListener("change", fillSubnets);
     fillNetworks(options);
-    sel("shape").append(el("option", { value: "" }, `${options.default_shape} (default)`));
-    for (const s of options.shapes) if (s.name !== options.default_shape) sel("shape").append(el("option", { value: s.name }, s.name));
-    document.getElementById("shape-hint").textContent = `Sized to ${Math.max(1, Math.ceil(vm.num_cpu / 2))} OCPU / ${Math.max(1, Math.ceil(vm.memory_mb / 1024))} GB from the source VM.`;
+    // shapes: x86 flex shapes only (the API already drops Ampere/ARM shapes)
+    let shapes = options.shapes;
+    const fillShapes = (o) => {
+      shapes = o.shapes;
+      const shapeSel = sel("shape"); const previous = shapeSel.value;
+      shapeSel.innerHTML = "";
+      shapeSel.append(el("option", { value: "" }, `${o.default_shape} (default)`));
+      for (const s of o.shapes) if (s.name !== o.default_shape) shapeSel.append(el("option", { value: s.name }, s.name));
+      if ([...shapeSel.options].some((op) => op.value === previous)) shapeSel.value = previous;
+      renderSizing();
+    };
+    // sizing mirrors mapping.map_shape: 2 vCPU = 1 OCPU, RAM rounded up to whole GB; both can be overridden
+    const autoOcpus = Math.max(1, Math.ceil(vm.num_cpu / 2));
+    const autoMemoryGb = Math.max(1, Math.ceil(vm.memory_mb / 1024));
+    const currentShape = () => shapes.find((s) => s.name === (sel("shape").value || options.default_shape));
+    const renderSizing = () => {
+      const shape = currentShape();
+      const ocpusIn = sel("ocpus"), memIn = sel("memory_gb");
+      ocpusIn.placeholder = `${autoOcpus} (auto)`; memIn.placeholder = `${autoMemoryGb} (auto)`;
+      if (shape && shape.is_flex) {
+        if (shape.min_ocpus != null) ocpusIn.min = shape.min_ocpus;
+        if (shape.max_ocpus != null) ocpusIn.max = shape.max_ocpus;
+        if (shape.min_memory_gb != null) memIn.min = shape.min_memory_gb;
+        if (shape.max_memory_gb != null) memIn.max = shape.max_memory_gb;
+      } else { ocpusIn.removeAttribute("max"); memIn.removeAttribute("max"); }
+      const ocpus = Number(ocpusIn.value) || autoOcpus, mem = Number(memIn.value) || autoMemoryGb;
+      const overridden = ocpusIn.value !== "" || memIn.value !== "";
+      const range = shape && shape.is_flex && shape.max_ocpus != null
+        ? ` ${shape.name} allows ${shape.min_ocpus ?? 1}-${shape.max_ocpus} OCPU and ${shape.min_memory_gb ?? 1}-${shape.max_memory_gb} GB.` : "";
+      document.getElementById("shape-hint").textContent = `Source VM: ${vm.num_cpu} vCPU / ${(vm.memory_mb / 1024).toFixed(vm.memory_mb % 1024 ? 1 : 0)} GB.${range}`;
+      document.getElementById("sizing-hint").textContent = overridden
+        ? `Instance will be launched with ${ocpus} OCPU / ${mem} GB (custom). Leave both fields empty to size from the source VM.`
+        : `Instance will be launched with ${autoOcpus} OCPU / ${autoMemoryGb} GB, derived from the source VM. Enter values to override.`;
+    };
+    sel("shape").addEventListener("change", renderSizing);
+    sel("ocpus").addEventListener("input", renderSizing);
+    sel("memory_gb").addEventListener("input", renderSizing);
+    fillShapes(options);
     sel("display_name").value = vm.name;
     const isWin = isWindows(vm);
     document.getElementById("windows-fieldset").hidden = !isWin;
@@ -382,13 +421,22 @@
     }
     document.getElementById("esxi-host-hint").textContent = vm.host_name ? `(${vm.host_name})` : "";
     sel("nfc_direct_to_esxi").disabled = !vm.host_name;
-    if (options.compartments.some((c) => c.id === options.helper_compartment_id)) sel("compartment_id").value = options.helper_compartment_id;
-    else if (options.compartments.length) sel("compartment_id").selectedIndex = 0;
-    sel("compartment_id").addEventListener("change", async () => {
+    // both compartment pickers start at the helper's compartment; the instance compartment drives the shape
+    // list, the network compartment the VCN/subnet list
+    for (const name of ["compartment_id", "network_compartment_id"]) {
+      if (options.compartments.some((c) => c.id === options.helper_compartment_id)) sel(name).value = options.helper_compartment_id;
+      else if (options.compartments.length) sel(name).selectedIndex = 0;
+    }
+    const reloadOptions = async () => {
       formError.textContent = "";
-      try { fillNetworks(await api("GET", `/oci/options?compartment_id=${encodeURIComponent(sel("compartment_id").value)}`)); }
-      catch (e) { formError.textContent = e.message; }
-    });
+      const q = new URLSearchParams({ compartment_id: sel("compartment_id").value, network_compartment_id: sel("network_compartment_id").value });
+      try {
+        const o = await api("GET", `/oci/options?${q}`);
+        fillNetworks(o); fillShapes(o);
+      } catch (e) { formError.textContent = e.message; }
+    };
+    sel("compartment_id").addEventListener("change", reloadOptions);
+    sel("network_compartment_id").addEventListener("change", reloadOptions);
 
     // mirrors mapping.map_launch_options: paravirtualized unless "Maximum compatibility" or an override is chosen
     const renderPreview = () => {
@@ -424,6 +472,8 @@
         availability_domain: fd.get("availability_domain"),
         subnet_id: fd.get("subnet_id"),
         shape: fd.get("shape") || null,
+        ocpus: fd.get("ocpus") ? Number(fd.get("ocpus")) : null,
+        memory_gb: fd.get("memory_gb") ? Number(fd.get("memory_gb")) : null,
         display_name: fd.get("display_name") || null,
         assign_public_ip: fd.get("assign_public_ip") === "on",
         start_after_migration: fd.get("start_after_migration") === "on",

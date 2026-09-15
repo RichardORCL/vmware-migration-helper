@@ -183,6 +183,8 @@ class FakeCompute:
                ocpu_options=NS(min=1, max=94), memory_options=NS(min_in_g_bs=1, max_in_g_bs=1049)),
             NS(shape="VM.Standard2.1", is_flexible=False, ocpus=1, memory_in_gbs=15, ocpu_options=None,
                memory_options=None),
+            NS(shape="VM.Standard.A1.Flex", is_flexible=True, ocpus=1, memory_in_gbs=6,  # Ampere: filtered
+               ocpu_options=NS(min=1, max=80), memory_options=NS(min_in_g_bs=1, max_in_g_bs=512)),
         ])
 
     # boot volumes --------------------------------------------------------
@@ -472,6 +474,7 @@ class FakeNetwork:
     def __init__(self):
         # private IPs (with DNS labels) already present in the subnets; launches add to this
         self.private_ips: list[NS] = []
+        self.listed_compartments: list[str] = []  # compartment_id of each list_vcns / list_subnets call
 
     def hostnames_in_subnet(self, subnet_id: str) -> set[str]:
         return {ip.hostname_label for ip in self.private_ips if ip.subnet_id == subnet_id and ip.hostname_label}
@@ -480,6 +483,7 @@ class FakeNetwork:
         return Resp([ip for ip in self.private_ips if subnet_id is None or ip.subnet_id == subnet_id])
 
     def list_vcns(self, compartment_id, **kw):
+        self.listed_compartments.append(compartment_id)
         # vcn-shared lives in another compartment; only its subnet is visible here
         return Resp([v for k, v in self.vcns.items() if k != "ocid1.vcn.oc1..shared"])
 
@@ -487,6 +491,7 @@ class FakeNetwork:
         return Resp(self.vcns[vcn_id])
 
     def list_subnets(self, compartment_id, **kw):
+        self.listed_compartments.append(compartment_id)
         return Resp([
             NS(id="ocid1.subnet.oc1..1", display_name="private", vcn_id="ocid1.vcn.oc1..1",
                cidr_block="10.0.1.0/24", availability_domain=None, prohibit_public_ip_on_vnic=True),

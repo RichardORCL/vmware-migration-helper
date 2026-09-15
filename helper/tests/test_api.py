@@ -366,6 +366,24 @@ def test_vm_list_and_inspect(env):
     by_subnet = {s["name"]: s for s in opts["subnets"]}
     assert by_subnet["private"]["vcn_id"] == "ocid1.vcn.oc1..1" and by_subnet["private"]["vcn_name"] == "vcn-main"
     assert by_subnet["app"]["vcn_name"] == "vcn-shared"
+    # Ampere (ARM) shapes are not offered: an x86 guest cannot boot on them
+    assert [s["name"] for s in opts["shapes"]] == ["VM.Standard.E5.Flex"]
+
+
+def test_oci_options_network_compartment(env):
+    c = env.client
+    login(c)
+    net = env.fake.network
+    net.listed_compartments.clear()
+    # VCNs/subnets come from the network compartment, everything else from the instance compartment
+    r = c.get("/api/oci/options", params={"compartment_id": "ocid1.compartment.oc1..inst",
+                                          "network_compartment_id": "ocid1.compartment.oc1..net"})
+    assert r.status_code == 200, r.text
+    assert set(net.listed_compartments) == {"ocid1.compartment.oc1..net"}
+    # without a network compartment the instance compartment is used for both
+    net.listed_compartments.clear()
+    c.get("/api/oci/options", params={"compartment_id": "ocid1.compartment.oc1..inst"})
+    assert set(net.listed_compartments) == {"ocid1.compartment.oc1..inst"}
 
 
 # --------------------------------------------------------------------------- migration
@@ -578,6 +596,32 @@ def test_volume_performance_option(env):
     assert job["phase"] == "COMPLETED" and job["target"]["volume_vpus_per_gb"] == 20
     assert env.fake.compute.launch_details[-1].source_details.boot_volume_vpus_per_gb == 20
     assert env.fake.blockstorage.volumes[job["disks"][1]["volume_id"]].vpus_per_gb == 20
+
+
+def test_arm_shape_is_refused(env):
+    c = env.client
+    login(c)
+    r = c.post("/api/jobs", json={"vm_moid": "vm-101", "target": target(shape="VM.Standard.A1.Flex")})
+    assert r.status_code == 400 and "ARM" in r.json()["detail"], r.text
+    assert not env.fake.compute.launch_details
+
+
+def test_custom_sizing_overrides_source_mapping(env):
+    c = env.client
+    login(c)
+    # sizing must be positive when given
+    r = c.post("/api/jobs", json={"vm_moid": "vm-101", "target": target(ocpus=0)})
+    assert r.status_code == 422, r.text
+
+    r = c.post("/api/jobs", json={"vm_moid": "vm-101", "target": target(ocpus=3, memory_gb=24)})
+    assert r.status_code == 202, r.text
+    job = wait_phase(c, r.json()["id"], "COMPLETED", "FAILED")
+    assert job["phase"] == "COMPLETED" and job["target"]["ocpus"] == 3 and job["target"]["memory_gb"] == 24
+    shape_config = env.fake.compute.launch_details[-1].shape_config
+    assert (shape_config.ocpus, shape_config.memory_in_gbs) == (3, 24)
+
+    r = c.get(f"/api/jobs/{job['id']}/diagnostics")
+    assert "ocpus=3.0 memory_gb=24.0" in r.text
 
 
 def test_pipelined_decode_option(env):

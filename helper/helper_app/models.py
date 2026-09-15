@@ -123,6 +123,13 @@ class OciTarget(BaseModel):
     subnet_id: str
     display_name: Optional[str] = None
     shape: Optional[str] = Field(default=None, description="Flex shape name; helper default when omitted")
+    ocpus: Optional[float] = Field(
+        default=None, gt=0, le=512,
+        description="OCPU override; derived from the source vCPUs (2 vCPU = 1 OCPU) when omitted",
+    )
+    memory_gb: Optional[float] = Field(
+        default=None, gt=0, le=4096, description="Memory override in GB; derived from the source RAM when omitted"
+    )
     assign_public_ip: bool = False
     start_after_migration: bool = True
     windows_license_type: Optional[WindowsLicenseType] = None

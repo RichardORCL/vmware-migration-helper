@@ -171,8 +171,8 @@ def platform_config_type(shape: str) -> Optional[str]:
     if not s.startswith("VM."):
         return None
     family = s[3:]  # e.g. STANDARD.E5.FLEX, STANDARD3.FLEX, STANDARD.A1.FLEX, DENSEIO2.8
-    if re.search(r"\.A\d", family):
-        return None  # Ampere (ARM)
+    if is_arm_shape(s):
+        return None  # Ampere (ARM); note VM.GPU.A10.* is an Intel host with NVIDIA A10 cards
     if re.search(r"\.E\d", family):
         return PLATFORM_AMD_VM  # E2..E6 AMD EPYC
     return PLATFORM_INTEL_VM  # Standard2/3, Optimized3, DenseIO2, GPU shapes: Intel
@@ -194,10 +194,19 @@ def map_shape(
 ) -> ShapeConfig:
     shape = target.shape or default_shape
     # OCI counts OCPUs (physical cores); a vCPU is one hardware thread -> 2 vCPU per OCPU.
-    ocpus = max(1, math.ceil(vm.num_cpu / 2))
-    memory_gb = max(1, math.ceil(vm.memory_mb / 1024))
-    memory_gb = min(max(memory_gb, ocpus * min_memory_gb_per_ocpu), ocpus * max_memory_gb_per_ocpu)
-    return ShapeConfig(shape=shape, ocpus=float(ocpus), memory_gb=float(memory_gb))
+    auto_ocpus = max(1, math.ceil(vm.num_cpu / 2))
+    ocpus = float(target.ocpus) if target.ocpus else float(auto_ocpus)
+    if target.memory_gb:
+        memory_gb = float(target.memory_gb)  # explicit: OCI validates it against the shape
+    else:
+        memory_gb = max(1, math.ceil(vm.memory_mb / 1024))
+        memory_gb = min(max(memory_gb, ocpus * min_memory_gb_per_ocpu), ocpus * max_memory_gb_per_ocpu)
+    return ShapeConfig(shape=shape, ocpus=ocpus, memory_gb=float(memory_gb))
+
+
+def is_arm_shape(shape: str) -> bool:
+    """Ampere (A1/A2, ...) shapes run aarch64 only; an x86 guest copied from vSphere cannot boot on them."""
+    return bool(re.match(r"^(VM|BM)\.STANDARD\.A\d", (shape or "").upper()))
 
 
 def volume_size_gb(capacity_bytes: int, min_volume_gb: int = 50) -> int:

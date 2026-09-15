@@ -14,7 +14,7 @@ from helper_app.api.routes_vms import inspect
 from helper_app.auth import require_session
 from helper_app.jobs.store import utcnow
 from helper_app.models import CreateJobRequest, DiskState, Job, JobPhase, LicenseUpdateRequest, WindowsLicenseType
-from helper_app.oci.mapping import WINDOWS_CLIENT_VERSIONS, map_guest_os
+from helper_app.oci.mapping import WINDOWS_CLIENT_VERSIONS, is_arm_shape, map_guest_os
 from helper_app.sessions import UserSession
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"], dependencies=[Depends(require_session)])
@@ -48,6 +48,10 @@ async def create_job(body: CreateJobRequest, request: Request, session: UserSess
     helper_ad = st.clients.identity_info.availability_domain
     if body.target.availability_domain != helper_ad:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"the availability domain must be the helper's ({helper_ad})")
+    shape = body.target.shape or st.settings.default_shape
+    if is_arm_shape(shape):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            f"{shape} is an Ampere (ARM) shape; an x86 guest from vSphere needs an x86 shape")
     active = st.store.active_for_vm(body.vm_moid)
     if active is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, f"job {active.id} for this VM is still {active.phase.value}")

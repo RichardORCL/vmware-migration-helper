@@ -72,3 +72,9 @@ compatibility* preset); the table lists what has actually been verified.
 - [docs/architecture.md](docs/architecture.md) - internals of the migration pipeline
 - [docs/os-mapping.md](docs/os-mapping.md) - guest OS, launch option and shape mapping tables
 - [docs/limitations.md](docs/limitations.md) - known limitations and troubleshooting
+
+## License
+
+[UPL 1.0](LICENSE). The browser-side VNC client is [noVNC](https://github.com/novnc/noVNC) (MPL-2.0) with
+pako (MIT), redistributed unmodified under `helper/helper_app/ui/vendor/novnc`; see
+[THIRD_PARTY_LICENSES.txt](THIRD_PARTY_LICENSES.txt).

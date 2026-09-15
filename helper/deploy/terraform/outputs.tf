@@ -38,6 +38,6 @@ output "next_steps" {
     2. Make sure the helper can reach vCenter: from the VM, curl -k https://${var.vcenter_host}:${var.vcenter_port}/sdk
     3. Open https://${local.helper_ip}:8443/ in a browser, accept the self-signed certificate and log in with a
        vCenter account that has read access to the inventory and "Allow disk access" / "Export" on the VMs to migrate.
-    4. Pick a powered-off VM under "Virtual machines" and start the migration.
+    4. Pick a powered-off VM under "Source VMs" and start the migration.
   EOT
 }

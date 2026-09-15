@@ -540,7 +540,7 @@
         el("td", {}, new Date(j.created_at).toLocaleString()), el("td", {}, j.created_by || "-"),
         el("td", {}, el("a", { class: "button secondary small", href: `#/jobs/${j.id}` }, "Details"))))));
     app.append(el("div", { class: "card" }, el("h2", {}, "Migration jobs"),
-      jobs.length ? table : el("div", { class: "muted" }, "No jobs yet. Pick a powered-off VM under Virtual machines to start one.")));
+      jobs.length ? table : el("div", { class: "muted" }, "No jobs yet. Pick a powered-off VM under Source VMs to start one.")));
     // refresh the table while jobs are active
     if (jobs.some((j) => !TERMINAL.includes(j.phase))) {
       const t = setTimeout(() => { if (location.hash === "#/jobs") jobsView(); }, 5000);

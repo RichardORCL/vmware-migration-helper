@@ -2,15 +2,15 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>vCenter to OCI migration</title>
+  <title>VMware to OCI Compute migration</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">vCenter <span class="arrow">&rarr;</span> OCI migration</div>
+    <div class="brand">VMware <span class="arrow">&rarr;</span> OCI Compute migration</div>
     <nav id="nav" hidden>
-      <a href="#/vms" data-nav="vms">Virtual machines</a>
+      <a href="#/vms" data-nav="vms">Source VMs</a>
       <a href="#/jobs" data-nav="jobs">Jobs</a>
       <a href="#/setup" data-nav="setup">Setup</a>
     </nav>
@@ -54,7 +54,7 @@
   <template id="tpl-vms">
     <section class="card">
       <div class="toolbar">
-        <h2>Virtual machines</h2>
+        <h2>Source VMs</h2>
         <input id="vm-filter" type="search" placeholder="Filter by name, folder or guest OS">
         <label class="check"><input type="checkbox" id="vm-off-only"> powered off only</label>
         <button class="secondary small" id="vm-refresh">Refresh</button>

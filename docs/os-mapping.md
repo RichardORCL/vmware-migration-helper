@@ -37,11 +37,9 @@ registered as Windows (and require a license type).
 | --- | --- |
 | `config.firmware = bios` | `firmware = BIOS` |
 | `config.firmware = efi` | `firmware = UEFI_64` |
-| boot disk on IDE controller | `bootVolumeType = IDE` |
-| boot disk on LSI Logic / LSI SAS / BusLogic | `bootVolumeType = SCSI` |
-| boot disk on PVSCSI / SATA / NVMe | `bootVolumeType = PARAVIRTUALIZED` |
-| all NICs e1000 / e1000e / pcnet32 | `networkType = E1000` |
-| any vmxnet NIC (or no NIC) | `networkType = PARAVIRTUALIZED` |
+| `bootOptions.efiSecureBootEnabled` | shielded instance (`platformConfig.isSecureBootEnabled`, plus Measured Boot + TPM on VM shapes) |
+| any disk controller (IDE, LSI Logic, PVSCSI, SATA, NVMe) | `bootVolumeType = PARAVIRTUALIZED` |
+| any NIC model (e1000, e1000e, vmxnet3, ...) | `networkType = PARAVIRTUALIZED` |
 | *Maximum compatibility* checkbox | `IDE` + `E1000` |
 | explicit overrides | win over everything |
 | always | `remoteDataVolumeType = PARAVIRTUALIZED`, `isConsistentVolumeNamingEnabled = true` |

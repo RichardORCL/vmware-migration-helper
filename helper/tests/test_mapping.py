@@ -69,26 +69,18 @@ def test_launch_options_defaults():
     assert lo.is_consistent_volume_naming_enabled
 
 
-def test_launch_options_bios_ide_e1000():
-    v = vm(
-        firmware=Firmware.BIOS,
-        disks=[DiskSpec(index=0, label="d", device_key=1, capacity_bytes=10, controller_type="ide")],
-        nics=[NicSpec(label="n", adapter_type="e1000")],
-    )
-    lo = m.map_launch_options(v, target())
-    assert lo.firmware == "BIOS"
-    assert lo.boot_volume_type == BootVolumeType.IDE
-    assert lo.network_type == NetworkType.E1000
-
-
-def test_launch_options_lsi_maps_to_scsi_and_mixed_nics_para():
-    v = vm(
-        disks=[DiskSpec(index=0, label="d", device_key=1, capacity_bytes=10, controller_type="lsilogicsas")],
-        nics=[NicSpec(label="n", adapter_type="e1000"), NicSpec(label="n2", adapter_type="vmxnet3")],
-    )
-    lo = m.map_launch_options(v, target())
-    assert lo.boot_volume_type == BootVolumeType.SCSI
-    assert lo.network_type == NetworkType.PARAVIRTUALIZED
+def test_launch_options_source_device_model_does_not_matter():
+    """IDE / LSI Logic / e1000 on vSphere still map to virtio in OCI; only firmware follows the source."""
+    for controller, nic in (("ide", "e1000"), ("lsilogicsas", "e1000e"), ("buslogic", "pcnet32")):
+        v = vm(
+            firmware=Firmware.BIOS,
+            disks=[DiskSpec(index=0, label="d", device_key=1, capacity_bytes=10, controller_type=controller)],
+            nics=[NicSpec(label="n", adapter_type=nic)],
+        )
+        lo = m.map_launch_options(v, target())
+        assert lo.firmware == "BIOS"
+        assert lo.boot_volume_type == BootVolumeType.PARAVIRTUALIZED, controller
+        assert lo.network_type == NetworkType.PARAVIRTUALIZED, nic
 
 
 def test_launch_options_compat_mode_and_overrides():

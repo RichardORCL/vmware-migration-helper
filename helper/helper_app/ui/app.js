@@ -369,11 +369,20 @@
       catch (e) { formError.textContent = e.message; }
     });
 
-    const bootType = { ide: "IDE", lsilogic: "SCSI", lsilogicsas: "SCSI", buslogic: "SCSI" }[vm.disks[0] && vm.disks[0].controller_type] || "PARAVIRTUALIZED";
-    const netType = vm.nics.length && vm.nics.every((n) => /^e1000|pcnet/.test(n.adapter_type)) ? "E1000" : "PARAVIRTUALIZED";
-    kv(document.getElementById("launch-preview"), [
-      ["Firmware", vm.firmware === "efi" ? "UEFI_64" : "BIOS"], ["Boot volume type", bootType], ["Network type", netType],
-    ]);
+    // mirrors mapping.map_launch_options: paravirtualized unless "Maximum compatibility" or an override is chosen
+    const renderPreview = () => {
+      const compat = form.elements.compatibility_mode.checked;
+      const bootOverride = form.elements.boot_volume_type_override.value, netOverride = form.elements.network_type_override.value;
+      kv(document.getElementById("launch-preview"), [
+        ["Firmware", (vm.firmware === "efi" ? "UEFI_64" : "BIOS") + (vm.secure_boot ? " + Secure Boot" : "")],
+        ["Boot volume type", bootOverride || (compat ? "IDE" : "PARAVIRTUALIZED")],
+        ["Network type", netOverride || (compat ? "E1000" : "PARAVIRTUALIZED")],
+      ]);
+    };
+    renderPreview();
+    for (const name of ["compatibility_mode", "boot_volume_type_override", "network_type_override"]) {
+      form.elements[name].addEventListener("change", renderPreview);
+    }
 
     submit.disabled = !inspection.can_export;
 

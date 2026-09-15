@@ -458,7 +458,8 @@ def test_windows_requires_license_and_license_update(env):
     job = wait_phase(c, r.json()["id"], "COMPLETED", "FAILED")
     assert job["phase"] == "COMPLETED", job
     lo = job["launch_options"]
-    assert (lo["firmware"], lo["boot_volume_type"], lo["network_type"]) == ("BIOS", "SCSI", "E1000")
+    # LSI Logic + e1000 on the source: still paravirtualized (only "Maximum compatibility" picks IDE/E1000)
+    assert (lo["firmware"], lo["boot_volume_type"], lo["network_type"]) == ("BIOS", "PARAVIRTUALIZED", "PARAVIRTUALIZED")
     ld = [d for d in env.fake.compute.launch_details if d.display_name == "win-01"][0]
     assert ld.licensing_configs[0].license_type == "BRING_YOUR_OWN_LICENSE"
     r = c.post(f"/api/jobs/{job['id']}/licensing", json={"license_type": "OCI_PROVIDED"})

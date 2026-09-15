@@ -105,26 +105,13 @@ def oci_firmware(firmware: Firmware) -> str:
     return OCI_FIRMWARE_UEFI if firmware == Firmware.EFI else OCI_FIRMWARE_BIOS
 
 
-def _boot_volume_type_for_controller(controller_type: str) -> BootVolumeType:
-    c = (controller_type or "").lower()
-    if c == "ide":
-        return BootVolumeType.IDE
-    if c in ("lsilogic", "lsilogicsas", "buslogic"):
-        return BootVolumeType.SCSI
-    # pvscsi, sata (AHCI), nvme: the guest already runs modern storage stacks -> virtio works best
-    return BootVolumeType.PARAVIRTUALIZED
-
-
-def _network_type_for_nics(vm: VmSpec) -> NetworkType:
-    types = {n.adapter_type.lower() for n in vm.nics}
-    if types and types <= {"e1000", "e1000e", "pcnet32", "vlance"}:
-        return NetworkType.E1000
-    return NetworkType.PARAVIRTUALIZED
-
-
 def map_launch_options(vm: VmSpec, target: OciTarget) -> LaunchOptionsSpec:
-    boot_type = _boot_volume_type_for_controller(vm.disks[0].controller_type if vm.disks else "")
-    net_type = _network_type_for_nics(vm)
+    """Device model for the target.  Always paravirtualized (virtio) - the vSphere controller / NIC model says
+    nothing about what the guest can drive in OCI, and virtio is what OCI images run on.  Only the
+    *Maximum compatibility* preset (IDE + E1000, for guests without virtio drivers) or an explicit override
+    picks emulated devices."""
+    boot_type = BootVolumeType.PARAVIRTUALIZED
+    net_type = NetworkType.PARAVIRTUALIZED
     if target.compatibility_mode:
         boot_type = BootVolumeType.IDE
         net_type = NetworkType.E1000

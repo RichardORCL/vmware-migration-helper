@@ -47,8 +47,9 @@ job reaches a terminal phase. Progress is persisted every 128 MiB or 2 seconds, 
 `MigrationRunner` runs each job in its own thread (pool size `HELPER_MAX_CONCURRENT_JOBS`):
 
 1. **PROVISIONING** (`Provisioner.prepare`)
-   - map guest OS -> seed image metadata, firmware -> `BIOS`/`UEFI_64`, controller/NIC -> launch
-     options, vCPU/RAM -> flex shape ([os-mapping.md](os-mapping.md));
+   - map guest OS -> seed image metadata, firmware -> `BIOS`/`UEFI_64`, device model -> launch
+     options (paravirtualized unless *Maximum compatibility* / overrides), vCPU/RAM -> flex shape
+     ([os-mapping.md](os-mapping.md));
    - `SeedImageService.get_or_create`: import a 1 GB placeholder stream-optimized VMDK as a custom
      image (`launchMode` PARAVIRTUALIZED, or EMULATED for IDE/E1000), pin its capability schema
      (firmware fixed; all boot volume and NIC types allowed), reuse by freeform tags on later jobs;

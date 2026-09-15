@@ -1,9 +1,16 @@
 """Provisioning state machine for one migration job.
 
-prepare():   seed image -> launch target -> stop -> detach boot volume -> create data volumes
-             -> attach everything to the helper (paravirtualized); the disks are then ATTACHED
-finalize():  detach from helper -> attach boot + data volumes to target -> (start) -> COMPLETED
+prepare():   seed image -> launch target -> create data volumes -> attach them to the (running) target as
+             read/write shareable -> stop -> detach boot volume -> attach everything to the helper
+             (paravirtualized; data volumes as the second shareable attachment); the disks are then ATTACHED
+finalize():  detach from helper -> attach boot volume to target -> (start) -> COMPLETED
 cleanup():   best-effort teardown after a failure or cancellation
+
+OCI only attaches data volumes to a RUNNING instance, and the target must be STOPPED while its boot volume is
+swapped.  Attaching the data volumes while the target still runs from the seed image (and keeping those
+attachments) means the guest sees all its disks on its very first boot instead of having them hot-plugged
+afterwards.  Emulated attachments (Maximum compatibility) cannot be shareable; those are attached after the
+start in finalize().
 """
 
 from __future__ import annotations
@@ -212,33 +219,7 @@ class Provisioner:
                 reason = self.c.work_request_errors(target.compartment_id, job.instance_id)
                 raise OciError(f"{exc}; {reason}" if reason else str(exc)) from exc
 
-        # 3. stop it (hard stop: the placeholder image has no OS to react to ACPI)
-        inst = self.c.compute.get_instance(job.instance_id).data
-        if inst.lifecycle_state != "STOPPED":
-            step("stop_instance", "Stopping target instance")
-            if inst.lifecycle_state in ("RUNNING", "STARTING", "PROVISIONING"):
-                self.c.compute.instance_action(job.instance_id, "STOP")
-            self.c.wait_for(lambda: self.c.compute.get_instance(job.instance_id), "lifecycle_state",
-                            ["STOPPED"], self.s.launch_timeout_s, what="target instance")
-
-        # 4. detach boot volume from the target
-        if not job.boot_volume_id:
-            step("detach_boot_volume", "Detaching boot volume from target")
-            atts = self.c.compute.list_boot_volume_attachments(
-                target.availability_domain, target.compartment_id, instance_id=job.instance_id
-            ).data
-            atts = [a for a in atts if a.lifecycle_state in ("ATTACHED", "ATTACHING")]
-            if not atts:
-                raise OciError("target instance has no attached boot volume")
-            att = atts[0]
-            job.boot_volume_id = att.boot_volume_id
-            job.disks[0].volume_id = att.boot_volume_id
-            self.save(job)
-            self.c.compute.detach_boot_volume(att.id)
-            self.c.wait_for(lambda: self.c.compute.get_boot_volume_attachment(att.id), "lifecycle_state",
-                            ["DETACHED"], self.s.volume_timeout_s, what="boot volume attachment")
-
-        # 5. create data volumes
+        # 3. create data volumes
         for disk in job.disks[1:]:
             if disk.volume_id:
                 continue
@@ -259,7 +240,43 @@ class Provisioner:
             self.c.wait_for(lambda vid=vol.id: self.c.blockstorage.get_volume(vid), "lifecycle_state",
                             ["AVAILABLE"], self.s.volume_timeout_s, what=f"volume for disk {disk.index}")
 
-        # 6. attach everything to the helper
+        # 4. attach the data volumes to the target while it is still running (OCI refuses data volume
+        #    attachments on a stopped instance) as read/write shareable, so the helper can take a second
+        #    attachment for the copy and the guest finds every disk in place on its first boot
+        inst = self.c.compute.get_instance(job.instance_id).data
+        if inst.lifecycle_state == "RUNNING" and self._shareable_target_attachments(job):
+            for n, disk in enumerate(job.disks[1:], start=1):
+                if disk.target_attachment_id:
+                    continue
+                step("attach_data_volume", f"Attaching disk {disk.index} to target (shareable, before its first boot)")
+                self._attach_to_target(job, disk, n, shareable=True)
+
+        # 5. stop it (hard stop: the placeholder image has no OS to react to ACPI)
+        if inst.lifecycle_state != "STOPPED":
+            step("stop_instance", "Stopping target instance")
+            if inst.lifecycle_state in ("RUNNING", "STARTING", "PROVISIONING"):
+                self.c.compute.instance_action(job.instance_id, "STOP")
+            self.c.wait_for(lambda: self.c.compute.get_instance(job.instance_id), "lifecycle_state",
+                            ["STOPPED"], self.s.launch_timeout_s, what="target instance")
+
+        # 6. detach boot volume from the target
+        if not job.boot_volume_id:
+            step("detach_boot_volume", "Detaching boot volume from target")
+            atts = self.c.compute.list_boot_volume_attachments(
+                target.availability_domain, target.compartment_id, instance_id=job.instance_id
+            ).data
+            atts = [a for a in atts if a.lifecycle_state in ("ATTACHED", "ATTACHING")]
+            if not atts:
+                raise OciError("target instance has no attached boot volume")
+            att = atts[0]
+            job.boot_volume_id = att.boot_volume_id
+            job.disks[0].volume_id = att.boot_volume_id
+            self.save(job)
+            self.c.compute.detach_boot_volume(att.id)
+            self.c.wait_for(lambda: self.c.compute.get_boot_volume_attachment(att.id), "lifecycle_state",
+                            ["DETACHED"], self.s.volume_timeout_s, what="boot volume attachment")
+
+        # 7. attach everything to the helper
         for disk in job.disks:
             if disk.helper_attachment_id and disk.device:
                 continue
@@ -271,7 +288,8 @@ class Provisioner:
             else:
                 device = self._pick_free_device(job)
                 step("attach_to_helper", f"Attaching disk {disk.index} volume to helper as {device}")
-                att = self._attach_to_helper(job, disk, device)
+                # a volume that already hangs off the target must be shared on every attachment
+                att = self._attach_to_helper(job, disk, device, shareable=bool(disk.target_attachment_id))
                 disk.device = att.device or device
             disk.status = DiskStatus.ATTACHED
             self.save(job)
@@ -279,18 +297,55 @@ class Provisioner:
         step("ready", "Volumes attached to helper; ready to receive disk streams")
         return job
 
-    def _attach_to_helper(self, job: Job, disk: DiskState, device: str | None) -> Any:
+    @staticmethod
+    def _remote_data_volume_type(job: Job) -> str:
+        """Device class announced in ``launchOptions.remoteDataVolumeType``; every data volume attachment
+        must use it."""
+        return job.launch_options.remote_data_volume_type if job.launch_options else "PARAVIRTUALIZED"
+
+    def _shareable_target_attachments(self, job: Job) -> bool:
+        """Multi-attach (read/write shareable) exists for paravirtualized and iSCSI attachments only, not for
+        emulated (SCSI/IDE) ones."""
+        return self._remote_data_volume_type(job) not in ("SCSI", "IDE")
+
+    def _target_device(self, job: Job, n: int) -> str | None:
+        """Consistent device path of the ``n``-th data disk on the target (Linux only: OCI rejects the
+        attribute for Windows instances, "device attribute ... is not supported ... for Windows")."""
+        return None if _is_windows_job(job) else f"{self.s.device_prefix}{chr(ord('a') + n)}"
+
+    def _attach_to_target(self, job: Job, disk: DiskState, n: int, shareable: bool) -> Any:
         import oci.core.models as M
 
-        att = self.c.compute.attach_volume(
-            M.AttachParavirtualizedVolumeDetails(
-                type="paravirtualized",
-                instance_id=self.helper_id,
-                volume_id=disk.volume_id,
-                device=device,
-                display_name=f"vc-oci-{job.id[:8]}-disk{disk.index}",
-            )
-        ).data
+        remote_type = self._remote_data_volume_type(job)
+        common = dict(instance_id=job.instance_id, volume_id=disk.volume_id, device=self._target_device(job, n),
+                      display_name=f"{job.instance_display_name or job.vm.name}-disk{disk.index}")
+        if remote_type == "ISCSI":
+            details = M.AttachIScsiVolumeDetails(type="iscsi", **common)
+        elif remote_type in ("SCSI", "IDE"):
+            details = M.AttachEmulatedVolumeDetails(type="emulated", **common)
+        else:
+            details = M.AttachParavirtualizedVolumeDetails(type="paravirtualized", **common)
+        if shareable:
+            details.is_shareable = True
+        att = self.c.compute.attach_volume(details).data
+        disk.target_attachment_id = att.id
+        self.save(job)
+        return self.c.wait_for(lambda: self.c.compute.get_volume_attachment(att.id), "lifecycle_state",
+                               ["ATTACHED"], self.s.volume_timeout_s, what=f"target attachment disk {disk.index}")
+
+    def _attach_to_helper(self, job: Job, disk: DiskState, device: str | None, shareable: bool = False) -> Any:
+        import oci.core.models as M
+
+        details = M.AttachParavirtualizedVolumeDetails(
+            type="paravirtualized",
+            instance_id=self.helper_id,
+            volume_id=disk.volume_id,
+            device=device,
+            display_name=f"vc-oci-{job.id[:8]}-disk{disk.index}",
+        )
+        if shareable:
+            details.is_shareable = True
+        att = self.c.compute.attach_volume(details).data
         disk.helper_attachment_id = att.id
         self.save(job)
         return self.c.wait_for(lambda: self.c.compute.get_volume_attachment(att.id), "lifecycle_state",
@@ -340,40 +395,41 @@ class Provisioner:
             self.c.wait_for(lambda: self.c.compute.get_boot_volume_attachment(att.id), "lifecycle_state",
                             ["ATTACHED"], self.s.volume_timeout_s, what="target boot volume attachment")
 
-        # data volumes use the device class announced in launchOptions.remoteDataVolumeType
-        remote_type = job.launch_options.remote_data_volume_type if job.launch_options else "PARAVIRTUALIZED"
-        # consistent device paths (/dev/oracleoci/oraclevdX) are a Linux feature; OCI rejects the attribute
-        # for Windows instances ("device attribute ... is not supported ... for Windows operating system")
-        consistent_paths = not _is_windows_job(job)
-        for n, disk in enumerate(job.disks[1:], start=1):
-            if disk.target_attachment_id:
-                continue
-            self._step(job, "attach_data_volume", f"Attaching disk {disk.index} to target")
-            device = f"{self.s.device_prefix}{chr(ord('a') + n)}" if consistent_paths else None
-            if remote_type == "ISCSI":
-                details = M.AttachIScsiVolumeDetails(type="iscsi", instance_id=job.instance_id,
-                                                     volume_id=disk.volume_id, device=device)
-            elif remote_type in ("SCSI", "IDE"):
-                details = M.AttachEmulatedVolumeDetails(type="emulated", instance_id=job.instance_id,
-                                                        volume_id=disk.volume_id, device=device)
-            else:
-                details = M.AttachParavirtualizedVolumeDetails(type="paravirtualized", instance_id=job.instance_id,
-                                                               volume_id=disk.volume_id, device=device)
-            att = self.c.compute.attach_volume(details).data
-            disk.target_attachment_id = att.id
-            self.save(job)
-            self.c.wait_for(lambda aid=att.id: self.c.compute.get_volume_attachment(aid), "lifecycle_state",
-                            ["ATTACHED"], self.s.volume_timeout_s, what=f"target attachment disk {disk.index}")
+        # Data volumes were normally attached (shareable) in prepare() while the target still ran.  Whatever is
+        # left (emulated attachments cannot be shared) can only be attached to a RUNNING instance, so the
+        # guest is started first and the disks are hot-plugged.
+        pending = [(n, d) for n, d in enumerate(job.disks[1:], start=1) if not d.target_attachment_id]
+        started_for_attach = False
+        if pending:
+            self._start_target(job, "Starting target instance (OCI attaches data volumes to running instances only)")
+            started_for_attach = True
+            for n, disk in pending:
+                self._step(job, "attach_data_volume", f"Attaching disk {disk.index} to target")
+                self._attach_to_target(job, disk, n, shareable=False)
 
         if target.start_after_migration:
-            self._step(job, "start_instance", "Starting target instance")
-            self.c.compute.instance_action(job.instance_id, "START")
+            if not started_for_attach:
+                self._start_target(job, "Starting target instance")
+        elif started_for_attach:
+            # the user asked for a stopped result; the guest already boots, so give it an orderly shutdown
+            self._step(job, "stop_instance", "Stopping target instance again (start after migration is off)")
+            self.c.compute.instance_action(job.instance_id, "SOFTSTOP")
             self.c.wait_for(lambda: self.c.compute.get_instance(job.instance_id), "lifecycle_state",
-                            ["RUNNING"], self.s.launch_timeout_s, what="target instance")
+                            ["STOPPED"], self.s.launch_timeout_s, what="target instance")
 
         job.phase = JobPhase.COMPLETED
         self._step(job, "completed", "Migration finished")
         return job
+
+    def _start_target(self, job: Job, message: str) -> None:
+        inst = self.c.compute.get_instance(job.instance_id).data
+        if inst.lifecycle_state == "RUNNING":
+            return
+        self._step(job, "start_instance", message)
+        if inst.lifecycle_state not in ("STARTING", "PROVISIONING"):
+            self.c.compute.instance_action(job.instance_id, "START")
+        self.c.wait_for(lambda: self.c.compute.get_instance(job.instance_id), "lifecycle_state",
+                        ["RUNNING"], self.s.launch_timeout_s, what="target instance")
 
     def _detach_all_from_helper(self, job: Job) -> None:
         for disk in job.disks:
@@ -389,6 +445,14 @@ class Provisioner:
             disk.helper_attachment_id = None
             disk.device = None
             self.save(job)
+
+    def _detach_from_target(self, disk: DiskState) -> None:
+        att = self.c.compute.get_volume_attachment(disk.target_attachment_id).data
+        if att.lifecycle_state not in ("DETACHED", "DETACHING"):
+            self.c.compute.detach_volume(disk.target_attachment_id)
+        self.c.wait_for(lambda: self.c.compute.get_volume_attachment(disk.target_attachment_id), "lifecycle_state",
+                        ["DETACHED"], self.s.volume_timeout_s, what=f"target detach disk {disk.index}")
+        disk.target_attachment_id = None
 
     # ------------------------------------------------------------------ cleanup
     def cleanup(self, job: Job) -> list[str]:
@@ -406,6 +470,12 @@ class Provisioner:
             self._detach_all_from_helper(job)
         except Exception as exc:  # noqa: BLE001
             actions.append(f"failed: detach from helper: {exc}")
+        # data volumes attached to the target in prepare(): release them first, otherwise deleting the volume
+        # races the detach that terminating the instance triggers
+        for disk in job.disks[1:]:
+            if disk.target_attachment_id:
+                attempt(f"detach disk {disk.index} from target",
+                        lambda d=disk: self._detach_from_target(d))
         if job.instance_id:
             attempt(f"terminate instance {job.instance_id}",
                     lambda: self.c.compute.terminate_instance(job.instance_id, preserve_boot_volume=False))

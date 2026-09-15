@@ -42,7 +42,7 @@ registered as Windows (and require a license type).
 | any NIC model (e1000, e1000e, vmxnet3, ...) | `networkType = PARAVIRTUALIZED` |
 | *Maximum compatibility* checkbox | `IDE` + `E1000` |
 | explicit overrides | win over everything |
-| data volumes | `remoteDataVolumeType` follows the boot volume's device class (`PARAVIRTUALIZED`; `SCSI` for IDE/SCSI; `ISCSI` for iSCSI) because OCI refuses to mix paravirtualized and emulated volumes in one instance; the attachments in the finalize step use the same class |
+| data volumes | `remoteDataVolumeType` follows the boot volume's device class (`PARAVIRTUALIZED`; `SCSI` for IDE/SCSI; `ISCSI` for iSCSI) because OCI refuses to mix paravirtualized and emulated volumes in one instance; the target attachments use the same class (paravirtualized/iSCSI: attached read/write shareable before the first boot; emulated: hot-plugged after the start) |
 | Linux guest | seed image schema `Storage.ConsistentVolumeNaming = true`; data volumes attached with `device=/dev/oracleoci/oraclevdX` |
 | Windows guest | seed image schema `Storage.ConsistentVolumeNaming = false`; data volumes attached without a device path (OCI rejects it for Windows) |
 

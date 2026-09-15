@@ -57,6 +57,7 @@ class FakeCompute:
         self.capability_schemas: list = []
         self.launch_details: list = []
         self.attach_errors: list[Exception] = []  # raised (one per call) by attach_volume to a target instance
+        self.boot_attach_errors: list[Exception] = []  # raised (one per call) by attach_boot_volume
         self.actions: list[tuple[str, str]] = []
         self.updates: list = []
         self.terminated: list[str] = []
@@ -145,7 +146,7 @@ class FakeCompute:
     def instance_action(self, iid, action):
         self.actions.append((iid, action))
         inst = self.instances[iid]
-        if action == "STOP":
+        if action in ("STOP", "SOFTSTOP"):
             inst.lifecycle_state = "STOPPING"
             self.pending_transitions[iid] = "STOPPED"
         elif action == "START":
@@ -197,6 +198,8 @@ class FakeCompute:
         return Resp(self.boot_attachments[att_id])
 
     def attach_boot_volume(self, details):
+        if self.boot_attach_errors:
+            raise self.boot_attach_errors.pop(0)
         att_id = oid("bootvolumeattachment")
         att = NS(id=att_id, boot_volume_id=details.boot_volume_id, instance_id=details.instance_id,
                  lifecycle_state="ATTACHED")
@@ -220,8 +223,27 @@ class FakeCompute:
                                 f"The volume cannot be attached to the instance because the device attribute {device} "
                                 "is not supported with Attach Volume Operation for Windows operating system. Remove "
                                 "the device attribute value and try again. ", "attach_volume")
+        # OCI: data volumes (whatever the attachment type) only attach to a RUNNING instance
+        if inst is not None and inst.lifecycle_state != "RUNNING":
+            raise service_error(409, "IncorrectState",
+                                f"Instance {details.instance_id} is in {inst.lifecycle_state.capitalize()} state, "
+                                "when it was expected to be in Running state", "attach_volume")
+        # OCI: multi-attach needs read/write shareable on every attachment; only iSCSI and paravirtualized
+        # attachments of block (not boot) volumes can be shareable
+        shareable = bool(getattr(details, "is_shareable", False))
+        if shareable and (is_boot or details.type == "emulated"):
+            raise service_error(400, "InvalidParameter",
+                                "Shareable attachments are only supported for iSCSI and paravirtualized block "
+                                "volumes", "attach_volume")
+        others = [a for a in self.vol_attachments.values()
+                  if a.volume_id == details.volume_id and a.lifecycle_state in ("ATTACHED", "ATTACHING")]
+        if others and not (shareable and all(a.is_shareable for a in others)):
+            raise service_error(409, "Conflict",
+                                f"Volume {details.volume_id} is already attached to instance {others[0].instance_id}; "
+                                "attach it as read/write shareable on all instances to share it", "attach_volume")
         att = NS(id=att_id, volume_id=details.volume_id, instance_id=details.instance_id, device=device,
-                 attachment_type=details.type, lifecycle_state="ATTACHED", fake_disk=None)
+                 attachment_type=details.type, is_shareable=shareable, lifecycle_state="ATTACHED", fake_disk=None,
+                 instance_state_at_attach=inst.lifecycle_state if inst is not None else None)
         self.vol_attachments[att_id] = att
         if details.instance_id == self.f.identity.instance_id:
             # simulate the disk appearing on the helper: at the consistent path, or as the next /dev/sdX

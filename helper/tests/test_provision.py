@@ -108,7 +108,15 @@ def test_prepare_linux_two_disks(env):
     assert getattr(ld, "platform_config", None) is None  # no Secure Boot on the source -> plain launch
     assert schema["Compute.SecureBoot"].default_value is False
 
-    # stopped, boot volume detached from the target and attached to the helper
+    # the data volume was attached to the target while it still ran from the seed (OCI attaches data volumes
+    # to running instances only) as read/write shareable, so it is in place for the guest's first boot
+    target_atts = [a for a in fake.compute.vol_attachments.values() if a.instance_id == job.instance_id]
+    assert [a.volume_id for a in target_atts] == [job.disks[1].volume_id]
+    assert target_atts[0].is_shareable and target_atts[0].instance_state_at_attach == "RUNNING"
+    assert target_atts[0].attachment_type == "paravirtualized" and target_atts[0].lifecycle_state == "ATTACHED"
+    assert target_atts[0].device == f"{settings.device_prefix}b"
+    assert job.disks[1].target_attachment_id == target_atts[0].id
+    # then stopped, boot volume detached from the target and attached to the helper
     assert (job.instance_id, "STOP") in fake.compute.actions
     assert fake.compute.instances[job.instance_id].lifecycle_state == "STOPPED"
     boot_att = [a for a in fake.compute.boot_attachments.values() if a.instance_id == job.instance_id]
@@ -120,6 +128,8 @@ def test_prepare_linux_two_disks(env):
     # boot volume: no device path allowed, so it is found as the disk that appeared; data volume: consistent path
     assert helper_atts[0].device is None and job.disks[0].device.endswith("sdb")
     assert job.disks[1].device.endswith("oraclevdb")
+    # the helper's copy of the shared data volume is the second shareable attachment; the boot volume is not shared
+    assert not helper_atts[0].is_shareable and helper_atts[1].is_shareable
     assert all(d.status == DiskStatus.ATTACHED for d in job.disks)
     assert [d.label for d in job.disks] == ["Hard disk 1", "Hard disk 2"]
     # store mirrors the in-memory job
@@ -185,17 +195,42 @@ def test_prepare_windows_bios_licensing_and_seed_reuse(env):
     assert len(fake.compute.images) == 2
 
 
-def test_emulated_data_volumes_attach_as_emulated(env):
+def test_emulated_data_volumes_attach_as_emulated_after_the_start(env):
+    """Emulated attachments cannot be shareable, so they are not pre-attached in prepare(); OCI only attaches
+    data volumes to a running instance, so finalize() starts the target first and hot-plugs them."""
     settings, fake, store, prov = env
     job = make_job(make_vm(windows=True, firmware=Firmware.BIOS, disks=2),
                    make_target(compatibility_mode=True, windows_license_type=WindowsLicenseType.OCI_PROVIDED))
+    store.put(job)
+    prov.prepare(job)
+    assert not [a for a in fake.compute.vol_attachments.values() if a.instance_id == job.instance_id]
+    assert job.disks[1].target_attachment_id is None
+    for d in job.disks:
+        d.status = DiskStatus.COPIED
+    prov.finalize(job)
+    target_atts = [a for a in fake.compute.vol_attachments.values() if a.instance_id == job.instance_id]
+    assert [a.attachment_type for a in target_atts] == ["emulated"]
+    assert target_atts[0].instance_state_at_attach == "RUNNING" and not target_atts[0].is_shareable
+    assert fake.compute.actions.count((job.instance_id, "START")) == 1
+    assert fake.compute.instances[job.instance_id].lifecycle_state == "RUNNING"
+
+
+def test_emulated_without_start_after_migration_stops_the_target_again(env):
+    settings, fake, store, prov = env
+    job = make_job(make_vm(windows=True, firmware=Firmware.BIOS, disks=2),
+                   make_target(compatibility_mode=True, windows_license_type=WindowsLicenseType.OCI_PROVIDED,
+                               start_after_migration=False))
     store.put(job)
     prov.prepare(job)
     for d in job.disks:
         d.status = DiskStatus.COPIED
     prov.finalize(job)
     target_atts = [a for a in fake.compute.vol_attachments.values() if a.instance_id == job.instance_id]
-    assert [a.attachment_type for a in target_atts] == ["emulated"]
+    assert len(target_atts) == 1 and target_atts[0].lifecycle_state == "ATTACHED"
+    actions = [a for i, a in fake.compute.actions if i == job.instance_id]
+    assert actions == ["STOP", "START", "SOFTSTOP"]
+    assert fake.compute.instances[job.instance_id].lifecycle_state == "STOPPED"
+    assert job.phase == JobPhase.COMPLETED
 
 
 def test_windows_data_volumes_attach_without_device_path(env):
@@ -503,8 +538,18 @@ def test_finalize_requires_copied_then_reattaches_and_starts(env):
                    if a.instance_id == job.instance_id and a.lifecycle_state == "ATTACHED"]
     assert [a.volume_id for a in target_atts] == [job.disks[1].volume_id]
     assert target_atts[0].device.endswith("oraclevdb")
-    assert (job.instance_id, "START") in fake.compute.actions
+    # the data volume attachment from prepare() is kept: nothing is attached after the boot volume, and the
+    # instance is started once, with all disks already present
+    assert len([a for a in fake.compute.vol_attachments.values() if a.instance_id == job.instance_id]) == 1
+    assert target_atts[0].instance_state_at_attach == "RUNNING"
+    assert fake.compute.actions.count((job.instance_id, "START")) == 1
     assert fake.compute.instances[job.instance_id].lifecycle_state == "RUNNING"
+
+    # finalize is idempotent (Retry finalize): nothing is attached or started twice
+    prov.finalize(job)
+    assert fake.compute.actions.count((job.instance_id, "START")) == 1
+    assert len([a for a in fake.compute.boot_attachments.values()
+                if a.instance_id == job.instance_id and a.lifecycle_state == "ATTACHED"]) == 1
 
 
 def test_finalize_without_start(env):
@@ -528,6 +573,9 @@ def test_cleanup_tears_down(env):
     assert job.instance_id in fake.compute.terminated
     assert set(fake.blockstorage.deleted) == {job.disks[0].volume_id, job.disks[1].volume_id}
     assert all(a.startswith("ok:") for a in actions), actions
+    # every attachment (helper side and the pre-attached target side) was released before the deletes
+    assert all(a.lifecycle_state == "DETACHED" for a in fake.compute.vol_attachments.values())
+    assert job.disks[1].target_attachment_id is None and job.disks[1].helper_attachment_id is None
 
 
 def test_update_windows_license(env):

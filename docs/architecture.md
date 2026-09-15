@@ -54,11 +54,17 @@ job reaches a terminal phase. Progress is persisted every 128 MiB or 2 seconds, 
      image (`launchMode` PARAVIRTUALIZED, or EMULATED for IDE/E1000), pin its capability schema
      (firmware fixed; all boot volume and NIC types allowed), reuse by freeform tags on later jobs;
    - `LaunchInstance` from the seed image with explicit `launchOptions`, `shapeConfig`, optional
-     `licensingConfigs` (Windows) and a boot volume sized for disk 0; stop it; detach its boot
-     volume;
-   - create one block volume per additional disk; attach boot + data volumes to the helper
-     (paravirtualized). Data volumes get consistent device names (`/dev/oracleoci/oraclevd*`); OCI
-     does not allow a device path for a boot volume attached as a data volume, so the helper
+     `licensingConfigs` (Windows) and a boot volume sized for disk 0;
+   - create one block volume per additional disk and attach them to the target **while it is
+     still running** from the seed image, as read/write *shareable* attachments (OCI only attaches
+     data volumes to a `RUNNING` instance, and the target has to be stopped for the boot volume
+     swap below). These attachments are kept, so the guest finds all its disks on its first boot.
+     Emulated attachments (*Maximum compatibility*, `SCSI`/`IDE`) cannot be shareable and are
+     hot-plugged in the finalize step instead;
+   - stop the target (hard stop; the placeholder has no OS); detach its boot volume;
+   - attach boot + data volumes to the helper (paravirtualized; the data volumes as the second
+     shareable attachment). Data volumes get consistent device names (`/dev/oracleoci/oraclevd*`);
+     OCI does not allow a device path for a boot volume attached as a data volume, so the helper
      snapshots `/sys/block`, attaches, and takes the one new disk of the expected size (serialised
      across jobs).
    - A pending cancellation is honoured between provisioning steps.
@@ -81,9 +87,11 @@ job reaches a terminal phase. Progress is persisted every 128 MiB or 2 seconds, 
      with their original type. A failure restarts the disk from the beginning, up to
      `HELPER_DISK_RETRY_ATTEMPTS` times; the lease is completed or aborted on exit.
 3. **FINALIZING** (`Provisioner.finalize`)
-   - detach all volumes from the helper, attach the boot volume and the data volumes (in order;
-     with consistent device paths for Linux guests, without for Windows) to the target instance,
-     start it unless *start after migration* is off.
+   - detach all volumes from the helper (the data volumes stay attached to the target), attach
+     the boot volume to the target instance, start it unless *start after migration* is off.
+   - Data volumes that could not be pre-attached (emulated attachments) need a running instance:
+     the target is started first and they are hot-plugged (with consistent device paths for Linux
+     guests, without for Windows); with *start after migration* off it is then soft-stopped again.
 
 Cancellation sets a flag checked between chunks and steps; the runner then runs
 `Provisioner.cleanup` (terminate the instance, delete volumes, best effort) and the job ends

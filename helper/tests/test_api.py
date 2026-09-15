@@ -451,13 +451,16 @@ def test_resume_finalize_after_attach_failure(env):
     where it stopped without exporting again (and without a vCenter session)."""
     c = env.client
     login(c)
-    env.fake.compute.attach_errors.append(service_error(
-        400, "InvalidParameter", "The volume cannot be attached ... device attribute ... Windows", "attach_volume"))
+    env.fake.compute.boot_attach_errors.append(service_error(
+        409, "IncorrectState", "Boot volume is in Attaching state, when it was expected to be in Available state",
+        "attach_boot_volume"))
     r = c.post("/api/jobs", json={"vm_moid": "vm-101", "target": target()})
     assert r.status_code == 202, r.text
     job = wait_phase(c, r.json()["id"], "COMPLETED", "FAILED")
-    assert job["phase"] == "FAILED" and job["step"] == "attach_data_volume", job
+    assert job["phase"] == "FAILED" and job["step"] == "attach_boot_volume", job
     assert all(d["status"] == "COPIED" for d in job["disks"])
+    # the data volume stayed attached to the target since prepare(); only the boot volume is still missing
+    assert job["disks"][1]["target_attachment_id"] and not job["disks"][0]["target_attachment_id"]
     exports_before = len(FakeExport.instances)
     assert c.post("/api/jobs/does-not-exist/finalize").status_code == 404
 

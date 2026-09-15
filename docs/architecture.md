@@ -81,13 +81,17 @@ job reaches a terminal phase. Progress is persisted every 128 MiB or 2 seconds, 
      with their original type. A failure restarts the disk from the beginning, up to
      `HELPER_DISK_RETRY_ATTEMPTS` times; the lease is completed or aborted on exit.
 3. **FINALIZING** (`Provisioner.finalize`)
-   - detach all volumes from the helper, attach the boot volume and the data volumes (in order)
-     to the target instance, start it unless *start after migration* is off.
+   - detach all volumes from the helper, attach the boot volume and the data volumes (in order;
+     with consistent device paths for Linux guests, without for Windows) to the target instance,
+     start it unless *start after migration* is off.
 
 Cancellation sets a flag checked between chunks and steps; the runner then runs
 `Provisioner.cleanup` (terminate the instance, delete volumes, best effort) and the job ends
 `CANCELLED`. A `FAILED` job keeps its OCI resources for inspection; *cancel* on a failed job runs
-the same cleanup.
+the same cleanup. If it failed with every disk `COPIED` and an instance launched (i.e. inside
+`finalize`), `POST /api/jobs/{id}/finalize` (*Retry finalize* in the UI) re-runs
+`Provisioner.finalize` alone: it is idempotent (skips attachments that already exist) and needs no
+vCenter session, so the copied data is not exported again.
 
 ### Restart behaviour
 

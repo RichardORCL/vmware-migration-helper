@@ -195,6 +195,15 @@
       try { await api("POST", `/jobs/${job.id}/cancel`); } catch (e) { alert(e.message); }
       finally { cancelBtn.disabled = false; }
     };
+    // a job that failed after all disks were copied (attach / start rejected by OCI) can resume finalizing
+    const resumeBtn = root.querySelector("[data-resume]");
+    resumeBtn.hidden = !(job.phase === "FAILED" && job.instance_id && job.disks.length && job.disks.every((d) => d.status === "COPIED"));
+    resumeBtn.onclick = async () => {
+      resumeBtn.disabled = true;
+      try { await api("POST", `/jobs/${job.id}/finalize`); route(); }  // polling stopped at FAILED; restart the view
+      catch (e) { alert(e.message); }
+      finally { resumeBtn.disabled = false; }
+    };
     const copyBtn = root.querySelector("[data-copy]"); const copyState = root.querySelector("[data-copy-state]");
     if (!copyBtn.onclick) copyBtn.onclick = async () => {
       copyBtn.disabled = true; copyState.textContent = "Collecting...";

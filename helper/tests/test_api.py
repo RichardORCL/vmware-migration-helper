@@ -17,7 +17,7 @@ from helper_app.models import Job, JobPhase
 from helper_app.updater import Updater
 from helper_app.vsphere.inventory import vm_spec_from_vm
 
-from .fake_oci import FakeOci
+from .fake_oci import FakeOci, service_error
 from .fake_vsphere import FakeExport, FakeVCenterConnector, make_vm
 from .test_vmdk_stream import make_raw
 
@@ -444,6 +444,32 @@ def test_full_migration_with_retry(env):
     assert c.post(f"/api/jobs/{job_id}/cancel").status_code == 409  # already completed
     # the vCenter session is released but stays open for the still logged-in user
     assert not env.vcenter.sessions[0].closed
+
+
+def test_resume_finalize_after_attach_failure(env):
+    """A job that fails while attaching to the target keeps its copied volumes; "Retry finalize" picks up
+    where it stopped without exporting again (and without a vCenter session)."""
+    c = env.client
+    login(c)
+    env.fake.compute.attach_errors.append(service_error(
+        400, "InvalidParameter", "The volume cannot be attached ... device attribute ... Windows", "attach_volume"))
+    r = c.post("/api/jobs", json={"vm_moid": "vm-101", "target": target()})
+    assert r.status_code == 202, r.text
+    job = wait_phase(c, r.json()["id"], "COMPLETED", "FAILED")
+    assert job["phase"] == "FAILED" and job["step"] == "attach_data_volume", job
+    assert all(d["status"] == "COPIED" for d in job["disks"])
+    exports_before = len(FakeExport.instances)
+    assert c.post("/api/jobs/does-not-exist/finalize").status_code == 404
+
+    r = c.post(f"/api/jobs/{job['id']}/finalize")
+    assert r.status_code == 202, r.text
+    job = wait_phase(c, job["id"], "COMPLETED", "FAILED")
+    assert job["phase"] == "COMPLETED", job
+    assert job["error"] is None
+    assert len(FakeExport.instances) == exports_before  # nothing was exported again
+    inst = env.fake.compute.instances[job["instance_id"]]
+    assert inst.lifecycle_state == "RUNNING"
+    assert c.post(f"/api/jobs/{job['id']}/finalize").status_code == 409  # nothing left to resume
 
 
 def test_windows_requires_license_and_license_update(env):

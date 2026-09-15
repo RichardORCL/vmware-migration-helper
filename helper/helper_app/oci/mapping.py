@@ -134,12 +134,14 @@ def map_launch_options(vm: VmSpec, target: OciTarget) -> LaunchOptionsSpec:
     if target.network_type_override:
         net_type = target.network_type_override
     firmware = oci_firmware(vm.firmware)
+    windows = vm.is_windows or map_guest_os(vm.guest_id, vm.guest_full_name).is_windows
     return LaunchOptionsSpec(
         firmware=firmware,
         boot_volume_type=boot_type,
         network_type=net_type,
         remote_data_volume_type=remote_data_volume_type_for(boot_type),
-        is_consistent_volume_naming_enabled=True,
+        # consistent device paths (/dev/oracleoci/...) exist for Linux guests only
+        is_consistent_volume_naming_enabled=not windows,
         # Secure Boot only exists with UEFI; vSphere reports the flag on EFI VMs only, but stay defensive
         secure_boot=bool(vm.secure_boot) and firmware == OCI_FIRMWARE_UEFI,
     )

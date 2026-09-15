@@ -198,6 +198,33 @@ def test_emulated_data_volumes_attach_as_emulated(env):
     assert [a.attachment_type for a in target_atts] == ["emulated"]
 
 
+def test_windows_data_volumes_attach_without_device_path(env):
+    """Consistent device paths are Linux-only; OCI rejects the device attribute on Windows instances."""
+    settings, fake, store, prov = env
+    job = make_job(make_vm(windows=True, disks=3), make_target(windows_license_type=WindowsLicenseType.OCI_PROVIDED))
+    store.put(job)
+    prov.prepare(job)
+    assert fake.compute.launch_details[-1].launch_options.is_consistent_volume_naming_enabled is False
+    for d in job.disks:
+        d.status = DiskStatus.COPIED
+    prov.finalize(job)
+    target_atts = [a for a in fake.compute.vol_attachments.values() if a.instance_id == job.instance_id]
+    assert len(target_atts) == 2 and all(a.device is None for a in target_atts)
+    assert job.phase == JobPhase.COMPLETED
+
+    # Linux keeps the consistent paths on the target
+    job2 = make_job(make_vm(disks=2), make_target())
+    job2.id = "job0002"
+    store.put(job2)
+    prov.prepare(job2)
+    assert fake.compute.launch_details[-1].launch_options.is_consistent_volume_naming_enabled is True
+    for d in job2.disks:
+        d.status = DiskStatus.COPIED
+    prov.finalize(job2)
+    atts2 = [a for a in fake.compute.vol_attachments.values() if a.instance_id == job2.instance_id]
+    assert [a.device for a in atts2] == [f"{settings.device_prefix}b"]
+
+
 def test_prepare_rejects_other_ad(env):
     settings, fake, store, prov = env
     job = make_job(make_vm(), make_target(availability_domain="Uocm:EU-FRANKFURT-1-AD-2"))

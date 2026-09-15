@@ -96,6 +96,23 @@ def cancel_job(job_id: str, request: Request):
     return job
 
 
+@router.post("/{job_id}/finalize", response_model=Job, status_code=status.HTTP_202_ACCEPTED)
+def resume_finalize(job_id: str, request: Request):
+    """Retry the finalize step (attach volumes, start) of a failed job whose disks were all copied."""
+    st = request.app.state
+    job = _get_job(request, job_id)
+    if st.runner.is_running(job.id):
+        raise HTTPException(status.HTTP_409_CONFLICT, "job is running")
+    if not st.runner.can_resume_finalize(job):
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            "only a FAILED job with a launched instance and all disks copied can resume finalizing")
+    job.step = "finalize_queued"
+    job.message = "Resuming finalize"
+    st.store.put(job)
+    st.runner.resume_finalize(job.id)
+    return job
+
+
 @router.post("/{job_id}/licensing")
 async def update_license(job_id: str, body: LicenseUpdateRequest, request: Request):
     st = request.app.state

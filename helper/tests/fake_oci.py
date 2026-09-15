@@ -56,6 +56,7 @@ class FakeCompute:
         self.images: dict[str, NS] = {}
         self.capability_schemas: list = []
         self.launch_details: list = []
+        self.attach_errors: list[Exception] = []  # raised (one per call) by attach_volume to a target instance
         self.actions: list[tuple[str, str]] = []
         self.updates: list = []
         self.terminated: list[str] = []
@@ -99,7 +100,8 @@ class FakeCompute:
         inst = NS(id=iid, display_name=details.display_name, lifecycle_state="PROVISIONING",
                   availability_domain=details.availability_domain, compartment_id=details.compartment_id,
                   launch_options=details.launch_options, licensing_configs=details.licensing_configs,
-                  shape=details.shape, shape_config=details.shape_config, platform_config=pc)
+                  shape=details.shape, shape_config=details.shape_config, platform_config=pc,
+                  operating_system=image.operating_system)
         self.instances[iid] = inst
         vnic = details.create_vnic_details
         label = getattr(vnic, "hostname_label", None)
@@ -201,6 +203,14 @@ class FakeCompute:
             raise service_error(400, "InvalidParameter",
                                 f"The volume cannot be attached to the instance {details.instance_id} because the "
                                 f"specified device attribute {device} is invalid.", "attach_volume")
+        inst = self.instances.get(details.instance_id)
+        if inst is not None and self.attach_errors:
+            raise self.attach_errors.pop(0)
+        if device and inst is not None and getattr(inst, "operating_system", None) == "Windows":
+            raise service_error(400, "InvalidParameter",
+                                f"The volume cannot be attached to the instance because the device attribute {device} "
+                                "is not supported with Attach Volume Operation for Windows operating system. Remove "
+                                "the device attribute value and try again. ", "attach_volume")
         att = NS(id=att_id, volume_id=details.volume_id, instance_id=details.instance_id, device=device,
                  attachment_type=details.type, lifecycle_state="ATTACHED", fake_disk=None)
         self.vol_attachments[att_id] = att

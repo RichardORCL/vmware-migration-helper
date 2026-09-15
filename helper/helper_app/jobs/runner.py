@@ -82,6 +82,18 @@ class MigrationRunner:
             self._running.add(job_id)
         return self.pool.submit(self._cleanup_safely, job_id)
 
+    def resume_finalize(self, job_id: str) -> Future:
+        """Re-run the finalize step of a failed job whose disks are all copied (e.g. an attach rejected by
+        OCI).  Needs no vCenter session: the copied volumes already exist in OCI."""
+        with self._lock:
+            self._running.add(job_id)
+        return self.pool.submit(self._finalize_safely, job_id)
+
+    @staticmethod
+    def can_resume_finalize(job: Job) -> bool:
+        return (job.phase == JobPhase.FAILED and bool(job.instance_id) and bool(job.disks)
+                and all(d.status == DiskStatus.COPIED for d in job.disks))
+
     def request_cancel(self, job_id: str) -> None:
         with self._lock:
             self._cancel_requested.add(job_id)
@@ -145,6 +157,24 @@ class MigrationRunner:
                 self.store.put(job)
         except Exception as exc:  # noqa: BLE001
             log.exception("job %s failed at step %s", job_id, job.step)
+            detail = describe_error(exc)
+            job.error = f"step '{job.step}': {detail}" if job.step else detail
+            self._save(job, JobPhase.FAILED, f"Failed in step {job.step or '?'}: {detail}")
+        finally:
+            self._finish(job_id)
+
+    def _finalize_safely(self, job_id: str) -> None:
+        job = self.store.get(job_id)
+        if job is None:
+            self._finish(job_id)
+            return
+        try:
+            job.error = None
+            self._save(job, JobPhase.FINALIZING, "Resuming: attaching volumes to the target instance")
+            self.prov.finalize(job)
+            self._save(job, message=f"Migration complete: instance {job.instance_id}")
+        except Exception as exc:  # noqa: BLE001
+            log.exception("job %s failed again at step %s", job_id, job.step)
             detail = describe_error(exc)
             job.error = f"step '{job.step}': {detail}" if job.step else detail
             self._save(job, JobPhase.FAILED, f"Failed in step {job.step or '?'}: {detail}")

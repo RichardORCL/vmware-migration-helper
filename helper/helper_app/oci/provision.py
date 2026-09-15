@@ -340,11 +340,14 @@ class Provisioner:
 
         # data volumes use the device class announced in launchOptions.remoteDataVolumeType
         remote_type = job.launch_options.remote_data_volume_type if job.launch_options else "PARAVIRTUALIZED"
+        # consistent device paths (/dev/oracleoci/oraclevdX) are a Linux feature; OCI rejects the attribute
+        # for Windows instances ("device attribute ... is not supported ... for Windows operating system")
+        consistent_paths = not _is_windows_job(job)
         for n, disk in enumerate(job.disks[1:], start=1):
             if disk.target_attachment_id:
                 continue
             self._step(job, "attach_data_volume", f"Attaching disk {disk.index} to target")
-            device = f"{self.s.device_prefix}{chr(ord('a') + n)}"
+            device = f"{self.s.device_prefix}{chr(ord('a') + n)}" if consistent_paths else None
             if remote_type == "ISCSI":
                 details = M.AttachIScsiVolumeDetails(type="iscsi", instance_id=job.instance_id,
                                                      volume_id=disk.volume_id, device=device)
@@ -425,6 +428,10 @@ class Provisioner:
             licensing_configs=[M.UpdateInstanceWindowsLicensingConfig(type="WINDOWS", license_type=license_type.value)]
         )
         return self.c.compute.update_instance(instance_id, details).data
+
+
+def _is_windows_job(job: Job) -> bool:
+    return job.vm.is_windows or map_guest_os(job.vm.guest_id, job.vm.guest_full_name).is_windows
 
 
 def _secure_boot_platform_config(shape: str, windows: bool):

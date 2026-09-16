@@ -80,6 +80,8 @@ class BlockNode(NamedTuple):
     fstype: str
     uuid: str
     label: str
+    partuuid: str = ""
+    partlabel: str = ""
 
 
 def _tail(text: str, n: int = 6) -> str:
@@ -125,6 +127,7 @@ class _Session:
         self.mnt = fixer.mount_base / uuid.uuid4().hex[:8]
         self.mounts: list[Path] = []  # mounted paths, unmounted in reverse order
         self.vgs: list[str] = []  # guest volume groups we activated
+        self.boot_problem: Optional[str] = None  # why a separate /boot could not be mounted (initramfs step skips)
         # LVM must look at this disk only (and ignore the helper's devices file, which does not list it)
         self.lvm_config = ("devices { use_devicesfile=0 filter=[ "
                            f'"a|^{re.escape(self.real)}.*|", "r|.*|" ] }}')
@@ -158,7 +161,7 @@ class _Session:
             self.mounts.remove(where)
 
     def lsblk(self) -> list[BlockNode]:
-        r = self.sh(["lsblk", "-J", "-p", "-o", "NAME,TYPE,FSTYPE,UUID,LABEL", self.real])
+        r = self.sh(["lsblk", "-J", "-p", "-o", "NAME,TYPE,FSTYPE,UUID,LABEL,PARTUUID,PARTLABEL", self.real])
         try:
             data = json.loads(r.stdout or "{}")
         except json.JSONDecodeError as exc:
@@ -169,7 +172,8 @@ class _Session:
             for it in items or []:
                 nodes.append(BlockNode(path=it.get("name") or "", type=it.get("type") or "",
                                        fstype=it.get("fstype") or "", uuid=it.get("uuid") or "",
-                                       label=it.get("label") or ""))
+                                       label=it.get("label") or "", partuuid=it.get("partuuid") or "",
+                                       partlabel=it.get("partlabel") or ""))
                 walk(it.get("children"))
 
         walk(data.get("blockdevices"))
@@ -193,7 +197,11 @@ class _Session:
 
         root_node = self.find_root(nodes)
         self.note(f"guest root file system on {root_node.path} ({root_node.fstype})")
-        self.mount_boot(nodes)
+        try:
+            self.mount_boot(nodes)
+        except Skip as exc:  # only the initramfs step needs /boot; the others work on the root fs
+            self.boot_problem = str(exc)
+            self.note(f"/boot not mounted: {exc}")
 
     def bind_system_dirs(self) -> None:
         """/dev, /proc and /sys of the helper inside the guest tree, for chroot'ed tools (idempotent)."""
@@ -207,6 +215,8 @@ class _Session:
 
     def rebuild_initramfs(self) -> tuple[list[str], list[str]]:
         """(installed kernels, kernels whose initramfs was rebuilt); the root must be open."""
+        if self.boot_problem:
+            raise Skip(self.boot_problem)
         dracut = next((p for p in ("usr/bin/dracut", "usr/sbin/dracut", "sbin/dracut") if (self.mnt / p).exists()),
                       None)
         if dracut is None:
@@ -294,7 +304,8 @@ class _Session:
                 if r.returncode == 0:
                     kv = dict(ln.split("=", 1) for ln in r.stdout.splitlines() if "=" in ln)
                     n = n._replace(fstype=kv.get("TYPE", ""), uuid=kv.get("UUID", n.uuid),
-                                   label=kv.get("LABEL", n.label))
+                                   label=kv.get("LABEL", n.label), partuuid=kv.get("PART_ENTRY_UUID", n.partuuid),
+                                   partlabel=kv.get("PART_ENTRY_NAME", n.partlabel))
             out.append(n)
         return out
 
@@ -343,12 +354,18 @@ class _Session:
     @staticmethod
     def resolve_spec(spec: str, nodes: list[BlockNode]) -> Optional[str]:
         """Map an fstab device spec of the *guest* onto a node of *our* disk.  Only nodes from lsblk are
-        returned: a guest ``/dev/sda1`` must never resolve to the helper's own /dev/sda1."""
-        if spec.startswith("UUID="):
-            return next((n.path for n in nodes if n.uuid == spec[5:]), None)
-        if spec.startswith("LABEL="):
-            return next((n.path for n in nodes if n.label == spec[6:]), None)
-        m = re.match(r"^/dev/(?:mapper/([^/]+)|(?!mapper)([^/]+)/([^/]+))$", spec)
+        returned: a guest ``/dev/sda1`` must never resolve to the helper's own /dev/sda1.
+
+        Understands ``UUID=``/``LABEL=``/``PARTUUID=``/``PARTLABEL=``, their ``/dev/disk/by-*/`` spellings
+        (Ubuntu's installer writes ``/dev/disk/by-uuid/<uuid>``), ``/dev/mapper/vg-lv``, ``/dev/vg/lv`` and
+        plain partition names."""
+        by_attr = {"UUID": "uuid", "LABEL": "label", "PARTUUID": "partuuid", "PARTLABEL": "partlabel"}
+        m = (re.match(r"^(UUID|LABEL|PARTUUID|PARTLABEL)=(.+)$", spec)
+             or re.match(r"^/dev/disk/by-(uuid|label|partuuid|partlabel)/(.+)$", spec))
+        if m:
+            attr, value = by_attr[m.group(1).upper()], m.group(2)
+            return next((n.path for n in nodes if value and getattr(n, attr) == value), None)
+        m = re.match(r"^/dev/(?:mapper/([^/]+)|(?!mapper|disk)([^/]+)/([^/]+))$", spec)
         if m:  # /dev/mapper/vg-lv or /dev/vg/lv -> the LV among the lvm nodes (dm escapes '-' as '--')
             dm = m.group(1) if m.group(1) else f"{m.group(2).replace('-', '--')}-{m.group(3).replace('-', '--')}"
             return next((n.path for n in nodes if n.type == "lvm" and Path(n.path).name == dm), None)

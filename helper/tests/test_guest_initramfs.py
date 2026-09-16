@@ -58,8 +58,18 @@ class FakeShell:
             ]
         elif self.layout == "plain":
             disk["children"] = [
-                {"name": "/dev/sdb1", "type": "part", "fstype": "ext4", "uuid": "boot-uuid", "label": "boot"},
+                {"name": "/dev/sdb1", "type": "part", "fstype": "ext4", "uuid": "boot-uuid", "label": "boot",
+                 "partuuid": "boot-partuuid"},
                 {"name": "/dev/sdb2", "type": "part", "fstype": "ext4", "uuid": "root-uuid", "label": None},
+            ]
+        elif self.layout == "ubuntu":  # subiquity: EFI, /boot, LVM ubuntu-vg/ubuntu-lv, no dracut, netplan
+            disk["children"] = [
+                {"name": "/dev/sdb1", "type": "part", "fstype": "vfat", "uuid": "AAAA-BBBB", "label": None},
+                {"name": "/dev/sdb2", "type": "part", "fstype": "ext4", "uuid": "boot-uuid", "label": None},
+                {"name": "/dev/sdb3", "type": "part", "fstype": "LVM2_member", "uuid": "pv-uuid", "label": None,
+                 "children": [
+                     {"name": "/dev/mapper/ubuntu--vg-ubuntu--lv", "type": "lvm", "fstype": "ext4", "uuid": "root-uuid"},
+                 ] if "ubuntu-vg" in self.active_vgs else []},
             ]
         elif self.layout == "luks":
             disk["children"] = [
@@ -75,6 +85,21 @@ class FakeShell:
     # -- guest file trees materialised on mount
     def fill_root(self, mnt: Path):
         (mnt / "etc").mkdir(parents=True, exist_ok=True)
+        if self.layout == "ubuntu":
+            (mnt / "etc" / "fstab").write_text(
+                "/dev/disk/by-id/dm-uuid-LVM-abc / ext4 defaults 0 1\n"
+                f"{self.boot_fstab} /boot ext4 defaults 0 1\n"
+                "/dev/disk/by-uuid/AAAA-BBBB /boot/efi vfat defaults 0 1\n")
+            (mnt / "lib" / "modules" / "5.15.0-91-generic").mkdir(parents=True)  # (/lib -> usr/lib on the real thing)
+            (mnt / "lib" / "modules" / "5.15.0-91-generic" / "modules.dep").write_text("")
+            (mnt / "etc" / "os-release").write_text('PRETTY_NAME="Ubuntu 22.04.3 LTS"\n')
+            (mnt / "etc" / "netplan").mkdir()
+            (mnt / "etc" / "netplan" / "00-installer-config.yaml").write_text(
+                "network:\n  ethernets:\n    ens33:\n      dhcp4: false\n      addresses: [192.168.99.51/24]\n  version: 2\n")
+            (mnt / "usr" / "lib" / "systemd" / "system").mkdir(parents=True)
+            (mnt / "usr" / "lib" / "systemd" / "systemd").write_text("")
+            (mnt / "etc" / "systemd" / "system" / "multi-user.target.wants").mkdir(parents=True)
+            return
         (mnt / "etc" / "fstab").write_text(
             "# guest fstab\n"
             f"{'/dev/mapper/rhel-root' if self.layout == 'lvm' else 'UUID=root-uuid'} / xfs defaults 0 0\n"
@@ -117,6 +142,8 @@ class FakeShell:
             return CmdResult(0, json.dumps(self.nodes()), "")
         if cmd == "pvs":
             if "--config" in argv:  # our disk only
+                if self.layout == "ubuntu":
+                    return CmdResult(0, "  /dev/sdb3 ubuntu-vg\n", "")
                 if self.layout != "lvm":
                     return CmdResult(0, "", "")
                 return CmdResult(0, "  /dev/sdb2 rhel\n", "")
@@ -130,6 +157,8 @@ class FakeShell:
             return CmdResult(0, "", "")
         if cmd == "lvs":
             assert "--config" in argv and argv[-1] in self.active_vgs
+            if self.layout == "ubuntu":
+                return CmdResult(0, "  /dev/mapper/ubuntu--vg-ubuntu--lv\n", "")
             return CmdResult(0, "  /dev/mapper/rhel-root\n  /dev/mapper/rhel-swap\n", "")
         if cmd == "blkid":
             assert "-p" in argv, "direct probe expected (udev cache is what failed us)"
@@ -149,8 +178,12 @@ class FakeShell:
             self.mounted[str(where)] = dev
             if dev in ("/dev/mapper/rhel-root", "/dev/sdb2") and self.layout in ("lvm", "plain"):
                 self.fill_root(where)
-            elif dev == "/dev/sdb1" and where.name == "boot":
+            elif dev == "/dev/mapper/ubuntu--vg-ubuntu--lv":
+                self.fill_root(where)
+            elif dev in ("/dev/sdb1", "/dev/sdb2") and where.name == "boot":
                 self.fill_boot(where)
+                if self.layout == "ubuntu":
+                    (where / "initrd.img-5.15.0-91-generic").write_text("virtio_blk.ko virtio_scsi.ko")
             else:
                 where.mkdir(parents=True, exist_ok=True)  # /boot partition probed as root: no fstab there
                 (where / "vmlinuz-x").write_text("")
@@ -374,13 +407,52 @@ def test_both_steps_share_one_mount_session(base):
     assert res.initramfs.status == "skipped" and res.network.status == "skipped" and "LUKS" in res.network.detail
 
 
+def test_ubuntu_layout_boot_by_disk_by_uuid_and_netplan(base):
+    """What went wrong on the first Ubuntu migration: subiquity writes /boot as /dev/disk/by-uuid/<uuid> in
+    fstab, which was not resolved, and that aborted the whole session - the netplan drop-in was never
+    written.  Now /boot resolves, and a /boot problem only skips the initramfs step."""
+    from helper_app.guest.fixup import GuestFixer
+    from helper_app.guest.network import NETPLAN_FILE
+
+    shell = FakeShell(layout="ubuntu", boot_fstab="/dev/disk/by-uuid/boot-uuid")
+    seen = {}
+    orig = shell.__call__
+
+    def spy(argv, timeout_s):
+        if argv[0] == "umount" and (Path(argv[-1]) / "etc" / "netplan").is_dir():
+            seen["netplan"] = sorted(p.name for p in (Path(argv[-1]) / "etc" / "netplan").iterdir())
+        return orig(argv, timeout_s)
+
+    msgs = []
+    res = GuestFixer(run=spy, mount_base=base).fix("/dev/sdb", notify=msgs.append)
+    assert any("/boot on /dev/sdb2" in m for m in msgs), msgs
+    assert res.initramfs.status == "skipped" and "no dracut" in res.initramfs.detail
+    assert res.network.status == "done" and "netplan" in res.network.detail, res.network
+    assert seen["netplan"] == ["00-installer-config.yaml", NETPLAN_FILE]
+    assert shell.mounted == {} and shell.active_vgs == []
+
+    # /boot really not on this disk: initramfs step skipped with the reason, network step still runs
+    shell = FakeShell(layout="ubuntu", boot_fstab="/dev/disk/by-uuid/elsewhere")
+    res = GuestFixer(run=shell, mount_base=base).fix("/dev/sdb", notify=msgs.append)
+    assert res.initramfs.status == "skipped" and "/boot" in res.initramfs.detail and "elsewhere" in res.initramfs.detail
+    assert res.network.status == "done"
+
+
 def test_resolve_spec():
     from helper_app.guest.initramfs import BlockNode
     nodes = [BlockNode("/dev/sdb1", "part", "xfs", "u1", "BOOT"), BlockNode("/dev/sdb2", "part", "LVM2_member", "u2", ""),
-             BlockNode("/dev/mapper/my--vg-root", "lvm", "xfs", "u3", ""), BlockNode("/dev/sdb15", "part", "vfat", "u4", "")]
+             BlockNode("/dev/mapper/my--vg-root", "lvm", "xfs", "u3", ""),
+             BlockNode("/dev/sdb15", "part", "vfat", "u4", "", partuuid="p15", partlabel="EFI System")]
     r = _Session.resolve_spec
     assert r("UUID=u1", nodes) == "/dev/sdb1"
     assert r("LABEL=BOOT", nodes) == "/dev/sdb1"
+    assert r("/dev/disk/by-uuid/u1", nodes) == "/dev/sdb1"  # Ubuntu's installer
+    assert r("/dev/disk/by-label/BOOT", nodes) == "/dev/sdb1"
+    assert r("PARTUUID=p15", nodes) == "/dev/sdb15"
+    assert r("/dev/disk/by-partuuid/p15", nodes) == "/dev/sdb15"
+    assert r("PARTLABEL=EFI System", nodes) == "/dev/sdb15"
+    assert r("/dev/disk/by-id/dm-uuid-LVM-abc", nodes) is None  # not resolvable, and not mistaken for /dev/vg/lv
+    assert r("UUID=", nodes) is None  # empty value must not match nodes without a UUID
     assert r("/dev/mapper/my--vg-root", nodes) == "/dev/mapper/my--vg-root"
     assert r("/dev/my-vg/root", nodes) == "/dev/mapper/my--vg-root"
     assert r("/dev/sda1", nodes) == "/dev/sdb1"

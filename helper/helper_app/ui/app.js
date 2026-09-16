@@ -5,7 +5,7 @@
   const app = document.getElementById("app");
   const nav = document.getElementById("nav");
   const userBox = document.getElementById("user");
-  const state = { me: null, config: null, jobsByVm: {}, region: "" };
+  const state = { me: null, config: null, jobsByVm: {}, region: "", jobsFilter: { q: "", phase: "", page: 0 } };
   let activePoll = null;
 
   // ---------------------------------------------------------------------- api
@@ -755,10 +755,28 @@
   }
 
   // ---------------------------------------------------------------- jobs view
+  const JOBS_PAGE_SIZE = 25;
   async function jobsView() {
-    let jobs = [];
-    try { jobs = await api("GET", "/jobs"); } catch (e) { if (e.status !== 401) showError(e.message); return; }
     app.innerHTML = "";
+    app.append(tpl("tpl-jobs"));
+    const search = document.getElementById("jobs-filter"), phaseSel = document.getElementById("jobs-phase");
+    const count = document.getElementById("jobs-count"), err = document.getElementById("jobs-error");
+    const body = document.getElementById("jobs-body");
+    const pager = document.getElementById("jobs-pager"), pageInfo = document.getElementById("jobs-page-info");
+    const prevBtn = document.getElementById("jobs-prev"), nextBtn = document.getElementById("jobs-next");
+    // the filters survive the periodic refresh and a return to this page
+    search.value = state.jobsFilter.q; phaseSel.value = state.jobsFilter.phase;
+    let jobs = [];
+    let page = state.jobsFilter.page || 0;
+
+    const matches = (j) => {
+      const p = phaseSel.value;
+      if (p === "ACTIVE" ? TERMINAL.includes(j.phase) : p && j.phase !== p) return false;
+      const q = search.value.trim().toLowerCase();
+      const target = j.instance_display_name || j.target.display_name || "";
+      return !q || `${j.vm.name} ${target}`.toLowerCase().includes(q);
+    };
+
     // fixed layout (see style.css): the message column takes what the others leave
     const columns = [["VM", "17%"], ["Phase", "112px"], ["Message", null], ["OCI instance", "14%"], ["Migration", "19%"], ["By", "11%", "by"], ["", "84px"]];
     // source -> target name; the target is the launched instance's name, else what the form asked for
@@ -778,25 +796,54 @@
       lines.push(el("div", { class: "muted" }, figures.join(" \u00b7 ")));
       return el("td", { class: "migration" }, ...lines);
     };
-    const table = el("table", { class: "jobs" },
-      el("colgroup", {}, ...columns.map(([, w, cls]) => el("col", { style: w ? `width:${w}` : null, class: cls || null }))),
-      el("thead", {}, el("tr", {}, ...columns.map(([h, , cls]) => el("th", { class: cls || null }, h)))),
-      el("tbody", {}, ...jobs.map((j) => el("tr", {},
-        vmCell(j), el("td", {}, el("span", { class: "phase " + j.phase }, j.phase)),
-        el("td", {}, (j.message || "") + (j.phase === "EXPORTING" && j.transfer && j.transfer.started_at
-          ? ` - ${j.transfer.percent || 0}%${j.transfer.throughput_bps ? ", " + fmtRate(j.transfer.throughput_bps) : ""}`
-          : !TERMINAL.includes(j.phase) && j.step_percent !== null && j.step_percent !== undefined && !/\d+%/.test(j.message || "")
-            ? ` - ${j.step_percent}%` : "")),
-        el("td", { class: "ocid", title: j.instance_id || "" }, ocidLink("instances", j.instance_id)),
-        migrationCell(j), el("td", { class: "by" }, j.created_by || "-"),
-        el("td", { class: "row-actions" }, el("a", { class: "button secondary small", href: `#/jobs/${j.id}` }, "Details"))))));
-    app.append(el("div", { class: "card" }, el("h2", {}, "Migration jobs"),
-      jobs.length ? table : el("div", { class: "muted" }, "No jobs yet. Pick a powered-off VM under Source VMs to start one.")));
-    // refresh the table while jobs are active
-    if (jobs.some((j) => !TERMINAL.includes(j.phase))) {
-      const t = setTimeout(() => { if (location.hash === "#/jobs") jobsView(); }, 5000);
-      activePoll = () => clearTimeout(t);
-    }
+    const row = (j) => el("tr", {},
+      vmCell(j), el("td", {}, el("span", { class: "phase " + j.phase }, j.phase)),
+      el("td", {}, (j.message || "") + (j.phase === "EXPORTING" && j.transfer && j.transfer.started_at
+        ? ` - ${j.transfer.percent || 0}%${j.transfer.throughput_bps ? ", " + fmtRate(j.transfer.throughput_bps) : ""}`
+        : !TERMINAL.includes(j.phase) && j.step_percent !== null && j.step_percent !== undefined && !/\d+%/.test(j.message || "")
+          ? ` - ${j.step_percent}%` : "")),
+      el("td", { class: "ocid", title: j.instance_id || "" }, ocidLink("instances", j.instance_id)),
+      migrationCell(j), el("td", { class: "by" }, j.created_by || "-"),
+      el("td", { class: "row-actions" }, el("a", { class: "button secondary small", href: `#/jobs/${j.id}` }, "Details")));
+
+    const render = () => {
+      const filtered = jobs.filter(matches);
+      const pages = Math.max(1, Math.ceil(filtered.length / JOBS_PAGE_SIZE));
+      page = Math.min(page, pages - 1);
+      const start = page * JOBS_PAGE_SIZE, visible = filtered.slice(start, start + JOBS_PAGE_SIZE);
+      state.jobsFilter = { q: search.value, phase: phaseSel.value, page };
+      body.innerHTML = "";
+      if (!jobs.length) {
+        body.append(el("div", { class: "muted" }, "No jobs yet. Pick a VM under Source VMs to start one."));
+      } else {
+        body.append(el("table", { class: "jobs" },
+          el("colgroup", {}, ...columns.map(([, w, cls]) => el("col", { style: w ? `width:${w}` : null, class: cls || null }))),
+          el("thead", {}, el("tr", {}, ...columns.map(([h, , cls]) => el("th", { class: cls || null }, h)))),
+          el("tbody", {}, ...visible.map(row),
+            visible.length ? null : el("tr", {}, el("td", { colspan: columns.length, class: "muted" }, "No jobs match the filters.")))));
+      }
+      count.textContent = filtered.length === jobs.length ? `${jobs.length} job${jobs.length === 1 ? "" : "s"}` : `${filtered.length} of ${jobs.length} jobs`;
+      pager.hidden = filtered.length <= JOBS_PAGE_SIZE && page === 0;
+      pageInfo.textContent = filtered.length ? `${start + 1}-${Math.min(start + JOBS_PAGE_SIZE, filtered.length)} of ${filtered.length} (page ${page + 1} of ${pages})` : "";
+      prevBtn.disabled = page === 0;
+      nextBtn.disabled = page >= pages - 1;
+    };
+    const resetPage = () => { page = 0; render(); };
+
+    let timer = null;
+    const load = async () => {
+      try { jobs = await api("GET", "/jobs"); err.textContent = ""; }
+      catch (e) { if (e.status === 401) return; err.textContent = e.message; }
+      render();
+      // keep the table live while jobs are active (the filters and the page are kept)
+      if (jobs.some((j) => !TERMINAL.includes(j.phase))) timer = setTimeout(() => { if (location.hash === "#/jobs") load(); }, 5000);
+    };
+    search.addEventListener("input", resetPage);
+    phaseSel.addEventListener("change", resetPage);
+    prevBtn.addEventListener("click", () => { page = Math.max(0, page - 1); render(); });
+    nextBtn.addEventListener("click", () => { page += 1; render(); });
+    activePoll = () => clearTimeout(timer);
+    await load();
   }
 
   async function jobDetailView(jobId) {

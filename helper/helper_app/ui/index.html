@@ -80,6 +80,35 @@
     </section>
   </template>
 
+  <!-- ------------------------------------------------------------------ jobs list -->
+  <template id="tpl-jobs">
+    <section class="card">
+      <div class="toolbar">
+        <h2>Migration jobs</h2>
+        <input id="jobs-filter" type="search" placeholder="Search by source or target VM name">
+        <select id="jobs-phase" class="filter" title="Phase">
+          <option value="">All phases</option>
+          <option value="ACTIVE">Active (not finished)</option>
+          <option value="QUEUED">Queued</option>
+          <option value="PROVISIONING">Provisioning</option>
+          <option value="EXPORTING">Exporting</option>
+          <option value="FINALIZING">Finalizing</option>
+          <option value="COMPLETED">Completed</option>
+          <option value="FAILED">Failed</option>
+          <option value="CANCELLED">Cancelled</option>
+        </select>
+        <span id="jobs-count" class="muted"></span>
+      </div>
+      <div id="jobs-error" class="error"></div>
+      <div id="jobs-body"></div>
+      <div id="jobs-pager" class="pager" hidden>
+        <button class="secondary small" id="jobs-prev">&lsaquo; Previous</button>
+        <span id="jobs-page-info" class="muted"></span>
+        <button class="secondary small" id="jobs-next">Next &rsaquo;</button>
+      </div>
+    </section>
+  </template>
+
   <!-- ------------------------------------------------------------------ export -->
   <template id="tpl-export">
     <div class="export">

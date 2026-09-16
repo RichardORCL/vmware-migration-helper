@@ -51,7 +51,7 @@ class MigrationRunner:
         settings: Settings,
         store: JobStore,
         provisioner: Provisioner,
-        export_factory: Optional[Callable[[object], NfcExport]] = None,
+        export_factory: Optional[Callable[[object, str, bool], NfcExport]] = None,
         guest_fixer: Optional[GuestFixerFn] = None,
     ):
         self.s = settings
@@ -70,11 +70,11 @@ class MigrationRunner:
         self._slots = threading.Condition()
         self._migrating = 0  # migrations holding a slot
 
-    def _default_export_factory(self, vm, nfc_host: str) -> NfcExport:
+    def _default_export_factory(self, vm, nfc_host: str, verify_ssl: bool) -> NfcExport:
         return NfcExport(
             vm,
             nfc_host=nfc_host,
-            verify_ssl=self.s.nfc_verify_ssl,
+            verify_ssl=verify_ssl,
             progress_interval_s=self.s.lease_progress_interval_s,
             ready_timeout_s=self.s.lease_ready_timeout_s,
             chunk_bytes=self.s.nfc_chunk_bytes,
@@ -277,7 +277,9 @@ class MigrationRunner:
         job.nfc_host = nfc_host
         job.step = "export_lease"  # ExportVm; failures here must not be blamed on the power-off step
         self._save(job, message=f"Opening NFC export lease (disk download via {nfc_host})")
-        with self.export_factory(vm, nfc_host) as export:
+        # the TLS choice made at login covers the disk download as well
+        verify_ssl = bool(getattr(session.vc, "verify_ssl", False))
+        with self.export_factory(vm, nfc_host, verify_ssl) as export:
             urls = match_disk_urls(job.vm.disks, export.disk_urls())
             for disk in job.disks:
                 disk.stream_bytes = urls[disk.index].file_size or None

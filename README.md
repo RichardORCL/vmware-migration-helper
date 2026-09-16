@@ -41,13 +41,14 @@ preloaded. Manual deployment with Terraform and all settings are described in
 
 1. **Deploy the OCI Migration Tool VM** in OCI with the Resource Manager stack (button above, or
    `helper/deploy/terraform` locally; see [docs/install-helper.md](docs/install-helper.md)). You
-   provide the vCenter host, the subnet (must route to vCenter over your VPN/FastConnect) and the
-   CIDRs of the administrators' browsers.
-2. **Open the web UI** at `https://<migration-tool-vm-ip>:8443/`, accept the self-signed certificate and
-   log in with a vCenter account that can read the inventory and export the VMs
-   (`VirtualMachine.Provisioning.ExportOVF` / *Allow disk access*). The vCenter server field is
-   pre-filled from the stack but can be changed, so one migration tool VM can migrate from several
-   vCenters or ESXi hosts.
+   provide the subnet (must route to vCenter/ESXi over your VPN/FastConnect) and the CIDRs of the
+   administrators' browsers; nothing about vCenter is configured in the stack.
+2. **Open the web UI** at `https://<migration-tool-vm-ip>:8443/`, accept the self-signed certificate,
+   enter the vCenter Server or ESXi host (with *Verify the server certificate* ticked only for a
+   CA-signed certificate) and log in with an account that can read the inventory and export the VMs
+   (`VirtualMachine.Provisioning.ExportOVF` / *Allow disk access*). The server is chosen per login, so
+   one migration tool VM can migrate from several vCenters or ESXi hosts; the browser remembers the
+   servers used last.
 3. **Migrate**: click *Migrate* under *Source VMs*, choose the instance compartment, the network
    compartment with its VCN/subnet, an x86 flex shape (sized from the source VM as 2 vCPU = 1 OCPU, or
    set OCPUs/memory yourself) and (for Windows) the license type, and follow the progress in the *Jobs*

@@ -24,11 +24,11 @@ The Terraform in `helper/deploy/terraform` is a self-contained [Resource Manager
 2. In the console: **Developer Services > Resource Manager > Stacks > Create stack > My configuration > .zip file**, upload the zip.
 3. Fill in the form:
    - *Placement*: compartment, availability domain (target instances land in the same AD), VCN, subnet, whether to assign a public IP, and the CIDRs of the administrators' networks allowed to reach the web UI.
-   - *vCenter*: host name/IP as reachable from the migration tool subnet, port, whether to verify its TLS certificate.
    - *OCI Migration Tool VM*: instance name, shape/OCPUs/memory and your SSH public key.
    - *Migration tool service*: git URL + ref to install (defaulting to the `vmware-migration-helper` GitHub repo), seed bucket, default target shape, number of parallel migrations.
    - *IAM*: keep **Create IAM resources** on unless an administrator already created the dynamic group/policy/tag namespace; optionally limit the compartment where the migration tool may create target instances.
-4. Run **Plan**, then **Apply**. Outputs show `helper_ui_url`, the vCenter host, the availability domain and next steps.
+   There are no vCenter settings in the stack: the vCenter/ESXi address and whether to verify its TLS certificate are entered on the login page.
+4. Run **Plan**, then **Apply**. Outputs show `helper_ui_url`, the availability domain and next steps.
 
 To upgrade the migration tool use the **Setup** page in the web UI (see below), or on the VM run `sudo /usr/local/sbin/vc-oci-helper-install && sudo systemctl restart vc-oci-helper`. Changing the git ref in the stack alone does not upgrade an existing VM (cloud-init changes are ignored).
 
@@ -36,7 +36,7 @@ To upgrade the migration tool use the **Setup** page in the web UI (see below), 
 
 ```bash
 cd helper/deploy/terraform
-cp terraform.tfvars.example terraform.tfvars   # edit values, incl. tenancy_ocid/region/compartment_ocid/vcenter_host
+cp terraform.tfvars.example terraform.tfvars   # edit values, incl. tenancy_ocid/region/compartment_ocid/subnet_ocid
 terraform init && terraform apply
 terraform output helper_ui_url
 ```
@@ -47,7 +47,7 @@ terraform output helper_ui_url
 - a network security group allowing TCP 8443 (web UI) and 22 (SSH) from `allowed_source_cidrs`, all egress;
 - the `vc-oci-seed-images` Object Storage bucket used while importing seed images;
 - (when `create_iam = true`) the `vc-oci` tag namespace, a dynamic group matching the tagged instance in the migration tool compartment, and a policy granting it `manage instance-family` / `manage volume-family` / `use virtual-network-family` in `policy_scope_compartment_ocid` (default: tenancy), plus `manage instance-images` / `compute-image-capability-schema` / volume attachments in its own compartment, object access to the seed bucket and `PAR_MANAGE` on that bucket (the image import service reads the placeholder through a pre-authenticated request it creates on the migration tool's behalf);
-- cloud-init that writes `/etc/vc-oci-helper/helper.env` (`HELPER_VCENTER_*`, OCI settings), installs the migration tool (git clone + `pip install` into `/opt/vc-oci/venv`), generates a self-signed certificate, opens 8443 in firewalld and runs the `vc-oci-helper` systemd unit.
+- cloud-init that writes `/etc/vc-oci-helper/helper.env` (OCI settings, bucket, default shape, concurrency), installs the migration tool (git clone + `pip install` into `/opt/vc-oci/venv`), generates a self-signed certificate, opens 8443 in firewalld and runs the `vc-oci-helper` systemd unit.
 
 **Target instances can only be created in the migration tool's AD** because boot volumes are AD-local; deploy one stack per AD if you need more.
 
@@ -56,15 +56,18 @@ When `create_iam = false`, an administrator must create beforehand: tag namespac
 ## 3. Verify
 
 ```bash
-curl -k https://<helper-ip>:8443/api/health          # {"status":"ok", ..., "vcenter_host": "..."}
-ssh opc@<helper-ip> curl -k -o /dev/null -w '%{http_code}\n' https://<vcenter-host>/sdk   # vCenter reachable from the migration tool
+curl -k https://<helper-ip>:8443/api/health          # {"status":"ok", ...}
+ssh opc@<helper-ip> curl -k -o /dev/null -w '%{http_code}\n' https://<vcenter-host>/sdk   # vCenter reachable from the migration tool VM
 ```
 
-Then open `https://<helper-ip>:8443/` in a browser, accept the self-signed certificate and log in
-with your vCenter credentials. The login page proposes the vCenter from the stack (`HELPER_VCENTER_HOST`)
-but accepts any other server (`host` or `host:port`) the migration tool can reach, so one migration tool serves
-several vCenters; the browser remembers the servers used last. The VM list should show the inventory
-the account is allowed to see.
+Then open `https://<helper-ip>:8443/` in a browser, accept the self-signed certificate, enter the
+vCenter Server or ESXi host (`host` or `host:port`) and log in with your vCenter credentials. The server
+is chosen per login, so one migration tool VM serves several vCenters/ESXi hosts; the browser remembers
+the servers used last and the user name used with each. *Verify the server certificate* is off by
+default, which is what a self-signed or VMCA certificate needs; tick it when vCenter has a certificate
+from a CA the VM trusts (add your CA with `update-ca-trust` if necessary). The choice covers both the
+vSphere API connection and the NFC disk download of that session. The VM list should show the
+inventory the account is allowed to see.
 
 To replace the self-signed certificate, put your own into `/etc/vc-oci-helper/server.crt` /
 `server.key` and restart the unit.
@@ -73,10 +76,9 @@ To replace the self-signed certificate, put your own into `/etc/vc-oci-helper/se
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `HELPER_VCENTER_HOST` / `HELPER_VCENTER_PORT` | – / 443 | Default vCenter Server offered on the login page (users may enter another one) |
-| `HELPER_VCENTER_VERIFY_SSL` | `false` | Verify the vCenter certificate |
+| `HELPER_VCENTER_HOST` / `HELPER_VCENTER_PORT` | – / 443 | Optional: vCenter Server pre-filled on the login page (not set by the stack; users enter the server at login) |
+| `HELPER_VCENTER_VERIFY_SSL` | `false` | Optional: default state of *Verify the server certificate* on the login page; the choice made there applies to the API and the NFC download of the session |
 | `HELPER_NFC_HOST_OVERRIDE` | session's vCenter | Host substituted for `*` in lease URLs, for all jobs. The per-VM *Download the disks directly from the ESXi host* option in the migration dialog resolves the VM's current host instead and takes precedence |
-| `HELPER_NFC_VERIFY_SSL` | `false` | Verify TLS on the NFC download |
 | `HELPER_NFC_CHUNK_BYTES` | `1048576` | Download chunk size (client-side read granularity; NFC itself has no block size) |
 | `HELPER_NFC_PIPELINE_DEPTH` | `8` | Chunks buffered between the download and the decode/write thread when a job uses *Decode and write on a separate thread* (memory per disk copy: depth x chunk size) |
 | `HELPER_LEASE_PROGRESS_INTERVAL_S` / `HELPER_LEASE_READY_TIMEOUT_S` | 60 / 300 | Lease keep-alive interval / time to wait for the lease |

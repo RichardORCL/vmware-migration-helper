@@ -16,11 +16,13 @@ which VM, OCI IAM (instance principal + dynamic group policy) decides what the m
 ## Authentication and sessions
 
 - `POST /api/auth/login` calls `SmartConnect` against the vCenter given on the login page
-  (`host[:port]`; default `HELPER_VCENTER_HOST`) with the submitted user name/password. On success
-  the migration tool stores the pyVmomi `ServiceInstance` together with that host in a `UserSession` and
-  sets an opaque, HttpOnly, SameSite=strict cookie (`vcoci_session`). One migration tool can therefore
-  serve several vCenters; each session (and the NFC download of the jobs it starts) is bound to the
-  vCenter it logged in to.
+  (`host[:port]`; optional default `HELPER_VCENTER_HOST`) with the submitted user name/password and
+  the *Verify the server certificate* choice (unticked: an SSL context without verification; ticked:
+  pyVmomi's default, the system CA store). On success the migration tool stores the pyVmomi
+  `ServiceInstance` together with that host and the TLS choice in a `UserSession` and sets an opaque,
+  HttpOnly, SameSite=strict cookie (`vcoci_session`). One migration tool can therefore serve several
+  vCenters; each session (and the NFC download of the jobs it starts, which reuses the TLS choice) is
+  bound to the vCenter it logged in to.
 - Every `/api/vms/*`, `/api/jobs/*`, `/api/oci/*` and `/api/setup/*` request requires that cookie;
   `/api/health` and `/api/auth/config` are public.
 - Sessions expire after `HELPER_SESSION_TTL_S` (default 8 h) of inactivity or on logout.
@@ -170,8 +172,8 @@ UI requires a choice before starting and lets you change it afterwards
   `HELPER_COOKIE_SECURE=false` for local development).
 - OCI access uses the migration tool's instance principal; the Terraform stack scopes the policy to a
   compartment (`policy_scope_compartment_ocid`).
-- vCenter TLS verification is off by default (`HELPER_VCENTER_VERIFY_SSL`, `HELPER_NFC_VERIFY_SSL`)
-  because most vCenters use the VMCA certificate; enable it when your vCenter has a trusted
-  certificate.
+- vCenter TLS verification is chosen per login (*Verify the server certificate*, off unless
+  `HELPER_VCENTER_VERIFY_SSL=true`) because most vCenters use the VMCA certificate; tick it when your
+  vCenter has a certificate from a CA the VM trusts. The same choice governs the NFC disk download.
 - Required vCenter privileges for the login account: read-only on the inventory plus
   `VirtualMachine.Provisioning.ExportOVF` (*Allow disk access*) on the VMs to migrate.

@@ -17,11 +17,6 @@ variableGroups:
       - subnet_ocid
       - assign_public_ip
       - allowed_source_cidrs
-  - title: "vCenter"
-    variables:
-      - vcenter_host
-      - vcenter_port
-      - vcenter_verify_ssl
   - title: "OCI Migration Tool VM"
     variables:
       - helper_display_name
@@ -94,23 +89,6 @@ variables:
     required: true
     minItems: 1
     uniqueItems: true
-
-  vcenter_host:
-    type: string
-    title: "vCenter host"
-    description: "Default vCenter Server (host name or IP as reachable from the migration tool VM subnet); users can enter another vCenter on the login page"
-    required: true
-
-  vcenter_port:
-    type: number
-    title: "vCenter HTTPS port"
-    default: 443
-
-  vcenter_verify_ssl:
-    type: boolean
-    title: "Verify the vCenter certificate"
-    description: "Disable for self-signed vCenter certificates"
-    default: false
 
   helper_display_name:
     type: string
@@ -196,7 +174,6 @@ outputGroups:
   - title: "Get started"
     outputs:
       - helper_ui_url
-      - vcenter_host
       - availability_domain
       - next_steps
   - title: "Resources"
@@ -210,9 +187,6 @@ outputs:
   helper_ui_url:
     type: link
     title: "OCI Ultimate Migration Tool web UI"
-  vcenter_host:
-    type: string
-    title: "vCenter"
   availability_domain:
     type: string
     title: "Availability domain for migrated instances"

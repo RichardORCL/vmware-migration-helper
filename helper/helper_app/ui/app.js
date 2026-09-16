@@ -131,10 +131,13 @@
       if (configured && !recent.includes(configured)) datalist.append(el("option", { value: configured }));
       form.elements.vcenter.value = recent[0] || configured;
     } catch (e) { err.textContent = e.message; }
-    // the last user name that logged in to the selected vCenter is remembered in this browser
+    // the last user name and TLS choice used with the selected vCenter are remembered in this browser
     const prefillUser = () => {
-      const u = lastUsername(form.elements.vcenter.value.trim());
+      const host = form.elements.vcenter.value.trim();
+      const u = lastUsername(host);
       if (u && !form.elements.username.value) form.elements.username.value = u;
+      const v = lastVerifySsl(host);
+      form.elements.verify_ssl.checked = v === null ? Boolean(state.config && state.config.verify_ssl) : v;
     };
     prefillUser();
     form.elements.vcenter.addEventListener("change", () => { form.elements.username.value = ""; prefillUser(); });
@@ -144,10 +147,12 @@
       err.textContent = ""; btn.disabled = true;
       const vcenter = form.elements.vcenter.value.trim();
       const username = form.elements.username.value.trim();
+      const verifySsl = form.elements.verify_ssl.checked;
       try {
-        const me = await api("POST", "/auth/login", { username, password: form.elements.password.value, vcenter_host: vcenter });
+        const me = await api("POST", "/auth/login", { username, password: form.elements.password.value, vcenter_host: vcenter, verify_ssl: verifySsl });
         rememberVcenter(vcenter);
         rememberUsername(vcenter, username);
+        rememberVerifySsl(vcenter, verifySsl);
         setUser(me);
         route();
       } catch (e) { err.textContent = e.message; }
@@ -176,6 +181,20 @@
     const map = lastUsernames();
     map[host] = username; map[""] = username;
     try { localStorage.setItem("vcoci.lastUsernames", JSON.stringify(map)); } catch (_) { /* private mode */ }
+  }
+  // "verify the server certificate" choice per vCenter host; null when the host was never used here
+  function lastVerifySsl(host) {
+    try {
+      const map = JSON.parse(localStorage.getItem("vcoci.verifySsl") || "{}") || {};
+      return typeof map[host] === "boolean" ? map[host] : null;
+    } catch (_) { return null; }
+  }
+  function rememberVerifySsl(host, value) {
+    if (!host) return;
+    let map = {};
+    try { map = JSON.parse(localStorage.getItem("vcoci.verifySsl") || "{}") || {}; } catch (_) { /* ignore */ }
+    map[host] = Boolean(value);
+    try { localStorage.setItem("vcoci.verifySsl", JSON.stringify(map)); } catch (_) { /* private mode */ }
   }
 
   document.getElementById("logout-btn").addEventListener("click", async () => {
@@ -1086,7 +1105,7 @@
         ["Version", info.version + (info.commit ? ` (${short(info.commit)})` : "")],
         ["Region / AD", `${info.region} / ${info.availability_domain}`],
         ["Instance", ocidLink("instances", info.instance_id)], ["Compartment", info.compartment_id],
-        ["Default vCenter", info.default_vcenter || "(none)"], ["Verify vCenter TLS", info.vcenter_verify_ssl ? "yes" : "no"],
+        ...(info.default_vcenter ? [["Default vCenter", info.default_vcenter]] : []),
         ["Seed image bucket", info.seed_bucket], ["Default shape", info.default_shape],
         ["Concurrent migrations", f.max_concurrent_jobs.value || String(info.max_concurrent_jobs)],
         ["Session idle timeout", fmtTtl(f.session_ttl_h.value ? Number(f.session_ttl_h.value) * 3600 : info.session_ttl_s)],

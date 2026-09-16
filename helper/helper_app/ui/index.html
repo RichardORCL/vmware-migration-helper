@@ -28,14 +28,16 @@
   <template id="tpl-login">
     <section class="card login">
       <h2>Log in to vCenter</h2>
-      <p class="muted">Use your vCenter credentials. The account needs read access to the inventory and
+      <p class="muted">Use your vCenter (or ESXi) credentials. The account needs read access to the inventory and
         <em>Allow disk access</em> / <em>Export</em> on the virtual machines to migrate.</p>
       <form id="login-form" class="form" autocomplete="on">
         <label>vCenter server
           <input name="vcenter" type="text" required list="vcenter-recent" placeholder="vcenter.example.com[:443]" autocapitalize="off" spellcheck="false">
           <datalist id="vcenter-recent"></datalist>
-          <small>Host name or IP, optionally with a port. The migration tool VM must reach it on that port (and on 443 for the disk export).</small>
+          <small>Host name or IP of the vCenter Server or standalone ESXi host, optionally with a port. The migration tool VM must reach it on that port (and on 443 for the disk export).</small>
         </label>
+        <label class="check"><input type="checkbox" name="verify_ssl"> Verify the server certificate</label>
+        <small class="form-hint">Leave off for the default self-signed / VMCA certificate. When on, the certificate must be issued by a CA the migration tool VM trusts; the same setting is used for the disk download.</small>
         <label>User name
           <input name="username" type="text" required autofocus placeholder="administrator@vsphere.local">
         </label>

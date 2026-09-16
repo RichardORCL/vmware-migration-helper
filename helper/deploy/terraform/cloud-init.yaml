@@ -17,9 +17,7 @@ write_files:
   - path: /etc/vc-oci-helper/helper.env
     permissions: "0600"
     content: |
-      HELPER_VCENTER_HOST=${vcenter_host}
-      HELPER_VCENTER_PORT=${vcenter_port}
-      HELPER_VCENTER_VERIFY_SSL=${vcenter_verify_ssl}
+      # vCenter/ESXi server and TLS verification are chosen on the login page of the web UI
       HELPER_OCI_AUTH=instance_principal
       HELPER_REGION=${region}
       HELPER_TENANCY_ID=${tenancy_ocid}

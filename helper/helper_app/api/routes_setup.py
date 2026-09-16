@@ -43,7 +43,6 @@ def setup_info(request: Request):
         "availability_domain": ident.availability_domain,
         "tenancy_id": ident.tenancy_id,
         "default_vcenter": f"{s.vcenter_host}:{s.vcenter_port}" if s.vcenter_host else "",
-        "vcenter_verify_ssl": s.vcenter_verify_ssl,
         "seed_bucket": s.seed_bucket,
         "default_shape": s.default_shape,
         "max_concurrent_jobs": s.max_concurrent_jobs,

@@ -390,6 +390,9 @@ class LoginRequest(BaseModel):
     password: str
     vcenter_host: str = ""  # defaults to HELPER_VCENTER_HOST; may be "host" or "host:port"
     vcenter_port: Optional[int] = Field(default=None, ge=1, le=65535)
+    verify_ssl: Optional[bool] = Field(
+        default=None, description="Verify the vCenter/ESXi TLS certificate (API and NFC download); "
+                                  "None = HELPER_VCENTER_VERIFY_SSL")
 
 
 class SessionInfo(BaseModel):
@@ -397,6 +400,7 @@ class SessionInfo(BaseModel):
     vcenter_host: str
     vcenter_port: int = 443
     vcenter_version: str = ""
+    verify_ssl: bool = False
     created_at: datetime
     expires_at: datetime
 

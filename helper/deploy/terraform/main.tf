@@ -200,9 +200,6 @@ resource "oci_core_instance" "helper" {
       seed_bucket         = var.seed_bucket_name
       default_shape       = var.default_target_shape
       max_concurrent_jobs = var.max_concurrent_jobs
-      vcenter_host        = var.vcenter_host
-      vcenter_port        = var.vcenter_port
-      vcenter_verify_ssl  = var.vcenter_verify_ssl
       region              = var.region
       tenancy_ocid        = var.tenancy_ocid
     }))

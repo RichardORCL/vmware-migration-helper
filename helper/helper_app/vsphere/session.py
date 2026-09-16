@@ -31,11 +31,12 @@ class VCenterAuthError(VCenterError):
 class VCenterSession:
     """A logged-in pyVmomi ``ServiceInstance`` bound to one user."""
 
-    def __init__(self, si, username: str, host: str, port: int = 443):
+    def __init__(self, si, username: str, host: str, port: int = 443, verify_ssl: bool = False):
         self._si = si
         self.username = username
         self.host = host
         self.port = port
+        self.verify_ssl = verify_ssl  # chosen on the login page; also applies to the NFC disk download
         self._lock = threading.RLock()
         self._closed = False
 
@@ -128,6 +129,19 @@ def parse_vcenter_address(value: str, default_host: str, default_port: int) -> t
     return host, port
 
 
+def _is_tls_failure(exc: BaseException) -> bool:
+    """SmartConnect wraps certificate errors in URLError/OSError; look for the SSL error in the chain."""
+    seen: set[int] = set()
+    cur: Optional[BaseException] = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if isinstance(cur, ssl.SSLError) or "CERTIFICATE_VERIFY_FAILED" in str(cur):
+            return True
+        reason = getattr(cur, "reason", None)
+        cur = reason if isinstance(reason, BaseException) else (cur.__cause__ or cur.__context__)
+    return False
+
+
 class VCenterConnector:
     def __init__(self, settings: Settings):
         self.s = settings
@@ -136,27 +150,33 @@ class VCenterConnector:
     def host(self) -> str:
         return self.s.vcenter_host
 
-    def _ssl_context(self) -> Optional[ssl.SSLContext]:
-        if self.s.vcenter_verify_ssl:
-            return None
+    @staticmethod
+    def _ssl_context(verify: bool) -> Optional[ssl.SSLContext]:
+        if verify:
+            return None  # pyVmomi's default: verify against the system CA store
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
         return ctx
 
-    def login(self, username: str, password: str, host: str = "", port: Optional[int] = None) -> VCenterSession:
-        """Log in to ``host`` (default: the configured vCenter) and return the session."""
+    def login(self, username: str, password: str, host: str = "", port: Optional[int] = None,
+              verify_ssl: Optional[bool] = None) -> VCenterSession:
+        """Log in to ``host`` (default: the configured vCenter) and return the session.
+
+        ``verify_ssl`` is the choice made on the login page (``None``: the configured default) and is
+        remembered on the session so the NFC disk download uses the same setting."""
         from pyVim.connect import SmartConnect
         from pyVmomi import vim
 
         host, port = parse_vcenter_address(host, self.s.vcenter_host, port or self.s.vcenter_port)
         if not username or not password:
             raise VCenterAuthError("user name and password are required")
+        verify = self.s.vcenter_verify_ssl if verify_ssl is None else verify_ssl
         kwargs = {}
-        ctx = self._ssl_context()
+        ctx = self._ssl_context(verify)
         if ctx is not None:
             kwargs["sslContext"] = ctx
-        log.info("vCenter login %s@%s:%d", username, host, port)
+        log.info("vCenter login %s@%s:%d (TLS verification %s)", username, host, port, "on" if verify else "off")
         try:
             si = SmartConnect(host=host.strip("[]"), port=port, user=username, pwd=password, **kwargs)
         except vim.fault.InvalidLogin as exc:
@@ -164,5 +184,9 @@ class VCenterConnector:
         except vim.fault.NoPermission as exc:
             raise VCenterAuthError("the account is not allowed to log in to vCenter") from exc
         except Exception as exc:  # noqa: BLE001
+            if _is_tls_failure(exc):
+                raise VCenterError(f"the TLS certificate of {host}:{port} could not be verified ({exc}); untick "
+                                   "'Verify the server certificate' for a self-signed or VMCA certificate, or "
+                                   "install its CA on the migration tool VM") from exc
             raise VCenterError(f"cannot connect to vCenter {host}:{port}: {exc}") from exc
-        return VCenterSession(si, username, host, port)
+        return VCenterSession(si, username, host, port, verify_ssl=verify)

@@ -90,8 +90,11 @@ class Env:
         FakeExport.instances.clear()
         self.updater = Updater(self.settings, runner=self._run_command, http_get=self._http_get)
 
-        def export_factory(vm, nfc_host):
+        self.export_verify_ssl: list[bool] = []  # TLS choice handed to the NFC export per job
+
+        def export_factory(vm, nfc_host, verify_ssl):
             self.nfc_hosts.append(nfc_host)
+            self.export_verify_ssl.append(verify_ssl)
             return FakeExport(vm, payloads, fail_once=set(fail_once), block_event=block_event)
 
         # post-copy guest fix-up: scripted outcome per test (device -> GuestFixup or exception)
@@ -181,7 +184,7 @@ def test_login_required_and_public_endpoints(env):
     c = env.client
     assert c.get("/api/health").status_code == 200
     assert c.get("/api/health").json()["vcenter_host"] == "vc.test"
-    assert c.get("/api/auth/config").json() == {"vcenter_host": "vc.test", "vcenter_port": 443}
+    assert c.get("/api/auth/config").json() == {"vcenter_host": "vc.test", "vcenter_port": 443, "verify_ssl": False}
     assert c.get("/ui/").status_code == 200
     assert c.get("/", follow_redirects=False).status_code == 307
     for path in ("/api/vms", "/api/jobs", "/api/oci/options", "/api/auth/me"):
@@ -207,9 +210,20 @@ def test_login_to_another_vcenter(env):
     assert r.status_code == 202, r.text
     assert wait_phase(c, r.json()["id"], "COMPLETED", "FAILED")["phase"] == "COMPLETED"
     assert env.nfc_hosts == ["vc-dr.example.com"]
+    assert env.export_verify_ssl == [False]  # login default: no TLS verification
+
+    # the TLS choice made at login is kept on the session and handed to the NFC download
+    me = login(c, vcenter_host="vc-ca.example.com", verify_ssl=True)
+    assert me["verify_ssl"] is True and env.vcenter.sessions[-1].verify_ssl is True
+    assert c.get("/api/auth/me").json()["verify_ssl"] is True
+    r = c.post("/api/jobs", json={"vm_moid": "vm-101", "target": target()})
+    assert r.status_code == 202, r.text
+    assert wait_phase(c, r.json()["id"], "COMPLETED", "FAILED")["phase"] == "COMPLETED"
+    assert env.export_verify_ssl == [False, True]
 
     me = login(c, vcenter_host="https://10.1.2.3/")
     assert (me["vcenter_host"], me["vcenter_port"]) == ("10.1.2.3", 443)
+    assert me["verify_ssl"] is False
     assert login(c, vcenter_host="")["vcenter_host"] == "vc.test"  # empty -> configured default
     r = c.post("/api/auth/login", json={**USER, "vcenter_host": "bad host;rm"})
     assert r.status_code == 502 and "invalid vCenter server" in r.text

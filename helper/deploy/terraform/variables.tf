@@ -39,23 +39,8 @@ variable "allowed_source_cidrs" {
   type        = list(string)
 }
 
-# ----------------------------------------------------------------------------- vCenter
-variable "vcenter_host" {
-  description = "Default vCenter Server host name or IP as reachable from the migration tool VM subnet (SOAP API and NFC disk download on 443); users may enter another vCenter on the login page"
-  type        = string
-}
-
-variable "vcenter_port" {
-  description = "vCenter HTTPS port"
-  type        = number
-  default     = 443
-}
-
-variable "vcenter_verify_ssl" {
-  description = "Verify the vCenter TLS certificate (disable for self-signed certificates)"
-  type        = bool
-  default     = false
-}
+# The vCenter/ESXi server and whether to verify its TLS certificate are entered on the login page of the
+# web UI (per login), so the stack has no vCenter settings.
 
 # ----------------------------------------------------------------------------- instance
 variable "helper_display_name" {

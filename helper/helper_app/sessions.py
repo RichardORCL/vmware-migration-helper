@@ -57,6 +57,7 @@ class UserSession:
     def info(self) -> SessionInfo:
         return SessionInfo(username=self.username, vcenter_host=self.vc.host,
                            vcenter_port=getattr(self.vc, "port", 443), vcenter_version=self.vc.version,
+                           verify_ssl=bool(getattr(self.vc, "verify_ssl", False)),
                            created_at=self.created_at, expires_at=self.expires_at)
 
     # ------------------------------------------------------------- pinning

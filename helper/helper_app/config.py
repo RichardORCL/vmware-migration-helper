@@ -26,15 +26,15 @@ class Settings(BaseSettings):
     session_ttl_s: int = 8 * 3600  # idle timeout
     cookie_secure: bool = True  # set false only for plain-HTTP development
 
-    # Default vCenter offered on the login page; users may type another one (the helper must reach it on
-    # 443 for SOAP and the NFC disk download)
+    # Optional defaults for the login page: the vCenter/ESXi server and the TLS-verification checkbox are
+    # entered there per login (the Resource Manager stack does not set these); the values chosen at login
+    # apply to the SOAP API and the NFC disk download of that session.
     vcenter_host: str = ""
     vcenter_port: int = 443
     vcenter_verify_ssl: bool = False
 
     # NFC export
     nfc_host_override: Optional[str] = None  # host substituted for '*' in lease URLs; default: session's vCenter
-    nfc_verify_ssl: bool = False
     nfc_chunk_bytes: int = 1024 * 1024
     nfc_pipeline_depth: int = 8  # chunks buffered between download and decode/write when a job opts in
     lease_progress_interval_s: int = 60

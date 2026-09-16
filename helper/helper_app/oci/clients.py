@@ -36,8 +36,27 @@ def describe_error(exc: BaseException) -> str:
         if exc.request_id:
             parts.append(f"opc-request-id {exc.request_id}")
         return " | ".join(parts)
+    vsphere = _describe_vsphere_fault(exc)
+    if vsphere:
+        return vsphere
     text = str(exc) or exc.__class__.__name__
     return text if text != str(exc.__class__) else exc.__class__.__name__
+
+
+def _describe_vsphere_fault(exc: BaseException) -> str:
+    """pyVmomi ``MethodFault``s print as a multi-line object dump; reduce them to the fault type, ``msg``
+    and the localizable detail messages (e.g. 'The operation is not supported on encrypted VM')."""
+    if not (hasattr(exc, "faultMessage") and hasattr(exc, "msg") and hasattr(exc, "dynamicType")):
+        return ""
+    name = type(exc).__name__.rsplit(".", 1)[-1]  # vmodl.fault.NotSupported -> NotSupported
+    msg = str(getattr(exc, "msg", "") or "").strip()
+    details = []
+    for m in getattr(exc, "faultMessage", None) or []:
+        text = str(getattr(m, "message", "") or "").strip()
+        if text and text != msg and text not in details:
+            details.append(text)
+    head = f"vSphere {name}: {msg}" if msg else f"vSphere {name}"
+    return f"{head} ({'; '.join(details)})" if details else head
 
 
 @dataclass

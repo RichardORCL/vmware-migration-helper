@@ -790,6 +790,15 @@ def test_create_job_validation(env):
     env.vms["vm-sus"] = make_vm(moid="vm-sus", name="sleeping", power_state="suspended")
     r = c.post("/api/jobs", json={"vm_moid": "vm-sus", "target": target(), "power_off_source": True})
     assert r.status_code == 400 and "suspended" in r.text
+    # encrypted VM (Windows 11 with a vTPM): vSphere would refuse ExportVm, so refuse before creating anything
+    env.vms["vm-enc"] = make_vm(moid="vm-enc", name="Win11", guest_id="windows11_64Guest", encrypted=True, vtpm=True)
+    insp = c.get("/api/vms/vm-enc").json()
+    assert insp["can_export"] is False and insp["vm"]["encrypted"] and insp["vm"]["has_vtpm"]
+    assert any(vm["moid"] == "vm-enc" and vm["encrypted"] for vm in c.get("/api/vms").json())
+    launched_before = len(env.fake.compute.instances)
+    r = c.post("/api/jobs", json={"vm_moid": "vm-enc", "target": target()})
+    assert r.status_code == 400 and "encrypted" in r.text and "Virtual TPM" in r.text
+    assert len(env.fake.compute.instances) == launched_before
     r = c.post("/api/jobs", json={"vm_moid": "vm-101", "target": target(availability_domain="Uocm:EU-FRANKFURT-1-AD-2")})
     assert r.status_code == 400 and "availability domain" in r.text
     assert c.post("/api/jobs", json={"vm_moid": "vm-nope", "target": target()}).status_code == 404

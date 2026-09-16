@@ -67,6 +67,10 @@ class VmSpec(BaseModel):
     power_state: str = "poweredOff"
     has_snapshots: bool = False
     host_name: str = Field(default="", description="ESXi host the VM is registered on (vm.runtime.host.name)")
+    encrypted: bool = Field(default=False, description="vSphere VM encryption: the VM home is encrypted "
+                                                       "(config.keyId); vSphere refuses to export such a VM")
+    has_vtpm: bool = Field(default=False, description="A Virtual TPM device is present (it requires VM encryption)")
+    encrypted_disks: list[str] = Field(default_factory=list, description="Labels of disks with an encrypted backing")
     disks: list[DiskSpec]
     nics: list[NicSpec] = Field(default_factory=list)
 
@@ -89,6 +93,7 @@ class VmSummary(BaseModel):
     num_disks: int = 0
     disk_capacity_bytes: int = 0
     is_template: bool = False
+    encrypted: bool = False  # VM encryption (or a vTPM, which requires it): not exportable until decrypted
 
 
 class GuestOsMapping(BaseModel):

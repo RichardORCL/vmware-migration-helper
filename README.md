@@ -79,7 +79,10 @@ troubleshooting in [docs/how-it-works.md](docs/how-it-works.md#networking).
 
 Guests that have been migrated with the helper and booted in OCI. Anything with virtio drivers is
 expected to work (Windows needs the Oracle VirtIO drivers installed first, or the *Maximum
-compatibility* preset); the table lists what has actually been verified.
+compatibility* preset); the table lists what has actually been verified. Encrypted VMs - including
+Windows 11 VMs with a Virtual TPM, which vSphere only allows on encrypted VMs - cannot be exported by
+vSphere; remove the vTPM and decrypt the VM in vCenter first (see
+[docs/limitations.md](docs/limitations.md)).
 
 | Operating system | Version(s) | Firmware | Result / notes |
 | --- | --- | --- | --- |

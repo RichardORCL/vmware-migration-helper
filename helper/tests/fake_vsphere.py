@@ -33,6 +33,9 @@ def make_vm(
     ips=None,  # {nic index: [ip, ...]} as VMware Tools last reported it (guest.net); None = nothing known
     tools_running=True,
     shutdown_polls=1,  # ShutdownGuest: the VM reports poweredOff after this many powerState reads (0 = never)
+    encrypted=False,  # VM encryption (config.keyId set)
+    vtpm=False,  # a Virtual TPM device (implies encryption on real vSphere; here they are independent knobs)
+    encrypted_disks=(),  # indices of disks whose backing has a keyId
 ):
     d = vim.vm.device
     devices = []
@@ -69,8 +72,15 @@ def make_vm(
         backing = d.VirtualDisk.FlatVer2BackingInfo()
         backing.fileName = f"[ds1] {name}/{name}{'' if i == 0 else '_' + str(i)}.vmdk"
         backing.thinProvisioned = True
+        if i in encrypted_disks:
+            backing.keyId = vim.encryption.CryptoKeyId(keyId=f"key-{i}", providerId=vim.encryption.KeyProviderId(id="kms"))
         disk.backing = backing
         devices.append(disk)
+    if vtpm:
+        tpm = d.VirtualTPM()
+        tpm.key = 11000
+        tpm.deviceInfo = vim.Description(label="Virtual TPM", summary="")
+        devices.append(tpm)
 
     nic_classes = {"vmxnet3": d.VirtualVmxnet3, "e1000": d.VirtualE1000, "e1000e": d.VirtualE1000e}
     for i, ntype in enumerate(nics):
@@ -86,7 +96,9 @@ def make_vm(
     hardware = NS(numCPU=num_cpu, memoryMB=memory_mb, device=devices)
     boot_options = NS(efiSecureBootEnabled=secure_boot)
     config = NS(name=name, instanceUuid="5023-abcd", guestId=guest_id, guestFullName=guest_full_name,
-                firmware=firmware, hardware=hardware, bootOptions=boot_options, template=template)
+                firmware=firmware, hardware=hardware, bootOptions=boot_options, template=template,
+                keyId=(vim.encryption.CryptoKeyId(keyId="vm-key", providerId=vim.encryption.KeyProviderId(id="kms"))
+                       if encrypted else None))
     runtime = NS(powerState=power_state, host=NS(name=host) if host else None)
     net = []
     for i, addrs in (ips or {}).items():
@@ -144,6 +156,8 @@ def summary_of(vm) -> VmSummary:
         guest_full_name=vm.config.guestFullName, guest_id=vm.config.guestId, num_cpu=vm.config.hardware.numCPU,
         memory_mb=vm.config.hardware.memoryMB, num_disks=len(disks),
         disk_capacity_bytes=sum(d.capacityInBytes for d in disks), is_template=bool(vm.config.template),
+        encrypted=vm.config.keyId is not None
+        or any(type(dev).__name__.endswith("VirtualTPM") for dev in vm.config.hardware.device),
     )
 
 

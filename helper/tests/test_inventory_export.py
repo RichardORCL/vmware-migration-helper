@@ -107,6 +107,44 @@ def test_preflight_and_warnings():
     assert any("50 GB" in n for n in notes)
     assert spec.is_windows is False
     assert vm_spec_from_vm(make_vm(guest_id="windows2019srv_64Guest")).is_windows
+    assert spec.encrypted is False and spec.has_vtpm is False and spec.encrypted_disks == []
+
+
+def test_encrypted_vms_are_refused_before_anything_is_created():
+    """vSphere rejects ExportVm on encrypted VMs (opUnsupportedOnEncryptedVm) - this used to surface only
+    after the seed image and instance had been created.  A Windows 11 VM with a vTPM is the common case."""
+    from tests.fake_vsphere import summary_of
+
+    win11 = vm_spec_from_vm(make_vm(guest_id="windows11_64Guest", encrypted=True, vtpm=True))
+    assert win11.encrypted and win11.has_vtpm
+    (problem,) = preflight(win11)
+    assert "encrypted" in problem and "Virtual TPM" in problem and "BitLocker" in problem and "Encrypt VM" in problem
+    assert summary_of(make_vm(encrypted=True)).encrypted and summary_of(make_vm(vtpm=True)).encrypted
+    assert summary_of(make_vm()).encrypted is False
+
+    # encrypted VM home without vTPM
+    (problem,) = preflight(vm_spec_from_vm(make_vm(encrypted=True)))
+    assert "encrypted" in problem and "Virtual TPM" not in problem
+
+    # only a disk is encrypted (storage policy with encryption)
+    spec = vm_spec_from_vm(make_vm(encrypted_disks=(1,)))
+    assert spec.encrypted is False and spec.encrypted_disks == ["Hard disk 2"]
+    (problem,) = preflight(spec)
+    assert "Hard disk 2" in problem and "storage policy" in problem
+
+
+def test_describe_vsphere_fault():
+    from pyVmomi import vmodl
+
+    from helper_app.oci.clients import describe_error
+
+    fault = vmodl.fault.NotSupported(msg="The operation is not supported on the object.")
+    fault.faultMessage = [vmodl.LocalizableMessage(key="com.vmware.vim.vpxd.encryption.opUnsupportedOnEncryptedVm",
+                                                   message="The operation is not supported on encrypted VM")]
+    assert describe_error(fault) == ("vSphere NotSupported: The operation is not supported on the object. "
+                                     "(The operation is not supported on encrypted VM)")
+    assert describe_error(vmodl.fault.InvalidArgument(msg="bad")) == "vSphere InvalidArgument: bad"
+    assert describe_error(RuntimeError("plain")) == "plain"
 
 
 def test_rewrite_lease_url():

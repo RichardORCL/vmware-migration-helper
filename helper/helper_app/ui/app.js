@@ -433,8 +433,11 @@
         const off = vm.power_state === "poweredOff";
         const on = vm.power_state === "poweredOn";  // migratable: the helper shuts it down before the export
         const active = job && !TERMINAL.includes(job.phase);
+        const exportable = (off || on) && !vm.encrypted;
+        const why = vm.encrypted ? "The VM is encrypted (VM encryption or a virtual TPM): vSphere does not allow exporting it. Decrypt it in vCenter first"
+          : off ? "" : on ? "The VM is powered on: it will be shut down just before the disk export" : "Resume and shut down, or power off the VM first";
         rows.append(el("tr", {},
-          el("td", { class: "name" }, vm.name),
+          el("td", { class: "name" }, vm.name, vm.encrypted ? el("span", { class: "badge warn", title: "Encrypted VM: not exportable until decrypted" }, "encrypted") : null),
           el("td", { class: "muted" }, vm.folder || "-"),
           el("td", {}, el("span", { class: "power " + vm.power_state }, vm.power_state.replace("powered", "").toLowerCase())),
           el("td", {}, vm.guest_full_name || vm.guest_id || "-"),
@@ -443,8 +446,7 @@
           el("td", {}, job ? el("a", { href: `#/jobs/${job.id}`, class: "phase " + job.phase }, job.phase) : el("span", { class: "muted" }, "-")),
           el("td", {}, active
             ? el("a", { href: `#/jobs/${job.id}`, class: "button secondary small" }, "View job")
-            : el("a", { href: `#/export/${vm.moid}`, class: "button primary small" + (off || on ? "" : " disabled"),
-              title: off ? "" : on ? "The VM is powered on: it will be shut down just before the disk export" : "Resume and shut down, or power off the VM first" }, "Migrate"))));
+            : el("a", { href: `#/export/${vm.moid}`, class: "button primary small" + (exportable ? "" : " disabled"), title: why }, "Migrate"))));
       }
       if (!visible.length) rows.append(el("tr", {}, el("td", { colspan: 8, class: "muted" }, vms.length ? "No virtual machines match the filters." : "No virtual machines found in this inventory.")));
       count.textContent = filtered.length === vms.length ? `${vms.length} virtual machines` : `${filtered.length} of ${vms.length} virtual machines`;
@@ -496,7 +498,9 @@
       ["Name", vm.name], ["Guest OS", vm.guest_full_name || vm.guest_id],
       ["Power state", vm.power_state], ["ESXi host", vm.host_name || "-"],
       ["CPU / memory", `${vm.num_cpu} vCPU / ${fmtBytes(vm.memory_mb * 1024 * 1024)}`],
-      ["Firmware", vm.firmware.toUpperCase() + (vm.secure_boot ? " (secure boot)" : "")],
+      ["Firmware", vm.firmware.toUpperCase() + (vm.secure_boot ? " (secure boot)" : "") + (vm.has_vtpm ? " + vTPM" : "")],
+      ...(vm.encrypted || vm.encrypted_disks.length ? [["Encryption", el("span", { class: "badge warn" },
+        vm.encrypted ? "VM encrypted" : "encrypted disks: " + vm.encrypted_disks.join(", "))]] : []),
       ["Disks", vm.disks.map((d) => `${d.label}: ${fmtBytes(d.capacity_bytes)} on ${d.controller_type}`).join("; ")],
       // one line per adapter: type, port group and the last addresses VMware Tools reported (when vCenter knows them)
       ["Network", vm.nics.length ? el("span", {}, ...vm.nics.map((n) => el("div", {},

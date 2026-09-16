@@ -67,6 +67,18 @@ def _network_name(nic) -> str:
 _CONTROLLER_ORDER = {"ide": 0, "buslogic": 1, "lsilogic": 1, "lsilogicsas": 1, "pvscsi": 1, "sata": 2, "nvme": 3}
 
 
+def _is_vtpm(dev) -> bool:
+    from pyVmomi import vim
+
+    cls = getattr(vim.vm.device, "VirtualTPM", None)
+    return cls is not None and isinstance(dev, cls)
+
+
+def _has_key(obj) -> bool:
+    """``keyId`` is set on the config of an encrypted VM and on the backing of an encrypted disk."""
+    return getattr(obj, "keyId", None) is not None
+
+
 def _is_link_local(ip: str) -> bool:
     low = ip.lower()
     return low.startswith("169.254.") or low.startswith("fe80:")
@@ -129,12 +141,15 @@ def vm_spec_from_vm(vm) -> VmSpec:
     controllers = {dev.key: dev for dev in hardware.device if isinstance(dev, d.VirtualController)}
 
     disks = []
+    encrypted_keys: set[int] = set()
     for dev in hardware.device:
         if not isinstance(dev, d.VirtualDisk):
             continue
         ctrl = controllers.get(dev.controllerKey)
         ctype = _controller_type(ctrl) if ctrl is not None else "unknown"
         backing = dev.backing
+        if _has_key(backing):
+            encrypted_keys.add(int(dev.key))
         capacity = getattr(dev, "capacityInBytes", None) or (dev.capacityInKB * 1024)
         disks.append(
             (
@@ -183,6 +198,9 @@ def vm_spec_from_vm(vm) -> VmSpec:
         power_state=str(vm.runtime.powerState),
         has_snapshots=vm.snapshot is not None,
         host_name=esxi_host_name(vm),
+        encrypted=_has_key(config),
+        has_vtpm=any(_is_vtpm(dev) for dev in hardware.device),
+        encrypted_disks=[spec.label for spec in disk_specs if spec.device_key in encrypted_keys],
         disks=disk_specs,
         nics=nics,
     )
@@ -196,6 +214,19 @@ def preflight(spec: VmSpec) -> list[str]:
         problems.append(f"VM is {spec.power_state}; resume and shut it down, or power it off in vCenter")
     if not spec.disks:
         problems.append("VM has no virtual disks")
+    if spec.encrypted or spec.has_vtpm:
+        # vSphere refuses ExportVm (OVF/NFC export) on an encrypted VM: opUnsupportedOnEncryptedVm.  A vTPM
+        # can only exist on an encrypted VM, so it has to go first (Windows 11 boots without it once installed).
+        vtpm = (" - the Virtual TPM device requires it" if spec.has_vtpm else "")
+        problems.append(
+            f"VM is encrypted (vSphere VM encryption{vtpm}); vSphere does not allow exporting encrypted VMs. "
+            "Decrypt it first: power the VM off, "
+            + ("remove the Virtual TPM device (suspend BitLocker inside Windows beforehand), " if spec.has_vtpm else "")
+            + "set 'Encrypt VM' to None under Edit Settings > VM Options > Encryption, and start the migration again")
+    elif spec.encrypted_disks:
+        problems.append(f"Encrypted virtual disk(s): {', '.join(spec.encrypted_disks)}; vSphere does not allow "
+                        "exporting encrypted disks. Change the storage policy of these disks to one without "
+                        "encryption (Edit Settings > VM Options > Encryption) and start the migration again")
     return problems
 
 
@@ -227,6 +258,7 @@ _VM_PROPS = [
     "config.hardware.numCPU",
     "config.hardware.memoryMB",
     "config.hardware.device",
+    "config.keyId",  # set on encrypted VMs only (absent otherwise)
 ]
 
 
@@ -319,6 +351,7 @@ def list_vm_summaries(si) -> list[VmSummary]:
                 num_disks=len(disks),
                 disk_capacity_bytes=capacity,
                 is_template=bool(vals.get("config.template", False)),
+                encrypted=vals.get("config.keyId") is not None or any(_is_vtpm(dev) for dev in devices),
             )
         )
     rows.sort(key=lambda r: (r.folder.lower(), r.name.lower()))

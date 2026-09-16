@@ -275,6 +275,7 @@ class MigrationRunner:
             job.power_off_result = "already_off"  # someone shut it down in the meantime
         nfc_host = self._resolve_nfc_host(job, vm, session)
         job.nfc_host = nfc_host
+        job.step = "export_lease"  # ExportVm; failures here must not be blamed on the power-off step
         self._save(job, message=f"Opening NFC export lease (disk download via {nfc_host})")
         with self.export_factory(vm, nfc_host) as export:
             urls = match_disk_urls(job.vm.disks, export.disk_urls())

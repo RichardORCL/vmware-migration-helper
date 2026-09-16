@@ -17,11 +17,8 @@ h2 { font-size: 15px; margin: 0 0 8px; font-weight: 600; }
 
 .topbar { display: flex; align-items: center; gap: 24px; padding: 8px 16px; background: #1b2a32; color: #fff; }
 .topbar .brand { font-weight: 600; font-size: 15px; white-space: nowrap; }
-.topbar .brand .arrow { color: #f80000; }
-.topbar .brand .tagline { font-weight: 400; font-size: 12px; color: #cfd8dd; margin-left: 10px; }
 .topbar nav { display: flex; gap: 4px; flex: 1; }
 .topbar nav a { color: #cfd8dd; text-decoration: none; padding: 6px 10px; border-radius: 3px; white-space: nowrap; }
-@media (max-width: 1000px) { .topbar .brand .tagline { display: none; } }
 .topbar nav a.active, .topbar nav a:hover { background: rgba(255,255,255,.12); color: #fff; }
 .topbar .user { display: flex; gap: 10px; align-items: center; color: #cfd8dd; }
 

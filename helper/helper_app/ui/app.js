@@ -674,12 +674,11 @@
 
     submit.disabled = !inspection.can_export;
 
-    // resume display of an active job for this VM, if any
-    const jobCard = document.getElementById("job-card"); const jobView = document.getElementById("job-view");
+    // a migration of this VM is already running: nothing to configure here, show the job instead
     try {
       const jobs = await api("GET", `/jobs?vm_moid=${encodeURIComponent(moid)}`);
       const active = jobs.find((j) => !TERMINAL.includes(j.phase));
-      if (active) { jobCard.hidden = false; submit.disabled = true; activePoll = pollJob(active.id, jobView, { onTerminal: () => { submit.disabled = !inspection.can_export; } }); }
+      if (active) { location.hash = `#/jobs/${active.id}`; return; }
     } catch (_) { /* ignore */ }
 
     form.addEventListener("submit", async (ev) => {
@@ -722,9 +721,7 @@
       submit.disabled = true;
       try {
         const job = await api("POST", "/jobs", { vm_moid: moid, target, power_off_source: inspection.needs_power_off });
-        jobCard.hidden = false;
-        stopPolling();
-        activePoll = pollJob(job.id, jobView, { onTerminal: () => { submit.disabled = !inspection.can_export; } });
+        location.hash = `#/jobs/${job.id}`;  // follow the migration on its own page
       } catch (e) { formError.textContent = e.message; submit.disabled = false; }
     });
   }

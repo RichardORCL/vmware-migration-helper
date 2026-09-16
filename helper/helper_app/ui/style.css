@@ -35,7 +35,6 @@ h2 { font-size: 15px; margin: 0 0 8px; font-weight: 600; }
 .pager label { display: flex; gap: 6px; align-items: center; font-size: 12px; }
 .pager select { padding: 3px 4px; border: 1px solid var(--border); border-radius: 3px; font: inherit; }
 .export { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-.export #job-card { grid-column: 1 / -1; }
 @media (max-width: 900px) { .export { grid-template-columns: 1fr; } }
 
 .kv { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; }

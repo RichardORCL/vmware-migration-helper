@@ -88,7 +88,7 @@ def list_compartments(c: OciClients) -> list[OciCompartment]:
         result.extend(sorted((OciCompartment(id=x.id, name=x.name, path=path_of(x)) for x in comps),
                              key=lambda x: x.path.lower()))
     else:
-        result.append(OciCompartment(id=c.identity_info.compartment_id, name="(helper compartment)"))
+        result.append(OciCompartment(id=c.identity_info.compartment_id, name="(migration tool compartment)"))
     return result
 
 

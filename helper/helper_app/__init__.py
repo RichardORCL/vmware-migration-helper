@@ -1,3 +1,3 @@
-"""vCenter to OCI migration helper: web UI, NFC export and block copy onto OCI volumes."""
+"""OCI Ultimate Migration Tool: web UI, NFC export from vCenter/ESXi and block copy onto OCI volumes."""
 
 __version__ = "0.3.1"

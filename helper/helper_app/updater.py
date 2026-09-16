@@ -170,7 +170,7 @@ class Updater:
         st.update_running = self.running()
         st.log = self.log_tail()
         if method != "source":
-            st.reason = f"No git checkout at {self.src}; the helper was not installed from source."
+            st.reason = f"No git checkout at {self.src}; the migration tool was not installed from source."
         elif st.update_running:
             st.reason = "An update is running."
         elif active_jobs:

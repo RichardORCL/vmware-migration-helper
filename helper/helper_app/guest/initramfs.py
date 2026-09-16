@@ -137,7 +137,7 @@ class _Session:
         try:
             r = self.run(argv, timeout_s)
         except OSError as exc:
-            raise Fail(f"cannot run {argv[0]} on the helper: {exc}") from exc
+            raise Fail(f"cannot run {argv[0]} on the migration tool VM: {exc}") from exc
         if ok and r.returncode != 0:
             raise Fail(f"{' '.join(argv[:3])} failed (rc {r.returncode}): {_tail(r.stderr or r.stdout)}")
         return r
@@ -237,7 +237,7 @@ class _Session:
         conf_dir = self.mnt / "etc" / "dracut.conf.d"
         conf_dir.mkdir(parents=True, exist_ok=True)
         (conf_dir / DRACUT_CONF_NAME).write_text(
-            "# added by the VMware -> OCI migration helper: virtio drivers for OCI paravirtualized devices\n"
+            "# added by the OCI Ultimate Migration Tool: virtio drivers for OCI paravirtualized devices\n"
             f'add_drivers+=" {VIRTIO_DRIVERS} "\n')
 
         # --no-hostonly: the image must not be tailored to the helper's hardware/mounts either (dracut 004 on
@@ -273,7 +273,7 @@ class _Session:
                    if len(ln.split()) >= 2 and not ln.split()[0].startswith(self.real)}
         clash = [vg for vg in guest_vgs if vg in foreign]
         if clash:
-            raise Skip(f"guest volume group '{clash[0]}' has the same name as a volume group on the helper; "
+            raise Skip(f"guest volume group '{clash[0]}' has the same name as a volume group on the migration tool VM; "
                        "it cannot be activated here - rebuild the initramfs inside the guest instead")
         for vg in guest_vgs:
             self.sh(["vgchange", "--config", self.lvm_config, "-ay", vg], timeout_s=120)

@@ -74,14 +74,14 @@ def collect(job: Job, settings: Settings, ident: HelperIdentity, commit: str,
     )
     lo = job.launch_options
     header = [
-        "=== vCenter to OCI helper - job diagnostics ===",
+        "=== OCI Ultimate Migration Tool - job diagnostics ===",
         f"generated: {now().isoformat(timespec='seconds')}",
-        f"helper: version {__version__} commit {commit or '-'}",
-        f"helper identity: instance {ident.instance_id} compartment {ident.compartment_id} "
+        f"migration tool: version {__version__} commit {commit or '-'}",
+        f"migration tool VM: instance {ident.instance_id} compartment {ident.compartment_id} "
         f"region {ident.region} AD {ident.availability_domain}",
         f"settings: vcenter_default={settings.vcenter_host or '-'} "
         f"nfc_host_override={settings.nfc_host_override or '-'} seed_bucket={settings.seed_bucket} "
-        f"seed_compartment={settings.seed_compartment_id or '(helper)'} "
+        f"seed_compartment={settings.seed_compartment_id or '(migration tool VM)'} "
         f"max_concurrent_jobs={settings.max_concurrent_jobs} disk_retry_attempts={settings.disk_retry_attempts}",
         "",
         f"job {job.id}: phase={job.phase.value} step={job.step or '-'}"
@@ -120,7 +120,7 @@ def collect(job: Job, settings: Settings, ident: HelperIdentity, commit: str,
         "--- job record (JSON) ---",
         json.dumps(job.model_dump(mode="json"), indent=2, sort_keys=True),
         "",
-        f"--- helper journal ({settings.update_service}) ---",
+        f"--- migration tool journal ({settings.update_service}) ---",
         journal_excerpt(job, settings.update_service, run),
     ]
     return "\n".join(header) + "\n"

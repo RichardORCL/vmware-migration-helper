@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Package the helper Terraform as a Resource Manager stack zip and optionally create the stack.
+# Package the migration tool Terraform as a Resource Manager stack zip and optionally create the stack.
 #
 #   ./package_stack.sh                       -> <repo root>/vc-oci-helper-stack.zip
 #                                               (committed; the README "Deploy to Oracle Cloud" button links to it)
@@ -29,7 +29,7 @@ if [ -n "$CREATE" ]; then
   oci resource-manager stack create \
     --compartment-id "$CREATE" \
     --display-name "$NAME" \
-    --description "vCenter to OCI export helper VM" \
+    --description "OCI Ultimate Migration Tool VM" \
     --config-source "$ZIP" \
     --terraform-version "1.5.x" \
     --query 'data.id' --raw-output

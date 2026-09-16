@@ -76,7 +76,8 @@ async def create_job(body: CreateJobRequest, request: Request, session: UserSess
                             "OCI does not provide licenses for Windows 10/11; select Bring your own license")
     helper_ad = st.clients.identity_info.availability_domain
     if body.target.availability_domain != helper_ad:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"the availability domain must be the helper's ({helper_ad})")
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            f"the availability domain must be the migration tool VM's ({helper_ad})")
     shape = body.target.shape or st.settings.default_shape
     if is_arm_shape(shape):
         raise HTTPException(status.HTTP_400_BAD_REQUEST,

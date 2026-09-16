@@ -539,7 +539,7 @@ def test_full_migration_with_retry(env):
     r = c.get(f"/api/jobs/{job_id}/diagnostics")
     assert r.status_code == 200 and r.headers["content-type"].startswith("text/plain")
     text = r.text
-    assert f"job {job_id}: phase=COMPLETED" in text and "helper: version" in text
+    assert f"job {job_id}: phase=COMPLETED" in text and "migration tool: version" in text
     assert '"phase": "COMPLETED"' in text  # JSON record
     assert "disk 1" in text and "attempts=2" in text
     assert "Creating seed image" in text and "Traceback" in text and "ServiceError" in text

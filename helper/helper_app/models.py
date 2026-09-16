@@ -144,7 +144,7 @@ class OciTarget(BaseModel):
     availability_domain: str
     subnet_id: str
     display_name: Optional[str] = None
-    shape: Optional[str] = Field(default=None, description="Flex shape name; helper default when omitted")
+    shape: Optional[str] = Field(default=None, description="Flex shape name; migration tool default when omitted")
     ocpus: Optional[float] = Field(
         default=None, gt=0, le=512,
         description="OCPU override; derived from the source vCPUs (2 vCPU = 1 OCPU) when omitted",
@@ -187,8 +187,8 @@ class OciTarget(BaseModel):
     )
     rebuild_initramfs: bool = Field(
         default=True,
-        description="Linux guests: after the copy, mount the target boot volume on the helper and rebuild the "
-                    "initramfs of every installed kernel with virtio drivers (chroot + dracut) when it lacks "
+        description="Linux guests: after the copy, mount the target boot volume on the migration tool VM and rebuild "
+                    "the initramfs of every installed kernel with virtio drivers (chroot + dracut) when it lacks "
                     "them, so hostonly initramfs images built on VMware (RHEL/CentOS/Oracle Linux) boot in OCI. "
                     "Skipped for Windows and for guests without dracut; never fails the migration",
     )
@@ -366,7 +366,7 @@ class CreateJobRequest(BaseModel):
     target: OciTarget
     power_off_source: bool = Field(
         default=False,
-        description="Required for a powered-on VM: the user confirmed that the helper shuts it down right "
+        description="Required for a powered-on VM: the user confirmed that the migration tool shuts it down right "
                     "before the disk export (guest shutdown via VMware Tools, hard power-off as fallback)",
     )
 

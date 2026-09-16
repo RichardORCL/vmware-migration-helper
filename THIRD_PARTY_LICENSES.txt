@@ -1,7 +1,7 @@
 THIRD-PARTY LICENSES
 ====================
 
-The VMware to OCI Compute migration helper is licensed under the Universal
+The OCI Ultimate Migration Tool is licensed under the Universal
 Permissive License (UPL) 1.0, see LICENSE. It redistributes the third-party
 components listed below, which remain under their own licenses. The full
 license texts and copyright notices are reproduced here and are also kept

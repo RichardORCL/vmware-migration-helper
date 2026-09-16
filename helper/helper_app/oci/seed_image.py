@@ -226,7 +226,7 @@ class SeedImageService:
             parts.append(
                 "OCI recorded no import log or error, which usually means the image import service could not "
                 f"read the placeholder from bucket '{self.s.seed_bucket}': it fetches the object through a "
-                "pre-authenticated request created as the helper, so the helper's policy needs "
+                "pre-authenticated request created as the migration tool VM, so its policy needs "
                 f"\"manage buckets ... where all {{target.bucket.name = '{self.s.seed_bucket}', "
                 "request.permission = 'PAR_MANAGE'}\" (see docs/limitations.md)"
             )

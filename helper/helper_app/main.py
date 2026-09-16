@@ -1,4 +1,4 @@
-"""FastAPI application factory and entry point for the vCenter to OCI helper.
+"""FastAPI application factory and entry point for the OCI Ultimate Migration Tool.
 
 Serves the web UI (``/ui``), the REST API (``/api``) and runs the migrations.
 """
@@ -74,7 +74,7 @@ def create_app(
         app.state.stats = stats or StatsSampler()
         app.state.stats.start()
         ident = app.state.clients.identity_info
-        log.info("helper %s ready in %s / %s; vCenter %s", ident.instance_id, ident.region,
+        log.info("migration tool %s ready in %s / %s; vCenter %s", ident.instance_id, ident.region,
                  ident.availability_domain, settings.vcenter_host or "(not configured)")
         try:
             yield
@@ -85,7 +85,7 @@ def create_app(
             app.state.sessions.close_all()
             app.state.store.close()
 
-    app = FastAPI(title="vCenter to OCI helper", version=__version__, lifespan=lifespan)
+    app = FastAPI(title="OCI Ultimate Migration Tool", version=__version__, lifespan=lifespan)
     app.include_router(routes_auth.router)
     app.include_router(routes_vms.router)
     app.include_router(routes_jobs.router)

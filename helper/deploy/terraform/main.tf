@@ -101,21 +101,21 @@ resource "oci_identity_tag_namespace" "vc_oci" {
   count          = var.create_iam ? 1 : 0
   compartment_id = var.compartment_ocid
   name           = local.tag_namespace
-  description    = "vCenter to OCI export"
+  description    = "OCI Ultimate Migration Tool (VMware to OCI export)"
 }
 
 resource "oci_identity_tag" "role" {
   count            = var.create_iam ? 1 : 0
   tag_namespace_id = oci_identity_tag_namespace.vc_oci[0].id
   name             = local.tag_role_key
-  description      = "Role of the resource in the vCenter to OCI export workflow"
+  description      = "Role of the resource in the OCI Ultimate Migration Tool workflow"
 }
 
 resource "oci_identity_dynamic_group" "helper" {
   count          = var.create_iam ? 1 : 0
   compartment_id = var.tenancy_ocid
   name           = local.dynamic_group
-  description    = "vCenter to OCI helper VM"
+  description    = "OCI Migration Tool VM"
   matching_rule  = "ALL {instance.compartment.id = '${var.compartment_ocid}', tag.${local.tag_namespace}.${local.tag_role_key}.value = 'helper'}"
 }
 
@@ -123,7 +123,7 @@ resource "oci_identity_policy" "helper" {
   count          = var.create_iam ? 1 : 0
   compartment_id = var.tenancy_ocid
   name           = "${var.helper_display_name}-policy"
-  description    = "Permissions needed by the vCenter to OCI helper"
+  description    = "Permissions needed by the OCI Migration Tool VM"
   statements = [
     # target instances, volumes and attachments
     "Allow dynamic-group ${local.dynamic_group} to manage instance-family in ${local.policy_scope}",
@@ -131,7 +131,7 @@ resource "oci_identity_policy" "helper" {
     "Allow dynamic-group ${local.dynamic_group} to use virtual-network-family in ${local.policy_scope}",
     "Allow dynamic-group ${local.dynamic_group} to read compartments in tenancy",
     "Allow dynamic-group ${local.dynamic_group} to inspect compartments in tenancy",
-    # the helper's own attachments live in its compartment
+    # the migration tool VM's own attachments live in its compartment
     "Allow dynamic-group ${local.dynamic_group} to manage volume-attachments in compartment id ${var.compartment_ocid}",
     # seed custom images and their capability schemas (global schemas are readable by any authenticated principal)
     "Allow dynamic-group ${local.dynamic_group} to manage instance-images in compartment id ${var.compartment_ocid}",
@@ -156,7 +156,7 @@ resource "time_sleep" "iam_propagation" {
   depends_on      = [oci_identity_tag.role, oci_identity_policy.helper]
 }
 
-# ---------------------------------------------------------------------------- helper instance
+# ---------------------------------------------------------------------------- migration tool VM
 resource "oci_core_instance" "helper" {
   availability_domain = var.availability_domain
   compartment_id      = var.compartment_ocid

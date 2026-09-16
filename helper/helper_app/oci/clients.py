@@ -80,7 +80,7 @@ def discover_identity(settings: Settings) -> HelperIdentity:
         md = resp.json()
     except Exception as exc:  # pragma: no cover - only on a real instance
         raise OciError(
-            "Helper identity is not configured and the instance metadata service is unreachable: "
+            "The migration tool VM identity is not configured and the instance metadata service is unreachable: "
             f"{exc}. Set HELPER_INSTANCE_ID/COMPARTMENT_ID/AVAILABILITY_DOMAIN/REGION/TENANCY_ID."
         ) from exc
     return HelperIdentity(

@@ -8,28 +8,28 @@ variable "region" {
 }
 
 variable "compartment_ocid" {
-  description = "Compartment for the helper instance, the seed image bucket and (by default) the seed images"
+  description = "Compartment for the OCI Migration Tool VM, the seed image bucket and (by default) the seed images"
   type        = string
 }
 
 # ----------------------------------------------------------------------------- placement
 variable "availability_domain" {
-  description = "AD of the helper VM. Target instances can only be created in this AD (boot volumes are AD-local)."
+  description = "AD of the OCI Migration Tool VM. Target instances can only be created in this AD (boot volumes are AD-local)."
   type        = string
 }
 
 variable "vcn_ocid" {
-  description = "VCN containing the helper subnet"
+  description = "VCN containing the migration tool VM subnet"
   type        = string
 }
 
 variable "subnet_ocid" {
-  description = "Subnet for the helper VM; must route to vCenter (VPN/FastConnect) and be reachable from the administrators' browsers"
+  description = "Subnet for the OCI Migration Tool VM; must route to vCenter (VPN/FastConnect) and be reachable from the administrators' browsers"
   type        = string
 }
 
 variable "assign_public_ip" {
-  description = "Give the helper a public IP (only when administrators reach the web UI over the internet)"
+  description = "Give the migration tool VM a public IP (only when administrators reach the web UI over the internet)"
   type        = bool
   default     = false
 }
@@ -41,7 +41,7 @@ variable "allowed_source_cidrs" {
 
 # ----------------------------------------------------------------------------- vCenter
 variable "vcenter_host" {
-  description = "Default vCenter Server host name or IP as reachable from the helper subnet (SOAP API and NFC disk download on 443); users may enter another vCenter on the login page"
+  description = "Default vCenter Server host name or IP as reachable from the migration tool VM subnet (SOAP API and NFC disk download on 443); users may enter another vCenter on the login page"
   type        = string
 }
 
@@ -60,7 +60,7 @@ variable "vcenter_verify_ssl" {
 # ----------------------------------------------------------------------------- instance
 variable "helper_display_name" {
   type    = string
-  default = "vc-oci-helper"
+  default = "oci-migration-tool"
 }
 
 variable "helper_shape" {
@@ -83,7 +83,7 @@ variable "ssh_public_key" {
   type        = string
 }
 
-# ----------------------------------------------------------------------------- helper service
+# ----------------------------------------------------------------------------- migration tool service
 variable "seed_bucket_name" {
   description = "Object Storage bucket used while importing seed custom images"
   type        = string
@@ -97,13 +97,13 @@ variable "default_target_shape" {
 }
 
 variable "max_concurrent_jobs" {
-  description = "Number of migrations the helper runs in parallel (each needs its volumes attached; 32 attachment slots in total)"
+  description = "Number of migrations the migration tool runs in parallel (each needs its volumes attached; 32 attachment slots in total)"
   type        = number
   default     = 2
 }
 
 variable "source_git_url" {
-  description = "Git repository containing the helper; cloned on the VM and installed with pip"
+  description = "Git repository containing the migration tool; cloned on the VM and installed with pip"
   type        = string
   default     = "https://github.com/RichardORCL/vmware-migration-helper.git"
 }
@@ -122,7 +122,7 @@ variable "create_iam" {
 }
 
 variable "policy_scope_compartment_ocid" {
-  description = "Compartment in which the helper may create target instances and volumes (empty = whole tenancy)"
+  description = "Compartment in which the migration tool may create target instances and volumes (empty = whole tenancy)"
   type        = string
   default     = ""
 }

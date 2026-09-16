@@ -1,4 +1,4 @@
-/* vCenter to OCI migration - helper web UI (no framework, hash routing). */
+/* OCI Ultimate Migration Tool - web UI (no framework, hash routing). */
 (function () {
   "use strict";
 
@@ -238,7 +238,7 @@
       ["State in OCI", ociStateEl(root, job)],
       ["Source VM", `${job.vm.name} (${job.vm.moid})${job.vcenter_host ? " on " + job.vcenter_host : ""} - ${job.vm.num_cpu} vCPU, ${fmtBytes(job.vm.memory_mb * 1024 * 1024)} RAM, ${job.vm.disks.length} disk(s)`],
       ["Guest OS", `${job.vm.guest_full_name || job.vm.guest_id}${job.target.operating_system_version ? ` - release ${job.target.operating_system_version} (selected)` : ""}`],
-      ["Shape", `${job.target.shape || "(helper default)"}${job.target.ocpus || job.target.memory_gb ? ` - ${job.target.ocpus ?? "auto"} OCPU / ${job.target.memory_gb ?? "auto"} GB (custom)` : " - sized from the source VM"}`],
+      ["Shape", `${job.target.shape || "(migration tool default)"}${job.target.ocpus || job.target.memory_gb ? ` - ${job.target.ocpus ?? "auto"} OCPU / ${job.target.memory_gb ?? "auto"} GB (custom)` : " - sized from the source VM"}`],
       ["IP addresses", ociIpsEl(root, job)],
       ["Launch options", job.launch_options ? `${job.launch_options.firmware}${job.launch_options.secure_boot ? " + Secure Boot (shielded instance, with Measured Boot + vTPM on VM shapes)" : ""}, boot ${job.launch_options.boot_volume_type}, nic ${job.launch_options.network_type}` : "-"],
       ...(job.target.windows_license_type ? [["Windows license", job.target.windows_license_type === "OCI_PROVIDED"
@@ -951,7 +951,7 @@
         cadBtn.disabled = true; reconnectBtn.disabled = stopped;
         if (closing) return;
         setStatus(ev.detail.clean ? "Disconnected" : "Connection lost", false);
-        if (!ev.detail.clean) setError("The console connection dropped (the helper logs the reason; the instance may be rebooting or the tunnel was refused). Use Reconnect to try again.");
+        if (!ev.detail.clean) setError("The console connection dropped (the migration tool logs the reason; the instance may be rebooting or the tunnel was refused). Use Reconnect to try again.");
       });
       rfb.addEventListener("securityfailure", (ev) => setError(`VNC security failure: ${ev.detail.reason || ev.detail.status}`));
       rfb.addEventListener("credentialsrequired", () => setError("The VNC server asked for credentials; the OCI console does not normally do this."));
@@ -1032,10 +1032,10 @@
             const h = await r.json();
             if (h.commit && h.commit !== oldCommit) { swState.textContent = `Updated to ${short(h.commit)}; please log in again.`; setTimeout(showLogin, 1500); return; }
           }
-        } catch (_) { swState.textContent = "Helper is restarting..."; }
+        } catch (_) { swState.textContent = "The migration tool is restarting..."; }
         if (Date.now() - started > 15 * 60 * 1000) { swState.textContent = "The update is taking unusually long; check the update log or the service journal."; return; }
         const sw = await loadSoftware(false).catch(() => null);
-        if (sw) swState.textContent = "Update running; waiting for the helper to restart...";
+        if (sw) swState.textContent = "Update running; waiting for the migration tool to restart...";
         if (sw && sw.log && /UPDATE FAILED/.test(sw.log.split("update started").pop())) { watching = false; renderSoftware(sw); swState.textContent = "The update failed; see the log."; return; }
         timer = setTimeout(tick, 3000);
       };
@@ -1045,7 +1045,7 @@
     swBtn.addEventListener("click", async () => {
       const sw = await loadSoftware(false);
       if (!sw) return;
-      const msg = sw.update_available ? "Update the helper to the latest version from GitHub and restart the service?" : "Reinstall the current version and restart the service?";
+      const msg = sw.update_available ? "Update the migration tool to the latest version from GitHub and restart the service?" : "Reinstall the current version and restart the service?";
       if (!confirm(msg + "\n\nAll users will have to log in again.")) return;
       swBtn.disabled = true; swErr.textContent = "";
       try { const r = await api("POST", "/setup/software/update", {}); watching = true; renderSoftware(r); swState.textContent = "Update started..."; watchRestart(sw.commit); }
@@ -1133,7 +1133,7 @@
     const purge = async (scope) => {
       const out = document.getElementById("jobs-purge-result");
       const what = scope === "failed" ? "all FAILED and CANCELLED jobs" : "ALL finished jobs (completed, failed and cancelled)";
-      if (!confirm(`Delete the records of ${what} from the helper?\n\n` +
+      if (!confirm(`Delete the records of ${what} from the migration tool?\n\n` +
         "Running or queued jobs are kept. This only removes the job history: OCI resources a failed job may have " +
         "left behind (instance, volumes) are NOT cleaned up - use 'Clean up OCI resources' on such jobs first if needed.\n\n" +
         "This cannot be undone.")) return;

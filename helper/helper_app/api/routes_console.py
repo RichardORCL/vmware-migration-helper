@@ -46,7 +46,7 @@ async def open_console(job_id: str, request: Request, replace: bool = False,
         raise HTTPException(status.HTTP_409_CONFLICT, {
             "code": "foreign_connection",
             "connection_id": exc.connection_id,
-            "message": "An instance console connection that was not created by the helper exists for this "
+            "message": "An instance console connection that was not created by the migration tool exists for this "
                        "instance (OCI allows one per instance). Replace it, or delete it in the OCI console first.",
         })
     except Exception as exc:  # noqa: BLE001

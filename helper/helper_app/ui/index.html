@@ -2,13 +2,13 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>VMware to OCI Compute migration</title>
+  <title>OCI Ultimate Migration Tool</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">VMware <span class="arrow">&rarr;</span> OCI Compute migration</div>
+    <div class="brand">OCI Ultimate Migration Tool <span class="tagline">VMware <span class="arrow">&rarr;</span> OCI Compute</span></div>
     <nav id="nav" hidden>
       <a href="#/vms" data-nav="vms">Source VMs</a>
       <a href="#/jobs" data-nav="jobs">Jobs</a>
@@ -34,7 +34,7 @@
         <label>vCenter server
           <input name="vcenter" type="text" required list="vcenter-recent" placeholder="vcenter.example.com[:443]" autocapitalize="off" spellcheck="false">
           <datalist id="vcenter-recent"></datalist>
-          <small>Host name or IP, optionally with a port. The helper must reach it on that port (and on 443 for the disk export).</small>
+          <small>Host name or IP, optionally with a port. The migration tool VM must reach it on that port (and on 443 for the disk export).</small>
         </label>
         <label>User name
           <input name="username" type="text" required autofocus placeholder="administrator@vsphere.local">
@@ -146,7 +146,7 @@
           </label>
           <label>Availability domain
             <input name="availability_domain" type="text" readonly tabindex="-1">
-            <small>Fixed to the helper VM's availability domain: the volumes are written by the helper and boot volumes are AD-local.</small>
+            <small>Fixed to the migration tool VM's availability domain: the volumes are written by the migration tool and boot volumes are AD-local.</small>
           </label>
           <label>Network compartment
             <select name="network_compartment_id" required></select>
@@ -200,7 +200,7 @@
           <details>
             <summary>Advanced: disk transfer</summary>
             <label class="check"><input type="checkbox" name="nfc_direct_to_esxi"> Download the disks directly from the ESXi host <span id="esxi-host-hint"></span> instead of through vCenter</label>
-            <small>Usually much faster than the vCenter proxy, but the helper must reach that ESXi host on TCP 443 (same as <code>HELPER_NFC_HOST_OVERRIDE</code>, resolved per VM).</small>
+            <small>Usually much faster than the vCenter proxy, but the migration tool VM must reach that ESXi host on TCP 443 (same as <code>HELPER_NFC_HOST_OVERRIDE</code>, resolved per VM).</small>
             <label class="check"><input type="checkbox" name="pipelined_decode"> Decode and write on a separate thread (keep downloading while grains are inflated and written)</label>
             <small>Overlaps the network read with decompression and the volume write instead of doing them one after another. Buffers a few chunks in memory (<code>HELPER_NFC_PIPELINE_DEPTH</code>).</small>
             <label>Volume performance (VPU/GB)
@@ -218,9 +218,9 @@
             <div class="kv" id="launch-preview"></div>
             <label class="check"><input type="checkbox" name="compatibility_mode"> Maximum compatibility (IDE boot volume + E1000 NIC) for guests without virtio drivers</label>
             <label class="check" id="rebuild-initramfs-label"><input type="checkbox" name="rebuild_initramfs" checked> Rebuild the Linux initramfs with virtio drivers after the copy</label>
-            <small id="rebuild-initramfs-hint">RHEL, CentOS and Oracle Linux build a <em>hostonly</em> initramfs that only knows VMware's storage drivers, so the copied VM cannot find its root disk in OCI (dracut emergency shell). With this option the helper mounts the copied boot volume, and runs the guest's own <code>dracut</code> in a chroot for every kernel whose initramfs lacks virtio modules. Only the OCI copy is changed; guests without dracut (Ubuntu/Debian) are skipped automatically.</small>
+            <small id="rebuild-initramfs-hint">RHEL, CentOS and Oracle Linux build a <em>hostonly</em> initramfs that only knows VMware's storage drivers, so the copied VM cannot find its root disk in OCI (dracut emergency shell). With this option the migration tool mounts the copied boot volume, and runs the guest's own <code>dracut</code> in a chroot for every kernel whose initramfs lacks virtio modules. Only the OCI copy is changed; guests without dracut (Ubuntu/Debian) are skipped automatically.</small>
             <label class="check" id="fix-network-label"><input type="checkbox" name="fix_network" checked> Configure the Linux network for OCI after the copy (DHCP on the new interface)</label>
-            <small id="fix-network-hint">The network interface gets a new name in OCI (<code>ens3</code>, <code>enp0s5</code> or <code>eth0</code> instead of <code>ens192</code>), so the VMware profile - bound to the old name and usually to a static address - never comes up. The helper adds a NetworkManager profile that matches <em>any</em> Ethernet interface with DHCP (OCI's DHCP always hands out the VNIC's address, also a fixed private IP chosen above), installs a first-boot unit that creates <code>ifcfg-&lt;nic&gt;</code> files on guests using the legacy network scripts, adds netplan/systemd-networkd drop-ins where those are used, and disables udev rules that pin interface names to the VMware MAC addresses. Old profiles are left in place; SELinux labels are set with the guest's own tools.</small>
+            <small id="fix-network-hint">The network interface gets a new name in OCI (<code>ens3</code>, <code>enp0s5</code> or <code>eth0</code> instead of <code>ens192</code>), so the VMware profile - bound to the old name and usually to a static address - never comes up. The migration tool adds a NetworkManager profile that matches <em>any</em> Ethernet interface with DHCP (OCI's DHCP always hands out the VNIC's address, also a fixed private IP chosen above), installs a first-boot unit that creates <code>ifcfg-&lt;nic&gt;</code> files on guests using the legacy network scripts, adds netplan/systemd-networkd drop-ins where those are used, and disables udev rules that pin interface names to the VMware MAC addresses. Old profiles are left in place; SELinux labels are set with the guest's own tools.</small>
             <label>Boot volume type override
               <select name="boot_volume_type_override">
                 <option value="">(automatic)</option>
@@ -265,7 +265,7 @@
       </section>
 
       <section class="card">
-        <h2>Helper</h2>
+        <h2>OCI Migration Tool VM</h2>
         <div id="setup-kv" class="kv"></div>
         <hr class="sep">
         <div class="toolbar">
@@ -308,9 +308,9 @@
       <section class="card">
         <h2>Logging</h2>
         <form id="log-form" class="form" autocomplete="off">
-          <label>Helper log level
+          <label>Log level
             <select name="log_level"></select>
-            <small>Level of the helper's own messages in the service journal (<code>journalctl -u vc-oci-helper -f</code>).</small>
+            <small>Level of the migration tool's own messages in the service journal (<code>journalctl -u vc-oci-helper -f</code>).</small>
           </label>
           <label class="check"><input type="checkbox" name="oci_log_requests"> Log OCI API requests and responses</label>
           <small>Dumps every OCI SDK call including headers and bodies. Very verbose; use it to analyse
@@ -324,14 +324,14 @@
 
       <section class="card">
         <h2>Maintenance</h2>
-        <p class="muted">Seed images are tiny helper images used to launch the target instances. They can be
+        <p class="muted">Seed images are tiny placeholder images used to launch the target instances. They can be
           removed at any time; the next migration recreates them.</p>
         <div class="actions">
           <span id="seed-result" class="muted"></span>
           <button class="secondary" id="seed-cleanup">Delete seed images</button>
         </div>
         <hr class="sep">
-        <p class="muted">Job history: removes finished job records from the helper's database (the <em>Jobs</em> page).
+        <p class="muted">Job history: removes finished job records from the migration tool's database (the <em>Jobs</em> page).
           Running or queued jobs are kept. Only the records are deleted - OCI resources a failed job left behind
           (instance, volumes) are not touched; open the job and use <em>Clean up OCI resources</em> for that first.</p>
         <div class="actions">
@@ -355,7 +355,7 @@
           <h3>Target instance</h3>
           <div class="kv" data-target></div>
           <div class="actions">
-            <a class="button secondary" data-console hidden title="Open the VNC console of the migrated instance in the browser (OCI instance console connection through the helper)">Remote console</a>
+            <a class="button secondary" data-console hidden title="Open the VNC console of the migrated instance in the browser (OCI instance console connection through the migration tool VM)">Remote console</a>
           </div>
         </section>
         <section class="job-section">
@@ -366,7 +366,7 @@
           <div class="actions">
             <span class="error" data-error></span>
             <span class="muted" data-copy-state></span>
-            <button class="secondary" data-copy title="Copy the job record, error and relevant helper log lines to the clipboard">Copy diagnostics</button>
+            <button class="secondary" data-copy title="Copy the job record, error and relevant migration tool log lines to the clipboard">Copy diagnostics</button>
             <button data-resume hidden title="All disks were copied; retry attaching the volumes and starting the instance">Retry finalize</button>
             <button class="secondary" data-cancel>Cancel</button>
           </div>
@@ -391,7 +391,7 @@
         <button class="secondary small" id="console-close" title="Disconnect and delete the OCI console connection">Close console</button>
         <a id="console-back" class="muted" href="#/jobs">&larr; job</a>
       </div>
-      <p class="muted console-hint">The screen is the OCI instance console (VNC) of the migrated instance, tunnelled through the helper.
+      <p class="muted console-hint">The screen is the OCI instance console (VNC) of the migrated instance, tunnelled through the migration tool VM.
         Click into the screen to type. The console connection is deleted when you close it or after it has been idle for a while.</p>
       <div id="console-error" class="error"></div>
       <div id="vnc-screen" class="vnc-screen"></div>
@@ -402,7 +402,7 @@
   <dialog id="encrypted-help" class="help">
     <h2>Encrypted VM: <span id="encrypted-help-name"></span></h2>
     <p>vSphere does not allow exporting an encrypted VM (<code>The operation is not supported on encrypted VM</code>),
-      and the helper needs that export to read the disks. A <strong>Virtual TPM</strong> device can only exist on an
+      and the migration tool needs that export to read the disks. A <strong>Virtual TPM</strong> device can only exist on an
       encrypted VM, which is why Windows 11 VMs are usually encrypted. Decrypt the VM in vCenter first, the VM's data is
       not touched:</p>
     <ol>
@@ -419,7 +419,7 @@
       <li id="encrypted-help-disks">For an encrypted virtual disk: <em>Edit Settings &gt; VM Options &gt; Encryption</em> lists
         the disks; pick a <strong>VM storage policy without encryption</strong> for each of them (or change the disk's
         policy under <em>Virtual Hardware &gt; Hard disk &gt; VM storage policy</em>).</li>
-      <li>Back in the helper, click <em>Refresh</em> in the Source VMs list and start the migration. The OCI instance is
+      <li>Back in the migration tool, click <em>Refresh</em> in the Source VMs list and start the migration. The OCI instance is
         still launched as a shielded instance with Secure Boot and a vTPM when the source used Secure Boot.</li>
     </ol>
     <p class="muted">Optional afterwards: re-encrypt the source VM in vCenter, or keep it as it is for a rollback.</p>

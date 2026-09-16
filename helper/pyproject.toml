@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "vc-oci-helper"
 version = "0.3.1"
-description = "vCenter to OCI migration helper: web UI, NFC export from vCenter and block copy onto OCI volumes"
+description = "OCI Ultimate Migration Tool: web UI, NFC export from vCenter/ESXi and block copy onto OCI volumes"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.110",

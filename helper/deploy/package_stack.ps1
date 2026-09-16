@@ -25,7 +25,7 @@ if ($CreateInCompartment) {
     $id = oci resource-manager stack create `
         --compartment-id $CreateInCompartment `
         --display-name $Name `
-        --description "vCenter to OCI export helper VM" `
+        --description "OCI Ultimate Migration Tool VM" `
         --config-source $zip `
         --terraform-version "1.5.x" `
         --query 'data.id' --raw-output

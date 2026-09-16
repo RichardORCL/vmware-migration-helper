@@ -1,5 +1,5 @@
 #cloud-config
-# Installs the vCenter to OCI migration helper (web UI + migration engine) on Oracle Linux 9 from source
+# Installs the OCI Ultimate Migration Tool (web UI + migration engine) on Oracle Linux 9 from source
 # (git + pip into a virtualenv), generates a self-signed certificate and runs it as the vc-oci-helper
 # systemd unit.
 package_update: true
@@ -35,7 +35,7 @@ write_files:
     permissions: "0755"
     content: |
       #!/bin/bash
-      # (Re)install the helper from ${source_git_url} @ ${source_git_ref}
+      # (Re)install the migration tool from ${source_git_url} @ ${source_git_ref}
       set -euo pipefail
       SRC=/opt/vc-oci/src
       VENV=/opt/vc-oci/venv
@@ -55,7 +55,7 @@ write_files:
     permissions: "0644"
     content: |
       [Unit]
-      Description=vCenter to OCI helper
+      Description=OCI Ultimate Migration Tool
       After=network-online.target
       Wants=network-online.target
 
@@ -77,7 +77,7 @@ runcmd:
     IP=$(hostname -I | awk '{print $1}')
     openssl req -x509 -newkey rsa:2048 -sha256 -days 1095 -nodes \
       -keyout /etc/vc-oci-helper/server.key -out /etc/vc-oci-helper/server.crt \
-      -subj "/CN=$${HOSTNAME_FQDN}/O=vCenter-OCI helper" \
+      -subj "/CN=$${HOSTNAME_FQDN}/O=OCI Ultimate Migration Tool" \
       -addext "subjectAltName=DNS:$${HOSTNAME_FQDN},IP:$${IP}"
     chmod 644 /etc/vc-oci-helper/server.crt
     chmod 600 /etc/vc-oci-helper/server.key

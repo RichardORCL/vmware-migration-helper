@@ -2,22 +2,23 @@
 
 ## Single component
 
-The whole tool is one service, the **helper**, running on a compute instance in OCI:
+The whole tool is one service, the **OCI Ultimate Migration Tool**, running on a compute instance in OCI
+(the *OCI Migration Tool VM*):
 
 - a web UI (`/ui`) and REST API (`/api`) served by FastAPI/uvicorn over TLS on port 8443;
 - a pyVmomi client that logs in to vCenter with the *user's* credentials;
 - the migration engine that provisions the OCI target, pulls the NFC export from vCenter and
-  writes the disks onto OCI volumes attached to the helper itself.
+  writes the disks onto OCI volumes attached to the migration tool itself.
 
 There is no component inside vCenter and no shared secret: vCenter RBAC decides who may export
-which VM, OCI IAM (instance principal + dynamic group policy) decides what the helper may create.
+which VM, OCI IAM (instance principal + dynamic group policy) decides what the migration tool may create.
 
 ## Authentication and sessions
 
 - `POST /api/auth/login` calls `SmartConnect` against the vCenter given on the login page
   (`host[:port]`; default `HELPER_VCENTER_HOST`) with the submitted user name/password. On success
-  the helper stores the pyVmomi `ServiceInstance` together with that host in a `UserSession` and
-  sets an opaque, HttpOnly, SameSite=strict cookie (`vcoci_session`). One helper can therefore
+  the migration tool stores the pyVmomi `ServiceInstance` together with that host in a `UserSession` and
+  sets an opaque, HttpOnly, SameSite=strict cookie (`vcoci_session`). One migration tool can therefore
   serve several vCenters; each session (and the NFC download of the jobs it starts) is bound to the
   vCenter it logged in to.
 - Every `/api/vms/*`, `/api/jobs/*`, `/api/oci/*` and `/api/setup/*` request requires that cookie;
@@ -68,9 +69,9 @@ lowering it never interrupts a running one), the rest stay **QUEUED** ("Waiting 
      Emulated attachments (*Maximum compatibility*, `SCSI`/`IDE`) cannot be shareable and are
      hot-plugged in the finalize step instead;
    - stop the target (hard stop; the placeholder has no OS); detach its boot volume;
-   - attach boot + data volumes to the helper (paravirtualized; the data volumes as the second
+   - attach boot + data volumes to the migration tool (paravirtualized; the data volumes as the second
      shareable attachment). Data volumes get consistent device names (`/dev/oracleoci/oraclevd*`);
-     OCI does not allow a device path for a boot volume attached as a data volume, so the helper
+     OCI does not allow a device path for a boot volume attached as a data volume, so the migration tool
      snapshots `/sys/block`, attaches, and takes the one new disk of the expected size (serialised
      across jobs).
    - A pending cancellation is honoured between provisioning steps.
@@ -97,7 +98,7 @@ lowering it never interrupts a running one), the rest stay **QUEUED** ("Waiting 
      with their original type. A failure restarts the disk from the beginning, up to
      `HELPER_DISK_RETRY_ATTEMPTS` times; the lease is completed or aborted on exit.
    - guest fix-up (`guest/fixup.py`, Linux only, while the boot volume is still attached to the
-     helper): the guest root is located and mounted once (`partx`, LVM activation with a filter on
+     migration tool): the guest root is located and mounted once (`partx`, LVM activation with a filter on
      that disk, `find_root`, `/boot` from the guest's fstab) and the opt-in steps run on it -
      `initramfs.py` (chroot dracut with virtio drivers for kernels lacking them,
      `OciTarget.rebuild_initramfs`) and `network.py` (NetworkManager wildcard DHCP keyfile /
@@ -106,7 +107,7 @@ lowering it never interrupts a running one), the rest stay **QUEUED** ("Waiting 
      its own `GuestFixup` (`Job.guest_fixup`, `Job.network_fixup`: done / not_needed / skipped /
      failed with a log) and never fails the migration.
 3. **FINALIZING** (`Provisioner.finalize`)
-   - detach all volumes from the helper (the data volumes stay attached to the target), attach
+   - detach all volumes from the migration tool (the data volumes stay attached to the target), attach
      the boot volume to the target instance, start it unless *start after migration* is off.
    - Data volumes that could not be pre-attached (emulated attachments) need a running instance:
      the target is started first and they are hot-plugged (with consistent device paths for Linux
@@ -124,7 +125,7 @@ vCenter session, so the copied data is not exported again.
 
 Jobs are persisted in SQLite (`HELPER_DB_PATH`). Because a running export depends on the user's
 in-memory vCenter session and its lease, jobs still in `PROVISIONING`/`EXPORTING`/`FINALIZING`
-when the helper starts are marked `FAILED` ("helper restarted..."); cancel them from the UI to
+when the migration tool starts are marked `FAILED` ("migration tool restarted..."); cancel them from the UI to
 clean up and start again.
 
 ## Why no temporary storage
@@ -137,7 +138,7 @@ file. Memory use is a few MB per running disk; the OCI volumes are the only stor
 ## Firmware and seed images
 
 OCI takes an instance's firmware and device model from its image. Platform images do not expose
-those knobs, so the helper imports a placeholder VMDK as a custom image per
+those knobs, so the migration tool imports a placeholder VMDK as a custom image per
 (firmware, OS, Secure Boot, launch mode) combination (imported as PARAVIRTUALIZED, or EMULATED for the
 IDE/E1000 compatibility preset; `CUSTOM` cannot be requested through the import API, and OCI rejects a
 paravirtualized launch from an EMULATED image as "mixing paravirtualized and emulated volumes", so reuse
@@ -163,11 +164,11 @@ UI requires a choice before starting and lets you change it afterwards
 
 ## Security
 
-- Credentials are never stored; the helper holds a pyVmomi session cookie per logged-in user in
+- Credentials are never stored; the migration tool holds a pyVmomi session cookie per logged-in user in
   memory only.
 - The API is protected by the session cookie (HttpOnly, SameSite=strict, `Secure` unless
   `HELPER_COOKIE_SECURE=false` for local development).
-- OCI access uses the helper's instance principal; the Terraform stack scopes the policy to a
+- OCI access uses the migration tool's instance principal; the Terraform stack scopes the policy to a
   compartment (`policy_scope_compartment_ocid`).
 - vCenter TLS verification is off by default (`HELPER_VCENTER_VERIFY_SSL`, `HELPER_NFC_VERIFY_SSL`)
   because most vCenters use the VMCA certificate; enable it when your vCenter has a trusted

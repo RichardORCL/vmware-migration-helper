@@ -1,7 +1,7 @@
-title: "vCenter to OCI migration helper"
+title: "OCI Ultimate Migration Tool"
 description: >
-  Deploys the migration helper VM: an Oracle Linux 9 instance running the web UI and migration
-  engine that exports powered-off VMs from vCenter and recreates them as OCI compute instances,
+  Deploys the OCI Migration Tool VM: an Oracle Linux 9 instance running the web UI and migration
+  engine that exports VMs from vCenter or ESXi and recreates them as OCI compute instances,
   plus a network security group, the seed image bucket and the IAM resources (dynamic group,
   policy, tag namespace) it needs.
 schemaVersion: 1.1.0
@@ -22,14 +22,14 @@ variableGroups:
       - vcenter_host
       - vcenter_port
       - vcenter_verify_ssl
-  - title: "Helper instance"
+  - title: "OCI Migration Tool VM"
     variables:
       - helper_display_name
       - helper_shape
       - helper_ocpus
       - helper_memory_gb
       - ssh_public_key
-  - title: "Helper service"
+  - title: "Migration tool service"
     variables:
       - source_git_url
       - source_git_ref
@@ -50,7 +50,7 @@ variables:
   compartment_ocid:
     type: oci:identity:compartment:id
     title: "Compartment"
-    description: "Compartment for the helper VM, the seed bucket and seed images"
+    description: "Compartment for the OCI Migration Tool VM, the seed bucket and seed images"
     required: true
 
   availability_domain:
@@ -98,7 +98,7 @@ variables:
   vcenter_host:
     type: string
     title: "vCenter host"
-    description: "Default vCenter Server (host name or IP as reachable from the helper subnet); users can enter another vCenter on the login page"
+    description: "Default vCenter Server (host name or IP as reachable from the migration tool VM subnet); users can enter another vCenter on the login page"
     required: true
 
   vcenter_port:
@@ -115,7 +115,7 @@ variables:
   helper_display_name:
     type: string
     title: "Instance name"
-    default: "vc-oci-helper"
+    default: "oci-migration-tool"
     pattern: "^[a-zA-Z][a-zA-Z0-9-]{0,62}$"
 
   helper_shape:
@@ -148,7 +148,7 @@ variables:
   source_git_url:
     type: string
     title: "Git repository URL"
-    description: "HTTPS URL of the helper repository (must be reachable from the helper VM); cloned and installed with pip"
+    description: "HTTPS URL of the migration tool repository (must be reachable from the OCI Migration Tool VM); cloned and installed with pip"
     default: "https://github.com/RichardORCL/vmware-migration-helper.git"
     required: true
 
@@ -184,7 +184,7 @@ variables:
   policy_scope_compartment_ocid:
     type: oci:identity:compartment:id
     title: "Limit target compartment"
-    description: "Restrict where the helper may create instances and volumes (empty = whole tenancy)"
+    description: "Restrict where the migration tool may create instances and volumes (empty = whole tenancy)"
     visible: ${create_iam}
 
   tenancy_ocid:
@@ -209,7 +209,7 @@ outputGroups:
 outputs:
   helper_ui_url:
     type: link
-    title: "Migration helper web UI"
+    title: "OCI Ultimate Migration Tool web UI"
   vcenter_host:
     type: string
     title: "vCenter"
@@ -221,7 +221,7 @@ outputs:
     title: "Next steps"
   helper_instance_id:
     type: ocid
-    title: "Helper instance"
+    title: "OCI Migration Tool VM"
   helper_private_ip:
     type: string
     title: "Private IP"

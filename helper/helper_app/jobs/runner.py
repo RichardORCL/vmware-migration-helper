@@ -123,7 +123,7 @@ class MigrationRunner:
         """Jobs that were in flight when the helper stopped cannot resume (their vCenter session is gone)."""
         failed = []
         for job in self.store.active():
-            job.error = "helper restarted during the migration; cancel the job to clean up its OCI resources"
+            job.error = "migration tool restarted during the migration; cancel the job to clean up its OCI resources"
             job.phase = JobPhase.FAILED
             job.message = job.error
             self.store.put(job)

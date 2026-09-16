@@ -1,6 +1,6 @@
-# How the helper works
+# How the OCI Ultimate Migration Tool works
 
-Technical overview of the migration helper: the copy mechanism, the supported source endpoints, the
+Technical overview of the OCI Ultimate Migration Tool: the copy mechanism, the supported source endpoints, the
 network flows, the repository layout and how to develop on it. For the step-by-step internals see
 [architecture.md](architecture.md); for the guest OS / launch option / shape tables see
 [os-mapping.md](os-mapping.md); for known limitations and troubleshooting see
@@ -9,8 +9,8 @@ network flows, the repository layout and how to develop on it. For the step-by-s
 ## Migration mechanism
 
 Migrations run **without VDDK, without an OVA download and without temporary storage**. Everything
-runs on a single helper VM in OCI. You log in to its web UI with your vCenter (or ESXi) credentials,
-pick a VM, choose the OCI target and start. The helper:
+runs on a single VM in OCI, the **OCI Migration Tool VM**. You log in to its web UI with your vCenter (or ESXi) credentials,
+pick a VM, choose the OCI target and start. The migration tool:
 
 1. registers a tiny *seed* custom image for the VM's firmware (BIOS/UEFI) and operating system
    (reused for later VMs with the same combination), launches the target instance from it with the
@@ -32,7 +32,7 @@ pick a VM, choose the OCI target and start. The helper:
 ```mermaid
 sequenceDiagram
     participant B as Browser
-    participant H as Helper VM (OCI)
+    participant H as Migration Tool VM (OCI)
     participant VC as vCenter / ESXi
     participant OCI as OCI APIs
     B->>H: log in with vCenter credentials
@@ -46,51 +46,57 @@ sequenceDiagram
         H->>H: decode grains -> pwrite(/dev/oracleoci/oraclevdX)
     end
     H->>H: Linux: mount boot volume, chroot dracut --add-drivers virtio, DHCP profile for the new NIC
-    H->>OCI: detach from helper, attach to target, start
+    H->>OCI: detach from migration tool, attach to target, start
     B->>H: poll job progress
 ```
 
 ## Supported source environments
 
-The helper talks plain vSphere API (pyVmomi `SmartConnect`) and NFC over HTTPS, so it works with either
-management endpoint. The server address is entered on the login page, so one helper can serve several
+The migration tool talks plain vSphere API (pyVmomi `SmartConnect`) and NFC over HTTPS, so it works with either
+management endpoint. The server address is entered on the login page, so one migration tool can serve several
 of them.
 
 | Source | Log in as | Notes |
 | --- | --- | --- |
-| **vCenter Server** (7.0 or later recommended; 6.5/6.7 work) | a vCenter/SSO user, e.g. `user@vsphere.local` or a domain account | Full inventory (folders, all hosts/clusters). Disks are streamed through the vCenter proxy by default; *Download the disks directly from the ESXi host* (export page, *Advanced*) bypasses it when the helper can reach the hosts on 443. |
-| **Standalone ESXi host** (6.5 or later) | a local host user, typically `root` | Connect to the host's own address. Only the VMs registered on that host are listed (folder shows as `ha-datacenter/vm`); the export streams from the host itself. Also useful for hosts still managed by a vCenter that the helper cannot reach. |
+| **vCenter Server** (7.0 or later recommended; 6.5/6.7 work) | a vCenter/SSO user, e.g. `user@vsphere.local` or a domain account | Full inventory (folders, all hosts/clusters). Disks are streamed through the vCenter proxy by default; *Download the disks directly from the ESXi host* (export page, *Advanced*) bypasses it when the migration tool can reach the hosts on 443. |
+| **Standalone ESXi host** (6.5 or later) | a local host user, typically `root` | Connect to the host's own address. Only the VMs registered on that host are listed (folder shows as `ha-datacenter/vm`); the export streams from the host itself. Also useful for hosts still managed by a vCenter that the migration tool cannot reach. |
 
 Requirements common to both: the account needs `VirtualMachine.Provisioning.ExportOVF` / *Allow disk
-access* on the VMs (plus `VirtualMachine.Interact.PowerOff` when the helper is to shut the VM down), the
-helper must reach the endpoint on 443 (or the port given at login), the VM must be powered off during the
-copy (the helper shuts it down otherwise), and vSphere Hosted (Workstation/Fusion) or Hyper-V/KVM sources are **not** supported -
+access* on the VMs (plus `VirtualMachine.Interact.PowerOff` when the migration tool is to shut the VM down), the
+migration tool must reach the endpoint on 443 (or the port given at login), the VM must be powered off during the
+copy (the migration tool shuts it down otherwise), and vSphere Hosted (Workstation/Fusion) or Hyper-V/KVM sources are **not** supported -
 see [limitations.md](limitations.md).
 
 ## Networking
 
 | Flow | Port | Notes |
 | --- | --- | --- |
-| Browser -> helper | TCP 8443 | web UI + API, TLS (self-signed by default), restricted by `allowed_source_cidrs` |
-| Helper -> vCenter | TCP 443 | SOAP API and the NFC disk download (vCenter proxies ESXi by default) |
-| Helper -> ESXi hosts | TCP 443 | Only with *Download the disks directly from the ESXi host* (per migration) or `HELPER_NFC_HOST_OVERRIDE`; bypasses the vCenter proxy, usually several times faster |
-| Helper -> OCI | TCP 443 | Compute, Block Storage, Object Storage APIs (service gateway or NAT) |
-| Helper -> `instance-console.<region>.oci.oraclecloud.com` | TCP 443 | *Remote console* of a migrated instance: SSH to the OCI console connection service (Service Gateway with *All Services in Oracle Services Network*, or NAT gateway; the helper has no public IP). The VNC stream is bridged to the browser over the existing 8443 connection (WebSocket). |
+| Browser -> migration tool | TCP 8443 | web UI + API, TLS (self-signed by default), restricted by `allowed_source_cidrs` |
+| Migration tool -> vCenter | TCP 443 | SOAP API and the NFC disk download (vCenter proxies ESXi by default) |
+| Migration tool -> ESXi hosts | TCP 443 | Only with *Download the disks directly from the ESXi host* (per migration) or `HELPER_NFC_HOST_OVERRIDE`; bypasses the vCenter proxy, usually several times faster |
+| Migration tool -> OCI | TCP 443 | Compute, Block Storage, Object Storage APIs (service gateway or NAT) |
+| Migration tool -> `instance-console.<region>.oci.oraclecloud.com` | TCP 443 | *Remote console* of a migrated instance: SSH to the OCI console connection service (Service Gateway with *All Services in Oracle Services Network*, or NAT gateway; the migration tool has no public IP). The VNC stream is bridged to the browser over the existing 8443 connection (WebSocket). |
 
 ### Remote console
 
-For a completed migration the job view offers *Remote console*: the helper creates an OCI *instance console
+For a completed migration the job view offers *Remote console*: the migration tool creates an OCI *instance console
 connection* for the instance with a temporary RSA key (kept in memory only, tagged `vc-oci=console`), opens
 the VNC tunnel of that connection itself (two SSH hops through the console service with asyncssh, host key
 checked against the fingerprint OCI reports) and bridges the RFB stream into a WebSocket on
 `/api/jobs/{id}/console/vnc`, where [noVNC](https://github.com/novnc/noVNC) (vendored under `ui/vendor/novnc`)
 renders it in the browser. Requires the session cookie and a same-origin page. The console connection is
 deleted when the console is closed, after `HELPER_CONSOLE_IDLE_TIMEOUT_S` (default 600 s) without a viewer, or
-when the helper shuts down. OCI allows one console connection per instance: a leftover created by the helper is
+when the migration tool shuts down. OCI allows one console connection per instance: a leftover created by the migration tool is
 replaced silently, one created elsewhere only after confirmation. `manage instance-family` (already in the
 stack's policy) covers `instance-console-connection`.
 
 ## Repository layout
+
+The internal names predate the product name: the code lives in `helper/` (Python package `helper_app`),
+the service is the systemd unit `vc-oci-helper` under `/opt/vc-oci` and `/var/lib/vc-oci-helper`, the
+settings use the `HELPER_` prefix, the OCI tags are `vc-oci.role=helper` / `vc-oci-seed` and the
+Terraform variables are called `helper_*`. They are kept unchanged so that deployed migration tool VMs
+keep self-updating; wherever you read "helper" in an identifier it means the OCI Migration Tool VM.
 
 ```
 helper/
@@ -101,7 +107,7 @@ helper/
     sessions.py        web sessions bound to per-user vCenter connections (pinned by running jobs)
     auth.py            cookie-based session dependency
     runtime_settings.py  Setup page overrides (logging, concurrency, session timeout) persisted to JSON
-    sysstat.py         helper resource usage for the Setup page (CPU, memory, disk, network from /proc,
+    sysstat.py         migration tool VM resource usage for the Setup page (CPU, memory, disk, network from /proc,
                        sampled every 2 s with a 10-minute history for the live chart)
     api/               routes_auth, routes_vms, routes_jobs, routes_console, routes_oci, routes_setup
     vsphere/           session (pyVmomi login), inventory (VM list, VmSpec, preflight), export (NFC lease)
@@ -113,7 +119,7 @@ helper/
     console/           remote console: OCI console connection, asyncssh VNC tunnel, per-job session manager
     ui/                vanilla JS single-page UI (login, Source VMs, export dialog, jobs, remote console, setup)
                        + ui/vendor/novnc (noVNC RFB client, MPL-2.0)
-  deploy/terraform/    Resource Manager stack / Terraform for the helper VM (+ cloud-init: git clone + pip)
+  deploy/terraform/    Resource Manager stack / Terraform for the migration tool VM (+ cloud-init: git clone + pip)
   tests/               fakes for OCI, vCenter and NFC; end-to-end tests
 docs/
 ```

@@ -1,28 +1,29 @@
-# VMware to OCI Compute migration helper
+# OCI Ultimate Migration Tool
 
-Move **virtual machines from VMware vSphere (vCenter or a standalone ESXi host) to Oracle Cloud
-Infrastructure compute instances** - disk for disk, straight into OCI block volumes, with no VDDK, no
-OVA export and no intermediate storage. The copy is taken from a powered-off VM: either you power it
-off beforehand, or the helper shuts it down for you right before the disk export (after confirmation).
+The **OCI Ultimate Migration Tool** moves **virtual machines from VMware vSphere (vCenter or a
+standalone ESXi host) to Oracle Cloud Infrastructure compute instances** - disk for disk, straight into
+OCI block volumes, with no VDDK, no OVA export and no intermediate storage. The copy is taken from a
+powered-off VM: either you power it off beforehand, or the migration tool shuts it down for you right
+before the disk export (after confirmation).
 
-The helper is a single VM you deploy in your OCI tenancy. It offers a web UI where you log in with
-your vCenter (or ESXi) credentials, pick the VMs to move, choose where they should land in OCI and
-watch the copy progress. Each migration produces a ready-to-run OCI instance with the original disks,
+The tool runs on a single VM you deploy in your OCI tenancy, the **OCI Migration Tool VM**. It offers a
+web UI where you log in with your vCenter (or ESXi) credentials, pick the VMs to move, choose where they
+should land in OCI and watch the copy progress. Each migration produces a ready-to-run OCI instance with the original disks,
 firmware mode (BIOS/UEFI, Secure Boot), CPU/memory sizing and Windows licensing settings.
 
 ## What you can use it for
 
 - **Lift-and-shift of VMware VMs** to OCI compute: Linux and Windows guests, single or multi-disk,
-  BIOS or UEFI, from any vCenter or ESXi host the helper can reach over your VPN/FastConnect.
-- **Migrating from several sources** with one helper: the vCenter/ESXi address is entered at login.
+  BIOS or UEFI, from any vCenter or ESXi host the migration tool VM can reach over your VPN/FastConnect.
+- **Migrating from several sources** with one migration tool VM: the vCenter/ESXi address is entered at login.
 - **Controlled cut-overs**: the source VM's disks stay untouched; a running VM is shut down by the
-  helper only once the OCI side is prepared, right before the copy (guest shutdown through VMware
+  migration tool only once the OCI side is prepared, right before the copy (guest shutdown through VMware
   Tools, hard power-off as fallback), which keeps the downtime short. The target is created, sized
   and placed (compartment, VCN/subnet, shape, OCPUs/memory) per VM.
 - **Batch work**: several migrations run in parallel, further jobs queue; progress, throughput and
   a copy of the diagnostics are available per job.
 - **First boot debugging**: a *Remote console* button on a completed job opens the instance's VNC console
-  in the browser (OCI console connection created on the fly, tunnelled through the helper).
+  in the browser (OCI console connection created on the fly, tunnelled through the migration tool VM).
 
 Not in scope: live migration of running VMs (no CBT/delta sync: the VM is off during the copy), VMware Workstation/Fusion, Hyper-V or KVM sources, and
 guest-side reconfiguration (IP addresses, drivers - see the notes on VirtIO drivers for Windows in
@@ -38,46 +39,46 @@ preloaded. Manual deployment with Terraform and all settings are described in
 
 ## Quick start
 
-1. **Deploy the helper** in OCI with the Resource Manager stack (button above, or
+1. **Deploy the OCI Migration Tool VM** in OCI with the Resource Manager stack (button above, or
    `helper/deploy/terraform` locally; see [docs/install-helper.md](docs/install-helper.md)). You
    provide the vCenter host, the subnet (must route to vCenter over your VPN/FastConnect) and the
    CIDRs of the administrators' browsers.
-2. **Open the web UI** at `https://<helper-ip>:8443/`, accept the self-signed certificate and log in
-   with a vCenter account that can read the inventory and export the VMs
+2. **Open the web UI** at `https://<migration-tool-vm-ip>:8443/`, accept the self-signed certificate and
+   log in with a vCenter account that can read the inventory and export the VMs
    (`VirtualMachine.Provisioning.ExportOVF` / *Allow disk access*). The vCenter server field is
-   pre-filled from the stack but can be changed, so one helper can migrate from several vCenters or
-   ESXi hosts.
+   pre-filled from the stack but can be changed, so one migration tool VM can migrate from several
+   vCenters or ESXi hosts.
 3. **Migrate**: click *Migrate* under *Source VMs*, choose the instance compartment, the network
    compartment with its VCN/subnet, an x86 flex shape (sized from the source VM as 2 vCPU = 1 OCPU, or
    set OCPUs/memory yourself) and (for Windows) the license type, and follow the progress in the *Jobs*
-   view. A VM that is still powered on is shut down by the helper right before the disk export; you are
+   view. A VM that is still powered on is shut down by the migration tool right before the disk export; you are
    asked to confirm this (by VM name) when you start the migration.
 
 ## Networking requirements
 
-All flows are TCP and are initiated by the browser or by the helper; nothing has to reach into your
-on-premises network from OCI, and the target instances need no inbound ports. The helper is meant to run
-in a **private subnet without a public IP**: everything it needs in OCI is reachable through a Service
+All flows are TCP and are initiated by the browser or by the migration tool VM; nothing has to reach into
+your on-premises network from OCI, and the target instances need no inbound ports. The migration tool VM
+is meant to run in a **private subnet without a public IP**: everything it needs in OCI is reachable through a Service
 Gateway (*All <region> Services in Oracle Services Network*) and/or a NAT gateway.
 
 | From | To | Port | Purpose |
 | --- | --- | --- | --- |
-| **Helper VM** | **vCenter Server** (or a standalone **ESXi** host given at login) | 443 | vSphere SOAP API and the NFC disk download (vCenter proxies the ESXi hosts by default). Over your VPN / FastConnect; the helper subnet must route to it. |
-| **Helper VM** | **ESXi hosts** | 443 | Only with *Download the disks directly from the ESXi host* (per migration): the helper must resolve and reach the host the VM runs on. Several times faster than the vCenter proxy. |
-| **User's web browser** | **Helper VM** | 8443 | Web UI and API over HTTPS (self-signed certificate by default); the *Remote console* runs over the same port as a WebSocket. Restricted by the stack to `allowed_source_cidrs`. |
-| **Administrator** | **Helper VM** | 22 | Optional SSH administration, same source CIDRs. |
-| **Helper VM** | **OCI APIs** (`iaas`, `objectstorage`, `identity` in the region) | 443 | Compute, Block Storage, Object Storage; Service Gateway or NAT gateway. |
-| **Helper VM** | **OCI console connection service** `instance-console.<region>.oci.oraclecloud.com` | 443 | *Remote console* of a migrated instance: SSH tunnel to the instance's VNC console. Service Gateway (*All Services in Oracle Services Network*) or NAT gateway. |
-| **Helper VM** | Oracle Linux yum repositories, GitHub, PyPI | 443 | Installation and *Setup -> Update now* (`dnf`, `git`, `pip`). The Oracle yum servers are in the Oracle Services Network (Service Gateway); GitHub and PyPI need a NAT gateway. |
+| **Migration Tool VM** | **vCenter Server** (or a standalone **ESXi** host given at login) | 443 | vSphere SOAP API and the NFC disk download (vCenter proxies the ESXi hosts by default). Over your VPN / FastConnect; the migration tool VM's subnet must route to it. |
+| **Migration Tool VM** | **ESXi hosts** | 443 | Only with *Download the disks directly from the ESXi host* (per migration): the migration tool VM must resolve and reach the host the VM runs on. Several times faster than the vCenter proxy. |
+| **User's web browser** | **Migration Tool VM** | 8443 | Web UI and API over HTTPS (self-signed certificate by default); the *Remote console* runs over the same port as a WebSocket. Restricted by the stack to `allowed_source_cidrs`. |
+| **Administrator** | **Migration Tool VM** | 22 | Optional SSH administration, same source CIDRs. |
+| **Migration Tool VM** | **OCI APIs** (`iaas`, `objectstorage`, `identity` in the region) | 443 | Compute, Block Storage, Object Storage; Service Gateway or NAT gateway. |
+| **Migration Tool VM** | **OCI console connection service** `instance-console.<region>.oci.oraclecloud.com` | 443 | *Remote console* of a migrated instance: SSH tunnel to the instance's VNC console. Service Gateway (*All Services in Oracle Services Network*) or NAT gateway. |
+| **Migration Tool VM** | Oracle Linux yum repositories, GitHub, PyPI | 443 | Installation and *Setup -> Update now* (`dnf`, `git`, `pip`). The Oracle yum servers are in the Oracle Services Network (Service Gateway); GitHub and PyPI need a NAT gateway. |
 
 The Resource Manager stack creates a network security group with the 8443/22 ingress rules for the
-administrators' CIDRs and unrestricted egress; the helper subnet's route table must provide the paths
+administrators' CIDRs and unrestricted egress; the migration tool VM's subnet route table must provide the paths
 above (VPN/FastConnect to vSphere, Service Gateway and NAT gateway to OCI and the internet). Details and
 troubleshooting in [docs/how-it-works.md](docs/how-it-works.md#networking).
 
 ## Tested operating systems
 
-Guests that have been migrated with the helper and booted in OCI. Anything with virtio drivers is
+Guests that have been migrated with the OCI Ultimate Migration Tool and booted in OCI. Anything with virtio drivers is
 expected to work (Windows needs the Oracle VirtIO drivers installed first, or the *Maximum
 compatibility* preset); the table lists what has actually been verified. Encrypted VMs - including
 Windows 11 VMs with a Virtual TPM, which vSphere only allows on encrypted VMs - cannot be exported by

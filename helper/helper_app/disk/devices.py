@@ -72,5 +72,6 @@ def wait_for_new_device(
         sleep(poll_s)
     seen = ", ".join(f"{p} ({s} bytes)" for p, s in sorted(last.items())) or "none"
     raise RuntimeError(
-        f"no new disk of {expected_bytes} bytes appeared on the helper within {timeout_s:.0f}s (new disks seen: {seen})"
+        f"no new disk of {expected_bytes} bytes appeared on the migration tool VM within {timeout_s:.0f}s "
+        f"(new disks seen: {seen})"
     )

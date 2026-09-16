@@ -41,7 +41,7 @@ def create_app(
     command_runner: Runner = _default_runner,
     scan_devices: DeviceScanner = scan_block_devices,
     tunnel_factory: TunnelFactory = open_vnc_stream,
-    guest_fixer=None,  # post-copy initramfs fix-up (injectable for tests; default: helper_app.guest.initramfs)
+    guest_fixer=None,  # post-copy guest fix-up (injectable for tests; default: helper_app.guest.fixup.GuestFixer)
 ) -> FastAPI:
     settings = settings or get_settings()
 

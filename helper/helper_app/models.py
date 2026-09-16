@@ -187,6 +187,14 @@ class OciTarget(BaseModel):
                     "them, so hostonly initramfs images built on VMware (RHEL/CentOS/Oracle Linux) boot in OCI. "
                     "Skipped for Windows and for guests without dracut; never fails the migration",
     )
+    fix_network: bool = Field(
+        default=True,
+        description="Linux guests: after the copy, make the guest bring up its OCI network interface with DHCP "
+                    "although it has a new name (ens3/enp0s5/eth0 instead of ens192): a NetworkManager profile "
+                    "for any Ethernet device, a first-boot unit creating ifcfg files for legacy network-scripts, "
+                    "netplan/networkd drop-ins; MAC-pinned udev naming rules are disabled. Skipped for Windows; "
+                    "never fails the migration",
+    )
 
     @field_validator("private_ip", mode="before")
     @classmethod
@@ -285,11 +293,13 @@ class TransferStats(BaseModel):
 
 
 class GuestFixup(BaseModel):
-    """Outcome of the post-copy guest fix-up (initramfs rebuild with virtio drivers) on the target boot volume."""
+    """Outcome of one post-copy guest fix-up step (initramfs rebuild, network configuration) on the target
+    boot volume."""
 
     status: Literal["done", "not_needed", "skipped", "failed"]
     detail: str  # what was done, or why not
-    kernels: list[str] = Field(default_factory=list, description="Kernel versions whose initramfs was rebuilt")
+    kernels: list[str] = Field(default_factory=list, description="Kernel versions whose initramfs was rebuilt "
+                                                                 "(initramfs step only)")
     log: list[str] = Field(default_factory=list, description="Step-by-step notes for diagnostics")
 
 
@@ -312,6 +322,7 @@ class Job(BaseModel):
     boot_volume_id: Optional[str] = None
     nfc_host: Optional[str] = None  # host the disk streams were downloaded from (vCenter or ESXi)
     guest_fixup: Optional[GuestFixup] = None  # post-copy initramfs rebuild on the target boot volume
+    network_fixup: Optional[GuestFixup] = None  # post-copy network configuration (DHCP on the renamed NIC)
     disks: list[DiskState] = Field(default_factory=list)
     transfer: TransferStats = Field(default_factory=TransferStats)
     created_by: str = ""

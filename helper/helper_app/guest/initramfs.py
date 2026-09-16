@@ -14,6 +14,9 @@ helper) ends in a *skipped*/*failed* result with the reason - never in a failed 
 
 All shell interaction goes through an injectable ``Runner`` so the logic is unit-testable without
 block devices.
+
+``_Session`` (find and mount the guest root, undo everything) is shared with the other post-copy
+steps; ``helper_app.guest.fixup`` runs them all in one session.
 """
 
 from __future__ import annotations
@@ -85,48 +88,35 @@ def _tail(text: str, n: int = 6) -> str:
 
 
 class InitramfsFixer:
+    """Initramfs-only entry point (kept for callers that want just this step)."""
+
     def __init__(self, run: Runner = default_runner, mount_base: str | Path = "/run/vc-oci-helper/guest"):
         self.run = run
         self.mount_base = Path(mount_base)
 
-    # ------------------------------------------------------------------ public
     def rebuild(self, device: str, notify: Optional[Notify] = None) -> GuestFixup:
         """Fix the initramfs images on the guest disk ``device`` (the copied boot volume)."""
-        notes: list[str] = []
+        from helper_app.guest.fixup import GuestFixer  # local import: fixup builds on this module
 
-        def note(msg: str) -> None:
-            notes.append(msg)
-            log.info("guest fix-up %s: %s", device, msg)
-            if notify:
-                notify(msg)
+        return GuestFixer(run=self.run, mount_base=self.mount_base).fix(
+            device, initramfs=True, network=False, notify=notify).initramfs
 
-        with _LOCK:
-            session = _Session(self, device, note)
-            try:
-                kernels, rebuilt = session.execute()
-                if not rebuilt:
-                    return GuestFixup(status="not_needed", kernels=[], log=notes,
-                                      detail=f"initramfs of {len(kernels)} kernel(s) already contains virtio drivers")
-                return GuestFixup(status="done", kernels=rebuilt, log=notes,
-                                  detail=f"initramfs rebuilt with virtio drivers for {', '.join(rebuilt)}")
-            except Skip as exc:
-                note(f"skipped: {exc}")
-                return GuestFixup(status="skipped", detail=str(exc), log=notes)
-            except Fail as exc:
-                note(f"failed: {exc}")
-                return GuestFixup(status="failed", detail=str(exc), log=notes)
-            except Exception as exc:  # noqa: BLE001 - never let the fix-up take the migration down
-                log.exception("guest fix-up on %s crashed", device)
-                note(f"failed: {exc}")
-                return GuestFixup(status="failed", detail=f"unexpected error: {exc}", log=notes)
-            finally:
-                session.cleanup()
+
+def initramfs_outcome(kernels: list[str], rebuilt: list[str], notes: list[str]) -> GuestFixup:
+    if not rebuilt:
+        return GuestFixup(status="not_needed", kernels=[], log=notes,
+                          detail=f"initramfs of {len(kernels)} kernel(s) already contains virtio drivers")
+    return GuestFixup(status="done", kernels=rebuilt, log=notes,
+                      detail=f"initramfs rebuilt with virtio drivers for {', '.join(rebuilt)}")
 
 
 class _Session:
-    """One fix-up run with its mounts and activated volume groups (undone in cleanup())."""
+    """One fix-up run with its mounts and activated volume groups (undone in cleanup()).
 
-    def __init__(self, fixer: InitramfsFixer, device: str, note: Notify):
+    ``open_root()`` finds and mounts the guest root (plus /boot); the steps then work on ``self.mnt``.
+    """
+
+    def __init__(self, fixer, device: str, note: Notify):
         self.f = fixer
         self.run = fixer.run
         self.note = note
@@ -186,7 +176,8 @@ class _Session:
         return nodes
 
     # ------------------------------------------------------------------ steps
-    def execute(self) -> tuple[list[str], list[str]]:
+    def open_root(self) -> None:
+        """Find the guest root file system on the disk and mount it (rw) with its /boot."""
         self.note(f"scanning {self.real} for the guest root file system")
         self.sh(["partx", "-u", self.real], ok=False)
         self.sh(["udevadm", "settle"], timeout_s=30, ok=False)
@@ -204,6 +195,18 @@ class _Session:
         self.note(f"guest root file system on {root_node.path} ({root_node.fstype})")
         self.mount_boot(nodes)
 
+    def bind_system_dirs(self) -> None:
+        """/dev, /proc and /sys of the helper inside the guest tree, for chroot'ed tools (idempotent)."""
+        for name in ("dev", "proc", "sys"):
+            if (self.mnt / name) not in self.mounts:
+                self.bind("/" + name, self.mnt / name)
+
+    def execute(self) -> tuple[list[str], list[str]]:
+        self.open_root()
+        return self.rebuild_initramfs()
+
+    def rebuild_initramfs(self) -> tuple[list[str], list[str]]:
+        """(installed kernels, kernels whose initramfs was rebuilt); the root must be open."""
         dracut = next((p for p in ("usr/bin/dracut", "usr/sbin/dracut", "sbin/dracut") if (self.mnt / p).exists()),
                       None)
         if dracut is None:
@@ -213,9 +216,7 @@ class _Session:
         if not kernels:
             raise Skip("no installed kernels found under /lib/modules with an initramfs in /boot")
 
-        self.bind("/dev", self.mnt / "dev")
-        self.bind("/proc", self.mnt / "proc")
-        self.bind("/sys", self.mnt / "sys")
+        self.bind_system_dirs()
 
         todo = [(ver, img) for ver, img in kernels if not self.has_virtio(img)]
         for ver, img in kernels:

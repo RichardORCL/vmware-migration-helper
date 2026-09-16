@@ -39,7 +39,7 @@ h2 { font-size: 15px; margin: 0 0 8px; font-weight: 600; }
 
 .kv { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; }
 .kv .k { color: var(--muted); }
-.kv .v { word-break: break-all; }
+.kv .v { overflow-wrap: anywhere; min-width: 0; }  /* long OCIDs wrap, normal text breaks at spaces */
 
 .form label { display: block; margin-bottom: 8px; }
 .form label > select, .form label > input[type=text], .form label > input[type=password], .form label > input[type=number] { display: block; width: 100%; margin-top: 2px; padding: 5px 6px; border: 1px solid var(--border); border-radius: 3px; font: inherit; }

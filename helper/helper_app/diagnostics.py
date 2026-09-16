@@ -53,14 +53,14 @@ def _num(v) -> str:
 
 
 def _fixup_lines(job: Job) -> str:
-    fx = job.guest_fixup
-    head = (f"  guest fixup={fx.status if fx else '-'} (enabled={job.target.rebuild_initramfs}): "
-            f"{fx.detail if fx else '-'}")
-    if not fx:
-        return head
-    extra = [f"    kernels: {', '.join(fx.kernels)}"] if fx.kernels else []
-    extra += [f"    - {line}" for line in fx.log]
-    return "\n".join([head, *extra])
+    blocks = []
+    for name, fx, enabled in (("guest fixup", job.guest_fixup, job.target.rebuild_initramfs),
+                              ("network fixup", job.network_fixup, job.target.fix_network)):
+        head = f"  {name}={fx.status if fx else '-'} (enabled={enabled}): {fx.detail if fx else '-'}"
+        extra = ([f"    kernels: {', '.join(fx.kernels)}"] if fx and fx.kernels else [])
+        extra += [f"    - {line}" for line in fx.log] if fx else []
+        blocks.append("\n".join([head, *extra]))
+    return "\n".join(blocks)
 
 
 def collect(job: Job, settings: Settings, ident: HelperIdentity, commit: str,

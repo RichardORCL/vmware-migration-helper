@@ -224,12 +224,10 @@
         guest_shutdown: "shut down cleanly through VMware Tools before the export",
         powered_off: "powered off hard before the export (VMware Tools not running or guest did not stop in time)" }[job.power_off_result]
         || "the VM was powered on when the job was created; it is shut down right before the export"]] : []),
-      ...(job.guest_fixup ? [["Guest fix-up", el("span", {},
-        el("span", { class: "badge " + ({ done: "ok", not_needed: "ok", failed: "warn" }[job.guest_fixup.status] || "") },
-          { done: "done", not_needed: "not needed", skipped: "skipped", failed: "failed" }[job.guest_fixup.status] || job.guest_fixup.status),
-        " ", job.guest_fixup.detail,
-        job.guest_fixup.status === "failed" ? el("div", { class: "muted" },
-          "The instance may stop in the dracut emergency shell; rebuild the initramfs with virtio drivers inside the guest (dracut -f --add-drivers \"virtio_blk virtio_scsi virtio_pci virtio_net\") and migrate again, or check Copy diagnostics for the details.") : null)]] : []),
+      ...(job.guest_fixup ? [["Initramfs fix-up", fixupEl(job.guest_fixup,
+        "The instance may stop in the dracut emergency shell; rebuild the initramfs with virtio drivers inside the guest (dracut -f --add-drivers \"virtio_blk virtio_scsi virtio_pci virtio_net\") and migrate again, or check Copy diagnostics for the details.")]] : []),
+      ...(job.network_fixup ? [["Network fix-up", fixupEl(job.network_fixup,
+        "The instance may come up without network. Open the Remote console, log in and configure DHCP on the new interface (NetworkManager: nmcli con add type ethernet con-name oci ifname \"*\" ipv4.method auto; network-scripts: create /etc/sysconfig/network-scripts/ifcfg-<nic> with BOOTPROTO=dhcp ONBOOT=yes), or check Copy diagnostics for the details.")]] : []),
       ["Disk download", job.nfc_host ? `${job.nfc_host}${job.target.nfc_direct_to_esxi ? " (ESXi host, direct)" : ""}${job.target.pipelined_decode ? ", pipelined decode/write" : ""}` : "-"],
       ["Started by", `${job.created_by || "-"} at ${new Date(job.created_at).toLocaleString()}`],
     ];
@@ -289,6 +287,16 @@
     consoleBtn.href = `#/jobs/${job.id}/console`;
     if (opts.onTerminal && terminal) opts.onTerminal(job);
     return job.phase === "COMPLETED" || job.phase === "CANCELLED";
+  }
+
+  // one post-copy fix-up step (initramfs / network): badge, detail and, when it did not happen, what to do by hand
+  function fixupEl(fx, manualHint) {
+    const needsHint = fx.status === "failed" || (fx.status === "skipped" && !/disabled|Windows/.test(fx.detail));
+    return el("span", {},
+      el("span", { class: "badge " + ({ done: "ok", not_needed: "ok", failed: "warn" }[fx.status] || "") },
+        { done: "done", not_needed: "not needed", skipped: "skipped", failed: "failed" }[fx.status] || fx.status),
+      " ", fx.detail,
+      needsHint ? el("div", { class: "muted" }, manualHint) : null);
   }
 
   // Live state of the target instance (lifecycle state + addresses of its primary VNIC), asked from OCI
@@ -657,8 +665,9 @@
     document.getElementById("windows-fieldset").hidden = !isWin;
     document.getElementById("windows-driver-note").hidden = !isWin;
     // the initramfs fix-up is a Linux thing (Windows gets its VirtIO drivers installed inside the guest)
-    document.getElementById("rebuild-initramfs-label").hidden = isWin;
-    document.getElementById("rebuild-initramfs-hint").hidden = isWin;
+    for (const id of ["rebuild-initramfs-label", "rebuild-initramfs-hint", "fix-network-label", "fix-network-hint"]) {
+      document.getElementById(id).hidden = isWin;  // Linux-only post-copy fix-ups
+    }
     if (isWin && isWindowsClient(vm)) {
       // OCI has no licenses for client editions; the API refuses OCI_PROVIDED for them
       const ociLic = form.querySelector('input[name="windows_license_type"][value="OCI_PROVIDED"]');
@@ -732,6 +741,7 @@
         nfc_direct_to_esxi: fd.get("nfc_direct_to_esxi") === "on",
         pipelined_decode: fd.get("pipelined_decode") === "on",
         rebuild_initramfs: !isWin && fd.get("rebuild_initramfs") === "on",
+        fix_network: !isWin && fd.get("fix_network") === "on",
         volume_vpus_per_gb: Number(fd.get("volume_vpus_per_gb") || 10),
       };
       // a running VM is shut down by the migration: make the operator confirm it, naming the VM

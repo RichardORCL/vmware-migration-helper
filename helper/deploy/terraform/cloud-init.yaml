@@ -9,6 +9,7 @@ packages:
   - git
   - lvm2 # post-copy guest fix-up: activate the guest's volume group to reach its root fs
   - util-linux # lsblk, partx, mount, chroot
+  - attr # setfattr: SELinux labels for the network files written into the guest (fallback to its setfiles)
   - python3.11
   - python3.11-pip
 

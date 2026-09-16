@@ -96,6 +96,15 @@ lowering it never interrupts a running one), the rest stay **QUEUED** ("Waiting 
      grains are inflated and written; decoder/writer errors are re-raised on the download thread
      with their original type. A failure restarts the disk from the beginning, up to
      `HELPER_DISK_RETRY_ATTEMPTS` times; the lease is completed or aborted on exit.
+   - guest fix-up (`guest/fixup.py`, Linux only, while the boot volume is still attached to the
+     helper): the guest root is located and mounted once (`partx`, LVM activation with a filter on
+     that disk, `find_root`, `/boot` from the guest's fstab) and the opt-in steps run on it -
+     `initramfs.py` (chroot dracut with virtio drivers for kernels lacking them,
+     `OciTarget.rebuild_initramfs`) and `network.py` (NetworkManager wildcard DHCP keyfile /
+     first-boot unit for legacy network-scripts / netplan / networkd drop-in, MAC-pinned udev rules
+     disabled, SELinux labels via the guest's `setfiles`, `OciTarget.fix_network`). Each step ends in
+     its own `GuestFixup` (`Job.guest_fixup`, `Job.network_fixup`: done / not_needed / skipped /
+     failed with a log) and never fails the migration.
 3. **FINALIZING** (`Provisioner.finalize`)
    - detach all volumes from the helper (the data volumes stay attached to the target), attach
      the boot volume to the target instance, start it unless *start after migration* is off.

@@ -21,9 +21,12 @@ pick a VM, choose the OCI target and start. The helper:
    job: guest OS shutdown through VMware Tools, hard power-off as fallback), then opens an `HttpNfcLease` (the mechanism behind *Export OVF*) on vCenter and streams each disk as a
    stream-optimized VMDK straight from vCenter, decoding the compressed grains on the fly and
    `pwrite()`-ing them at their offsets on the attached OCI volumes;
-4. for Linux guests, mounts the copied boot volume and rebuilds the initramfs with virtio drivers where
-   it lacks them (guest's own dracut in a chroot; RHEL-family hostonly images otherwise cannot find
-   their root disk in OCI);
+4. for Linux guests, mounts the copied boot volume once and (a) rebuilds the initramfs with virtio
+   drivers where it lacks them (guest's own dracut in a chroot; RHEL-family hostonly images otherwise
+   cannot find their root disk in OCI) and (b) makes the guest configure its renamed network interface
+   with DHCP (NetworkManager profile matching any Ethernet device, first-boot unit for legacy
+   network-scripts, netplan/networkd drop-ins; MAC-pinned udev rules disabled) - both steps optional
+   under *Advanced: firmware and device model*;
 5. detaches the volumes from itself, attaches them to the target instance and starts it.
 
 ```mermaid
@@ -42,7 +45,7 @@ sequenceDiagram
         VC-->>H: stream-optimized VMDK (HTTPS)
         H->>H: decode grains -> pwrite(/dev/oracleoci/oraclevdX)
     end
-    H->>H: Linux: mount boot volume, chroot dracut --add-drivers virtio
+    H->>H: Linux: mount boot volume, chroot dracut --add-drivers virtio, DHCP profile for the new NIC
     H->>OCI: detach from helper, attach to target, start
     B->>H: poll job progress
 ```
@@ -101,7 +104,8 @@ helper/
     api/               routes_auth, routes_vms, routes_jobs, routes_console, routes_oci, routes_setup
     vsphere/           session (pyVmomi login), inventory (VM list, VmSpec, preflight), export (NFC lease)
     disk/              stream-optimized VMDK decoder/encoder, positional block-device writer
-    guest/             post-copy fix-ups on the target boot volume (initramfs rebuild with virtio drivers)
+    guest/             post-copy fix-ups on the target boot volume: fixup.py runs the steps in one mount
+                       session; initramfs.py (virtio drivers via dracut), network.py (DHCP on the renamed NIC)
     oci/               mapping (guest OS / launch options / shape), seed images, provisioning
     jobs/              SQLite job store, MigrationRunner
     console/           remote console: OCI console connection, asyncssh VNC tunnel, per-job session manager

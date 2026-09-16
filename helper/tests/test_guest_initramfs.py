@@ -89,6 +89,15 @@ class FakeShell:
             (mnt / "usr" / "bin" / "dracut").write_text("#!/bin/bash\n")
         if not self.boot_fstab:  # /boot on the root fs
             self.fill_boot(mnt / "boot")
+        # a RHEL 7 style network stack: NetworkManager enabled, profile bound to ens192
+        (mnt / "etc" / "os-release").write_text('PRETTY_NAME="Red Hat Enterprise Linux Server 7.9 (Maipo)"\n')
+        (mnt / "usr" / "lib" / "systemd" / "system").mkdir(parents=True, exist_ok=True)
+        (mnt / "usr" / "lib" / "systemd" / "system" / "NetworkManager.service").write_text("[Unit]")
+        (mnt / "etc" / "systemd" / "system" / "multi-user.target.wants").mkdir(parents=True, exist_ok=True)
+        (mnt / "etc" / "systemd" / "system" / "multi-user.target.wants" / "NetworkManager.service").write_text("")
+        (mnt / "etc" / "NetworkManager" / "system-connections").mkdir(parents=True, exist_ok=True)
+        (mnt / "etc" / "NetworkManager" / "system-connections" / "ens192.nmconnection").write_text(
+            "[connection]\ntype=ethernet\ninterface-name=ens192\n[ipv4]\nmethod=manual\n")
 
     def fill_boot(self, boot: Path):
         boot.mkdir(parents=True, exist_ok=True)
@@ -155,8 +164,12 @@ class FakeShell:
                     if str(child) not in self.mounted:  # keep still-mounted sub mounts (never the case here)
                         shutil.rmtree(child) if child.is_dir() else child.unlink()
             return CmdResult(0, "", "")
+        if cmd == "setfattr":
+            return CmdResult(0, "", "")
         if cmd == "chroot":
             root, prog = Path(argv[1]), argv[2]
+            if prog.endswith("setfiles"):
+                return CmdResult(0, "", "")
             if prog == "lsinitrd":
                 img = root / argv[3].lstrip("/")
                 return CmdResult(0, img.read_text(), "") if img.exists() else CmdResult(1, "", "no such file")
@@ -317,6 +330,48 @@ def test_dracut_conf_written_into_guest(base, monkeypatch):
     result, _ = run(spy, base)  # type: ignore[arg-type]
     assert result.status == "done"
     assert f'add_drivers+=" {VIRTIO_DRIVERS} "' in captured["conf"]
+
+
+def test_both_steps_share_one_mount_session(base):
+    from helper_app.guest.fixup import GuestFixer
+    from helper_app.guest.network import NM_KEYFILE
+
+    shell = FakeShell(layout="lvm", virtio_in={OLD_KERNEL})
+    written = {}
+    orig = shell.__call__
+
+    def spy(argv, timeout_s):
+        # the network step runs while the root is still mounted; capture what it wrote before umount
+        if argv[0] == "umount":
+            kf = Path(argv[-1]) / "etc" / "NetworkManager" / "system-connections" / NM_KEYFILE
+            if kf.exists():
+                written["keyfile"] = kf.read_text()
+        return orig(argv, timeout_s)
+
+    msgs = []
+    res = GuestFixer(run=spy, mount_base=base).fix("/dev/sdb", initramfs=True, network=True, notify=msgs.append)
+    assert res.initramfs.status == "done" and res.initramfs.kernels == [RHEL_KERNEL]
+    assert res.network.status == "done" and "NetworkManager DHCP profile" in res.network.detail
+    assert "type=ethernet" in written["keyfile"]
+    # one scan, one root mount, everything undone
+    assert sum(1 for c in shell.calls if c[0] == "lsblk") == 2  # before and after LVM activation
+    assert sum(1 for c in shell.calls if c[0] == "mount" and c[-2] == "/dev/mapper/rhel-root") == 1
+    assert shell.mounted == {} and shell.active_vgs == []
+    # each step has its own log; the network log does not repeat the disk scan
+    assert any("guest root file system on" in ln for ln in res.initramfs.log)
+    assert not any("guest root file system on" in ln for ln in res.network.log)
+    assert any("network stack: NetworkManager (enabled)" in ln for ln in res.network.log)
+
+    # one step failing does not stop the other
+    shell = FakeShell(layout="lvm", dracut_rc=1)
+    res = GuestFixer(run=shell, mount_base=base).fix("/dev/sdb", initramfs=True, network=True)
+    assert res.initramfs.status == "failed" and res.network.status == "done"
+    # a step that is not requested is not reported
+    res = GuestFixer(run=FakeShell(layout="lvm"), mount_base=base).fix("/dev/sdb", initramfs=False, network=True)
+    assert res.initramfs is None and res.network.status == "done"
+    # no root at all: both requested steps get the same answer
+    res = GuestFixer(run=FakeShell(layout="luks"), mount_base=base).fix("/dev/sdb")
+    assert res.initramfs.status == "skipped" and res.network.status == "skipped" and "LUKS" in res.network.detail
 
 
 def test_resolve_spec():

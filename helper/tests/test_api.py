@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 
 from helper_app.config import Settings
 from helper_app.disk.vmdk_stream import encode_raw_bytes
+from helper_app.guest.fixup import GuestFixupResult
 from helper_app.jobs.store import JobStore, utcnow
 from helper_app.main import create_app
 from helper_app.models import GuestFixup, Job, JobPhase
@@ -94,16 +95,18 @@ class Env:
             return FakeExport(vm, payloads, fail_once=set(fail_once), block_event=block_event)
 
         # post-copy guest fix-up: scripted outcome per test (device -> GuestFixup or exception)
-        self.fixups: list[str] = []  # boot devices the fix-up was asked to handle
+        self.fixups: list[tuple[str, bool, bool]] = []  # (boot device, initramfs wanted, network wanted)
         self.fixup_result = GuestFixup(status="done", detail="initramfs rebuilt with virtio drivers for 3.10.0-1160",
                                        kernels=["3.10.0-1160.el7.x86_64"])
+        self.network_result = GuestFixup(status="done", detail="NetworkManager DHCP profile for any Ethernet "
+                                                               "interface added")
 
-        def guest_fixer(device, notify):
-            self.fixups.append(device)
+        def guest_fixer(device, initramfs, network, notify):
+            self.fixups.append((device, initramfs, network))
             notify("scanning the boot disk")
             if isinstance(self.fixup_result, Exception):
                 raise self.fixup_result
-            return self.fixup_result
+            return GuestFixupResult(self.fixup_result if initramfs else None, self.network_result if network else None)
 
         extra = {"tunnel_factory": tunnel_factory} if tunnel_factory else {}
         self.app = create_app(
@@ -857,34 +860,52 @@ def test_fixed_private_ip(env):
 
 
 def test_guest_fixup_runs_after_copy(env):
-    """The initramfs fix-up runs on the boot volume once all disks are copied; its outcome is recorded and
-    never fails the migration; Windows guests and opted-out jobs skip it."""
+    """The initramfs and network fix-ups run on the boot volume once all disks are copied (one call, both
+    steps); their outcomes are recorded and never fail the migration; Windows guests and opted-out steps
+    are skipped."""
     c = env.client
     login(c)
     r = c.post("/api/jobs", json={"vm_moid": "vm-101", "target": target()})
     job = wait_phase(c, r.json()["id"], "COMPLETED", "FAILED")
     assert job["phase"] == "COMPLETED", job
     # ran on the boot volume's disk (the device path is cleared from the record once it is detached)
-    assert env.fixups == [str(Path(env.settings.device_prefix).parent / "sdb")]
+    assert env.fixups == [(str(Path(env.settings.device_prefix).parent / "sdb"), True, True)]
     assert job["guest_fixup"]["status"] == "done" and job["guest_fixup"]["kernels"] == ["3.10.0-1160.el7.x86_64"]
+    assert job["network_fixup"]["status"] == "done" and "NetworkManager" in job["network_fixup"]["detail"]
     assert "power_off" not in job["step"]
-    assert "fixup=done" in c.get(f"/api/jobs/{job['id']}/diagnostics").text
+    diag = c.get(f"/api/jobs/{job['id']}/diagnostics").text
+    assert "guest fixup=done" in diag and "network fixup=done" in diag
+    assert job["message"].startswith("Migration complete")
 
-    # a crash inside the fix-up is recorded, the migration still completes
+    # a crash inside the fix-up is recorded for both steps, the migration still completes
     env.fixup_result = RuntimeError("mount: /dev/sdb2: unknown filesystem type")
     r = c.post("/api/jobs", json={"vm_moid": "vm-101", "target": target()})
     job = wait_phase(c, r.json()["id"], "COMPLETED", "FAILED")
     assert job["phase"] == "COMPLETED" and job["guest_fixup"]["status"] == "failed"
     assert "unknown filesystem" in job["guest_fixup"]["detail"]
+    assert job["network_fixup"]["status"] == "failed"
+    env.fixup_result = GuestFixup(status="not_needed", detail="virtio present")
 
-    # opted out / Windows: skipped without touching the disk
-    n = len(env.fixups)
+    # one step opted out: only the other one runs
     r = c.post("/api/jobs", json={"vm_moid": "vm-101", "target": target(rebuild_initramfs=False)})
     job = wait_phase(c, r.json()["id"], "COMPLETED", "FAILED")
     assert job["guest_fixup"] == {"status": "skipped", "detail": "disabled for this job", "kernels": [], "log": []}
+    assert job["network_fixup"]["status"] == "done"
+    assert env.fixups[-1][1:] == (False, True)
+    r = c.post("/api/jobs", json={"vm_moid": "vm-101", "target": target(fix_network=False)})
+    job = wait_phase(c, r.json()["id"], "COMPLETED", "FAILED")
+    assert job["network_fixup"]["detail"] == "disabled for this job" and job["guest_fixup"]["status"] == "not_needed"
+    assert env.fixups[-1][1:] == (True, False)
+
+    # both opted out / Windows: skipped without touching the disk
+    n = len(env.fixups)
+    r = c.post("/api/jobs", json={"vm_moid": "vm-101", "target": target(rebuild_initramfs=False, fix_network=False)})
+    job = wait_phase(c, r.json()["id"], "COMPLETED", "FAILED")
+    assert job["guest_fixup"]["detail"] == "disabled for this job" and job["network_fixup"]["detail"] == "disabled for this job"
     r = c.post("/api/jobs", json={"vm_moid": "vm-202", "target": target(windows_license_type="BRING_YOUR_OWN_LICENSE")})
     job = wait_phase(c, r.json()["id"], "COMPLETED", "FAILED")
     assert job["guest_fixup"]["status"] == "skipped" and "Windows" in job["guest_fixup"]["detail"]
+    assert job["network_fixup"]["status"] == "skipped" and "Windows" in job["network_fixup"]["detail"]
     assert len(env.fixups) == n
 
 

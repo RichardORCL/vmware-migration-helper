@@ -760,21 +760,36 @@
     try { jobs = await api("GET", "/jobs"); } catch (e) { if (e.status !== 401) showError(e.message); return; }
     app.innerHTML = "";
     // fixed layout (see style.css): the message column takes what the others leave
-    const columns = [["VM", "15%"], ["Phase", "112px"], ["Message", null], ["OCI instance", "17%"], ["Started", "11%"], ["By", "13%", "by"], ["", "150px"]];
+    const columns = [["VM", "17%"], ["Phase", "112px"], ["Message", null], ["OCI instance", "14%"], ["Migration", "19%"], ["By", "11%", "by"], ["", "84px"]];
+    // source -> target name; the target is the launched instance's name, else what the form asked for
+    const vmCell = (j) => {
+      const target = j.instance_display_name || j.target.display_name || j.vm.name;
+      return el("td", { class: "name" }, j.vm.name, el("span", { class: "muted arrow" }, " \u2192 "), el("span", { class: "muted" }, target));
+    };
+    // start / end / duration / average transfer speed of the migration
+    const migrationCell = (j) => {
+      const sm = j.summary || {}; const done = TERMINAL.includes(j.phase);
+      const when = (iso) => new Date(iso).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" });
+      const lines = [el("div", {}, el("span", { class: "muted" }, "Started "), when(j.created_at))];
+      if (done && j.finished_at) lines.push(el("div", {}, el("span", { class: "muted" }, "Finished "), when(j.finished_at)));
+      const figures = [(done ? "" : "running ") + fmtDuration(sm.duration_s)];
+      const bps = sm.average_bps || (!done && j.transfer ? j.transfer.throughput_bps : null);
+      if (bps) figures.push(`${fmtBytes(bps)}/s${sm.average_bps ? " avg" : ""}`);
+      lines.push(el("div", { class: "muted" }, figures.join(" \u00b7 ")));
+      return el("td", { class: "migration" }, ...lines);
+    };
     const table = el("table", { class: "jobs" },
       el("colgroup", {}, ...columns.map(([, w, cls]) => el("col", { style: w ? `width:${w}` : null, class: cls || null }))),
       el("thead", {}, el("tr", {}, ...columns.map(([h, , cls]) => el("th", { class: cls || null }, h)))),
       el("tbody", {}, ...jobs.map((j) => el("tr", {},
-        el("td", { class: "name" }, j.vm.name), el("td", {}, el("span", { class: "phase " + j.phase }, j.phase)),
+        vmCell(j), el("td", {}, el("span", { class: "phase " + j.phase }, j.phase)),
         el("td", {}, (j.message || "") + (j.phase === "EXPORTING" && j.transfer && j.transfer.started_at
           ? ` - ${j.transfer.percent || 0}%${j.transfer.throughput_bps ? ", " + fmtRate(j.transfer.throughput_bps) : ""}`
           : !TERMINAL.includes(j.phase) && j.step_percent !== null && j.step_percent !== undefined && !/\d+%/.test(j.message || "")
             ? ` - ${j.step_percent}%` : "")),
         el("td", { class: "ocid", title: j.instance_id || "" }, ocidLink("instances", j.instance_id)),
-        el("td", {}, new Date(j.created_at).toLocaleString()), el("td", { class: "by" }, j.created_by || "-"),
-        el("td", { class: "row-actions" },
-          hasConsole(j) ? el("a", { class: "button secondary small", href: `#/jobs/${j.id}/console`, title: "Open the VNC console of the instance" }, "Console") : null,
-          el("a", { class: "button secondary small", href: `#/jobs/${j.id}` }, "Details"))))));
+        migrationCell(j), el("td", { class: "by" }, j.created_by || "-"),
+        el("td", { class: "row-actions" }, el("a", { class: "button secondary small", href: `#/jobs/${j.id}` }, "Details"))))));
     app.append(el("div", { class: "card" }, el("h2", {}, "Migration jobs"),
       jobs.length ? table : el("div", { class: "muted" }, "No jobs yet. Pick a powered-off VM under Source VMs to start one.")));
     // refresh the table while jobs are active

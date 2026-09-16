@@ -96,6 +96,8 @@ table.jobs { table-layout: fixed; }
 table.jobs td.ocid { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 table.jobs td.ocid a { display: inline; }
 table.jobs td.row-actions { text-align: right; }
+table.jobs td.migration { font-size: 12px; line-height: 1.4; }
+table.jobs td.name > span { font-weight: 400; }  /* "source -> target": only the source name is bold */
 @media (max-width: 900px) { table.jobs col.by, table.jobs th.by, table.jobs td.by { display: none; } }
 table.vms tr:hover td { background: #f7f9fa; }
 td.name { font-weight: 600; }

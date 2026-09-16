@@ -361,6 +361,8 @@ class InstanceStatus(BaseModel):
     instance_id: str
     display_name: Optional[str] = None
     lifecycle_state: str  # OCI lifecycle state, or NOT_FOUND when OCI no longer knows the OCID
+    private_ip: Optional[str] = None  # primary VNIC, as assigned by OCI (fixed or DHCP)
+    public_ip: Optional[str] = None
     checked_at: datetime
 
 

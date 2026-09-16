@@ -54,6 +54,7 @@ class FakeCompute:
         self.instances: dict[str, NS] = {}
         self.boot_attachments: dict[str, NS] = {}
         self.launched_vnics: list = []  # CreateVnicDetails of every launch
+        self.vnic_attachments: dict[str, NS] = {}
         self.vol_attachments: dict[str, NS] = {}
         self.images: dict[str, NS] = {}
         self.capability_schemas: list = []
@@ -130,9 +131,17 @@ class FakeCompute:
         self.pending_transitions[iid] = self.f.launch_outcome
         self.f.work_requests.add("LaunchInstance", details.compartment_id, iid, list(self.f.launch_errors))
         self.launched_vnics.append(vnic)
+        vnic_id = oid("vnic")
         if label or getattr(vnic, "private_ip", None):
-            self.f.network.private_ips.append(NS(hostname_label=label, subnet_id=vnic.subnet_id, vnic_id=oid("vnic"),
+            self.f.network.private_ips.append(NS(hostname_label=label, subnet_id=vnic.subnet_id, vnic_id=vnic_id,
                                                  ip_address=getattr(vnic, "private_ip", None)))
+        # the primary VNIC: fixed address when requested, else a DHCP one; public IP only when asked for
+        self.f.network.vnics[vnic_id] = NS(
+            id=vnic_id, is_primary=True, subnet_id=vnic.subnet_id, lifecycle_state="AVAILABLE",
+            private_ip=getattr(vnic, "private_ip", None) or f"10.0.1.{100 + len(self.launched_vnics)}",
+            public_ip=f"130.61.0.{len(self.launched_vnics)}" if getattr(vnic, "assign_public_ip", False) else None)
+        self.vnic_attachments[oid("vnicattachment")] = NS(id=oid("vnicattachment"), instance_id=iid, vnic_id=vnic_id,
+                                                          lifecycle_state="ATTACHED")
         bv_id = oid("bootvolume")
         self.f.blockstorage.boot_volumes[bv_id] = NS(id=bv_id, lifecycle_state="AVAILABLE",
                                                      size_in_gbs=details.source_details.boot_volume_size_in_gbs,
@@ -148,6 +157,9 @@ class FakeCompute:
         if nxt:
             inst.lifecycle_state = nxt
         return Resp(inst)
+
+    def list_vnic_attachments(self, compartment_id, instance_id=None, **kw):
+        return Resp([a for a in self.vnic_attachments.values() if instance_id is None or a.instance_id == instance_id])
 
     def instance_action(self, iid, action):
         self.actions.append((iid, action))
@@ -536,10 +548,16 @@ class FakeNetwork:
     def __init__(self):
         # private IPs (with DNS labels) already present in the subnets; launches add to this
         self.private_ips: list[NS] = []
+        self.vnics: dict[str, NS] = {}  # VNICs created by launches (id -> Vnic)
         self.listed_compartments: list[str] = []  # compartment_id of each list_vcns / list_subnets call
 
     def hostnames_in_subnet(self, subnet_id: str) -> set[str]:
         return {ip.hostname_label for ip in self.private_ips if ip.subnet_id == subnet_id and ip.hostname_label}
+
+    def get_vnic(self, vnic_id):
+        if vnic_id not in self.vnics:
+            raise service_error(404, "NotAuthorizedOrNotFound", f"vnic {vnic_id} not found", "GetVnic")
+        return Resp(self.vnics[vnic_id])
 
     def list_private_ips(self, subnet_id=None, ip_address=None, **kw):
         return Resp([ip for ip in self.private_ips if (subnet_id is None or ip.subnet_id == subnet_id)

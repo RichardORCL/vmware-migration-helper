@@ -46,6 +46,18 @@ def check_private_ip(c: OciClients, subnet_id: str, ip: str) -> None:
                              + (f" (by {owner})" if owner else ""))
 
 
+def primary_vnic_ips(c: OciClients, instance) -> tuple[Optional[str], Optional[str]]:
+    """(private IP, public IP) of the instance's primary VNIC as OCI assigned them, (None, None) while the
+    VNIC is not attached yet.  ListVnicAttachments + GetVnic; the OCI Python SDK has no shortcut for this."""
+    atts = _all(c.compute.list_vnic_attachments, compartment_id=instance.compartment_id, instance_id=instance.id)
+    attached = [a for a in atts if a.lifecycle_state == "ATTACHED" and getattr(a, "vnic_id", None)]
+    if not attached:
+        return None, None
+    vnics = [c.network.get_vnic(a.vnic_id).data for a in attached]
+    primary = next((v for v in vnics if getattr(v, "is_primary", False)), vnics[0])
+    return getattr(primary, "private_ip", None) or None, getattr(primary, "public_ip", None) or None
+
+
 def list_compartments(c: OciClients) -> list[OciCompartment]:
     tenancy = c.identity_info.tenancy_id
     result: list[OciCompartment] = []

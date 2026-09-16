@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from typing import Optional
 
@@ -29,8 +30,10 @@ from helper_app.oci.mapping import (
     os_version_choices,
     with_os_version,
 )
-from helper_app.oci.options import PrivateIpError, check_private_ip
+from helper_app.oci.options import PrivateIpError, check_private_ip, primary_vnic_ips
 from helper_app.sessions import UserSession
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"], dependencies=[Depends(require_session)])
 
@@ -131,8 +134,15 @@ async def job_instance(job_id: str, request: Request):
             return InstanceStatus(instance_id=job.instance_id, display_name=job.instance_display_name,
                                   lifecycle_state="NOT_FOUND", checked_at=utcnow())
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, describe_error(exc))
+    private_ip = public_ip = None
+    if inst.lifecycle_state not in ("TERMINATING", "TERMINATED"):
+        try:
+            private_ip, public_ip = await asyncio.to_thread(primary_vnic_ips, st.clients, inst)
+        except Exception as exc:  # noqa: BLE001 - the addresses are informational; the state matters more
+            log.debug("cannot read the VNIC of %s: %s", job.instance_id, describe_error(exc))
     return InstanceStatus(instance_id=job.instance_id, display_name=inst.display_name or job.instance_display_name,
-                          lifecycle_state=inst.lifecycle_state, checked_at=utcnow())
+                          lifecycle_state=inst.lifecycle_state, private_ip=private_ip, public_ip=public_ip,
+                          checked_at=utcnow())
 
 
 @router.get("/{job_id}/diagnostics", response_class=PlainTextResponse)

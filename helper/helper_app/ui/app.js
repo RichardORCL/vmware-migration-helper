@@ -211,7 +211,7 @@
       ["Source VM", `${job.vm.name} (${job.vm.moid})${job.vcenter_host ? " on " + job.vcenter_host : ""} - ${job.vm.num_cpu} vCPU, ${fmtBytes(job.vm.memory_mb * 1024 * 1024)} RAM, ${job.vm.disks.length} disk(s)`],
       ["Guest OS", `${job.vm.guest_full_name || job.vm.guest_id}${job.target.operating_system_version ? ` - release ${job.target.operating_system_version} (selected)` : ""}`],
       ["Shape", `${job.target.shape || "(helper default)"}${job.target.ocpus || job.target.memory_gb ? ` - ${job.target.ocpus ?? "auto"} OCPU / ${job.target.memory_gb ?? "auto"} GB (custom)` : " - sized from the source VM"}`],
-      ["Network", `${job.target.private_ip ? "private IP " + job.target.private_ip : "private IP assigned by OCI (DHCP)"}${job.target.assign_public_ip ? ", public IP" : ""}`],
+      ["IP addresses", ociIpsEl(root, job)],
       ["Launch options", job.launch_options ? `${job.launch_options.firmware}${job.launch_options.secure_boot ? " + Secure Boot (shielded instance, with Measured Boot + vTPM on VM shapes)" : ""}, boot ${job.launch_options.boot_volume_type}, nic ${job.launch_options.network_type}` : "-"],
       ...(job.target.windows_license_type ? [["Windows license", job.target.windows_license_type === "OCI_PROVIDED"
         ? "OCI provided (change it in the OCI console if needed)" : "Bring your own license (change it in the OCI console if needed)"]] : []),
@@ -291,20 +291,36 @@
     return job.phase === "COMPLETED" || job.phase === "CANCELLED";
   }
 
-  // Live lifecycle state of the target instance, asked from OCI through the helper.  The job record is
-  // re-rendered every few seconds; the state is cached on the job element and refreshed at most every
-  // OCI_STATE_TTL ms (and keeps refreshing for finished jobs while their page stays open).
+  // Live state of the target instance (lifecycle state + addresses of its primary VNIC), asked from OCI
+  // through the helper.  While the job runs its record is re-rendered every few seconds and the state is
+  // refreshed at most every OCI_STATE_TTL ms; once the job is finished (job polling stops) a timer keeps
+  // the state refreshing on its own for as long as the page is open.
   const OCI_STATE_TTL = 15000;
   const OCI_STATE_CLASS = { RUNNING: "ok", PROVISIONING: "", STARTING: "", STOPPING: "warn", STOPPED: "warn",
     CREATING_IMAGE: "", MOVING: "", TERMINATING: "bad", TERMINATED: "bad", NOT_FOUND: "bad" };
   function ociStateEl(root, job) {
     const span = el("span", { "data-oci-state": "" });
     if (!job.instance_id) { span.textContent = "-"; return span; }
-    const c = root._ociState;
-    if (c && c.id === job.instance_id) fillOciState(span, c);
-    else span.textContent = "checking...";
-    if (!c || c.id !== job.instance_id || Date.now() - c.at > OCI_STATE_TTL) refreshOciState(root, job);
+    const c = ociCached(root, job);
+    if (c) fillOciState(span, c); else span.textContent = "checking...";
+    ensureOciRefresh(root, job);
     return span;
+  }
+  function ociIpsEl(root, job) {
+    const span = el("span", { "data-oci-ips": "" });
+    fillOciIps(span, job, ociCached(root, job));
+    return span;
+  }
+  const ociCached = (root, job) => (root._ociState && root._ociState.id === job.instance_id) ? root._ociState : null;
+  function ensureOciRefresh(root, job) {
+    const c = ociCached(root, job);
+    const age = c ? Date.now() - c.at : Infinity;
+    if (age > OCI_STATE_TTL) refreshOciState(root, job);
+    else if (TERMINAL.includes(job.phase)) scheduleOciRefresh(root, job, OCI_STATE_TTL - age);
+  }
+  function scheduleOciRefresh(root, job, delayMs) {
+    clearTimeout(root._ociTimer);
+    root._ociTimer = setTimeout(() => { if (root.isConnected) refreshOciState(root, job); }, Math.max(1000, delayMs));
   }
   function fillOciState(span, c) {
     span.innerHTML = "";
@@ -313,21 +329,33 @@
     span.append(el("span", { class: "badge" + (cls ? " " + cls : "") }, c.state),
       el("span", { class: "muted" }, ` checked ${new Date(c.at).toLocaleTimeString()}`));
   }
+  function fillOciIps(span, job, c) {
+    // what was configured, then what OCI actually assigned once the VNIC exists
+    const wanted = `${job.target.private_ip ? "private IP " + job.target.private_ip + " (fixed)" : "private IP assigned by OCI (DHCP)"}${job.target.assign_public_ip ? ", public IP" : ""}`;
+    span.innerHTML = "";
+    if (c && !c.error && c.private_ip) {
+      span.append(el("strong", {}, `private ${c.private_ip}`), c.public_ip ? el("strong", {}, `, public ${c.public_ip}`) : "",
+        el("div", { class: "muted" }, `requested: ${wanted}`));
+    } else if (job.instance_id && (!c || c.error || !["TERMINATING", "TERMINATED", "NOT_FOUND"].includes(c.state))) {
+      span.append(wanted, el("span", { class: "muted" }, c && !c.error ? " - address not assigned yet" : " - checking..."));
+    } else span.textContent = wanted;
+  }
   async function refreshOciState(root, job) {
+    root._ociJob = job;  // newest record: the phase may turn terminal while a request is in flight
     if (root._ociPending) return;
     root._ociPending = true;
     const cache = { id: job.instance_id, at: Date.now() };
     try {
       const st = await api("GET", `/jobs/${job.id}/instance`);
       cache.state = st.lifecycle_state; cache.at = new Date(st.checked_at).getTime() || cache.at;
+      cache.private_ip = st.private_ip || null; cache.public_ip = st.public_ip || null;
     } catch (e) { if (e.status === 401) return; cache.error = e.message; }
     finally { root._ociPending = false; }
     root._ociState = cache;
+    job = root._ociJob;
     root.querySelectorAll("[data-oci-state]").forEach((s) => fillOciState(s, cache));
-    if (TERMINAL.includes(job.phase)) {  // job polling stopped; keep the instance state alive on its own
-      clearTimeout(root._ociTimer);
-      root._ociTimer = setTimeout(() => { if (root.isConnected) refreshOciState(root, job); }, OCI_STATE_TTL);
-    }
+    root.querySelectorAll("[data-oci-ips]").forEach((s) => fillOciIps(s, job, cache));
+    if (TERMINAL.includes(job.phase)) scheduleOciRefresh(root, job, OCI_STATE_TTL);  // job polling has stopped
   }
 
   function pollJob(jobId, container, opts) {

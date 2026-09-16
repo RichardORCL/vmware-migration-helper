@@ -488,6 +488,10 @@ def test_full_migration_with_retry(env):
     assert st.status_code == 200, st.text
     assert st.json()["lifecycle_state"] == "RUNNING" and st.json()["display_name"] == "web-01"
     assert st.json()["instance_id"] == job["instance_id"] and st.json()["checked_at"]
+    # ... and the addresses OCI gave the primary VNIC (DHCP here, no public IP requested)
+    vnic = fake.network.vnics[fake.compute.list_vnic_attachments("c", instance_id=job["instance_id"]).data[0].vnic_id]
+    assert st.json()["private_ip"] == vnic.private_ip and vnic.private_ip.startswith("10.0.1.")
+    assert st.json()["public_ip"] is None
     fake.compute.instance_action(job["instance_id"], "STOP")  # someone stops it in the console
     assert c.get(f"/api/jobs/{job_id}/instance").json()["lifecycle_state"] == "STOPPED"
     fake.compute.instance_action(job["instance_id"], "START")
@@ -830,16 +834,26 @@ def test_fixed_private_ip(env):
     assert job["phase"] == "COMPLETED", job
     assert env.fake.compute.launched_vnics[-1].private_ip == "10.0.1.26"
     assert "private_ip=10.0.1.26" in c.get(f"/api/jobs/{job['id']}/diagnostics").text
+    # the job view shows the address OCI actually assigned to the primary VNIC (the fixed one here)
+    st = c.get(f"/api/jobs/{job['id']}/instance").json()
+    assert st["private_ip"] == "10.0.1.26" and st["public_ip"] is None
     # ... and is now taken
     win = dict(windows_license_type="BRING_YOUR_OWN_LICENSE")
     r = c.post("/api/jobs", json={"vm_moid": "vm-202", "target": target(private_ip="10.0.1.26", **win)})
     assert r.status_code == 400 and "already in use" in r.text
-    # empty / blank -> DHCP (None)
-    r = c.post("/api/jobs", json={"vm_moid": "vm-202", "target": target(private_ip="  ", **win)})
+    # empty / blank -> DHCP (None); with a public IP
+    r = c.post("/api/jobs", json={"vm_moid": "vm-202", "target": target(private_ip="  ", assign_public_ip=True, **win)})
     assert r.status_code == 202 and r.json()["target"]["private_ip"] is None
     job = wait_phase(c, r.json()["id"], "COMPLETED", "FAILED")
     assert env.fake.compute.launched_vnics[-1].private_ip is None
     assert "private_ip=dhcp" in c.get(f"/api/jobs/{job['id']}/diagnostics").text
+    st = c.get(f"/api/jobs/{job['id']}/instance").json()
+    assert st["private_ip"].startswith("10.0.1.") and st["public_ip"].startswith("130.61.")
+    # a VNIC lookup failure does not hide the lifecycle state
+    env.fake.network.get_vnic = lambda vid: (_ for _ in ()).throw(service_error(500, "InternalError", "x", "GetVnic"))
+    st = c.get(f"/api/jobs/{job['id']}/instance").json()
+    assert st["lifecycle_state"] == "RUNNING" and st["private_ip"] is None
+    del env.fake.network.get_vnic
 
 
 def test_guest_fixup_runs_after_copy(env):

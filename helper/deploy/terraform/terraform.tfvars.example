@@ -3,6 +3,7 @@ tenancy_ocid         = "ocid1.tenancy.oc1..aaaa"
 region               = "eu-frankfurt-1"
 compartment_ocid     = "ocid1.compartment.oc1..aaaa"
 availability_domain  = "Uocm:EU-FRANKFURT-1-AD-1"
+# network_compartment_ocid = "ocid1.compartment.oc1..network"   # VCN/subnet compartment when it differs from compartment_ocid
 vcn_ocid             = "ocid1.vcn.oc1.eu-frankfurt-1.aaaa"
 subnet_ocid          = "ocid1.subnet.oc1.eu-frankfurt-1.aaaa"
 assign_public_ip     = false

@@ -18,6 +18,12 @@ variable "availability_domain" {
   type        = string
 }
 
+variable "network_compartment_ocid" {
+  description = "Compartment of the VCN and subnet (and where the network security group is created); empty = same as compartment_ocid"
+  type        = string
+  default     = ""
+}
+
 variable "vcn_ocid" {
   description = "VCN containing the migration tool VM subnet"
   type        = string

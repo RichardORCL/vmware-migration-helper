@@ -23,7 +23,8 @@ The Terraform in `helper/deploy/terraform` is a self-contained [Resource Manager
    Pass `--create <compartment-ocid>` (`-CreateInCompartment`) to create the stack straight from the OCI CLI instead of uploading it.
 2. In the console: **Developer Services > Resource Manager > Stacks > Create stack > My configuration > .zip file**, upload the zip.
 3. Fill in the form:
-   - *Placement*: compartment, availability domain (target instances land in the same AD), VCN, subnet, whether to assign a public IP, and the CIDRs of the administrators' networks allowed to reach the web UI.
+   - *Placement*: compartment for the VM, seed bucket and seed images, and the availability domain (target instances land in the same AD).
+   - *Network*: the network compartment (defaults to the placement compartment; pick the compartment that holds your VCN when networking is managed separately), VCN, subnet, whether to assign a public IP, and the CIDRs of the administrators' networks allowed to reach the web UI. The network security group is created in the network compartment.
    - *OCI Migration Tool VM*: instance name, shape/OCPUs/memory and your SSH public key.
    - *Migration tool service*: git URL + ref to install (defaulting to the `vmware-migration-helper` GitHub repo), seed bucket, default target shape, number of parallel migrations.
    - *IAM*: keep **Create IAM resources** on unless an administrator already created the dynamic group/policy/tag namespace; optionally limit the compartment where the migration tool may create target instances.
@@ -44,7 +45,7 @@ terraform output helper_ui_url
 ## 2. What the stack creates
 
 - an Oracle Linux 9 flex instance with paravirtualized storage/network and consistent device naming (`/dev/oracleoci/oraclevd*`), tagged `vc-oci.role=helper`;
-- a network security group allowing TCP 8443 (web UI) and 22 (SSH) from `allowed_source_cidrs`, all egress;
+- a network security group (in the network compartment, `network_compartment_ocid`) allowing TCP 8443 (web UI) and 22 (SSH) from `allowed_source_cidrs`, all egress;
 - the `vc-oci-seed-images` Object Storage bucket used while importing seed images;
 - (when `create_iam = true`) the `vc-oci` tag namespace, a dynamic group matching the tagged instance in the migration tool compartment, and a policy granting it `manage instance-family` / `manage volume-family` / `use virtual-network-family` in `policy_scope_compartment_ocid` (default: tenancy), plus `manage instance-images` / `compute-image-capability-schema` / volume attachments in its own compartment, object access to the seed bucket and `PAR_MANAGE` on that bucket (the image import service reads the placeholder through a pre-authenticated request it creates on the migration tool's behalf);
 - cloud-init that writes `/etc/vc-oci-helper/helper.env` (OCI settings, bucket, default shape, concurrency), installs the migration tool (git clone + `pip install` into `/opt/vc-oci/venv`), generates a self-signed certificate, opens 8443 in firewalld and runs the `vc-oci-helper` systemd unit.

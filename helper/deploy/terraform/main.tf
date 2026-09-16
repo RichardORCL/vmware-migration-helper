@@ -19,6 +19,7 @@ provider "oci" {
 }
 
 locals {
+  network_compartment = var.network_compartment_ocid != "" ? var.network_compartment_ocid : var.compartment_ocid
   policy_scope  = var.policy_scope_compartment_ocid != "" ? "compartment id ${var.policy_scope_compartment_ocid}" : "tenancy"
   tag_namespace = "vc-oci"
   tag_role_key  = "role"
@@ -36,8 +37,9 @@ data "oci_core_images" "ol9" {
 }
 
 # ---------------------------------------------------------------------------- network security
+# The NSG lives with the VCN in the network compartment (which may differ from the VM's compartment).
 resource "oci_core_network_security_group" "helper" {
-  compartment_id = var.compartment_ocid
+  compartment_id = local.network_compartment
   vcn_id         = var.vcn_ocid
   display_name   = "${var.helper_display_name}-nsg"
 }

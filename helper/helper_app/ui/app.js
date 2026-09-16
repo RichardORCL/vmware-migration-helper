@@ -1146,14 +1146,113 @@
     purgeBtns[0].addEventListener("click", () => purge("failed"));
     purgeBtns[1].addEventListener("click", () => purge("all"));
 
+    // live resource usage of the helper VM: numbers with meters, plus a canvas chart of CPU % and network
+    // throughput over the sampler's history (10 minutes); polled every 3 s while the page is open
+    const statsKv = document.getElementById("stats-kv"); const statsNote = document.getElementById("stats-note");
+    const chart = document.getElementById("stats-chart"); const chartRange = document.getElementById("stats-chart-range");
+    let statsTimer = null; let lastStats = null;
+    const meter = (frac) => {
+      const pct = Math.max(0, Math.min(100, Math.round((frac || 0) * 100)));
+      return el("span", { class: "meter" + (pct >= 90 ? " bad" : pct >= 75 ? " warn" : "") }, el("span", { style: `width:${pct}%` }));
+    };
+    const renderStats = (s) => {
+      lastStats = s;
+      statsNote.textContent = s.available ? (s.sampled_at ? `sampled ${new Date(s.sampled_at).toLocaleTimeString()}, every ${s.interval_s} s` : "") : s.note;
+      const rows = [];
+      if (s.available) {
+        rows.push(["CPU", el("span", {}, meter((s.cpu_pct || 0) / 100),
+          `${s.cpu_pct === null ? "-" : s.cpu_pct.toFixed(0) + " %"} of ${s.cpu_count} vCPU${s.cpu_count === 1 ? "" : "s"}`,
+          s.load_1m !== null ? el("span", { class: "muted" }, ` - load ${s.load_1m} / ${s.load_5m} / ${s.load_15m}`) : null)]);
+        if (s.mem_total_bytes) {
+          rows.push(["Memory", el("span", {}, meter(s.mem_used_bytes / s.mem_total_bytes),
+            `${fmtBytes(s.mem_used_bytes)} of ${fmtBytes(s.mem_total_bytes)} used (${Math.round(100 * s.mem_used_bytes / s.mem_total_bytes)} %)`,
+            s.swap_total_bytes ? el("span", { class: "muted" }, ` - swap ${fmtBytes(s.swap_used_bytes)} of ${fmtBytes(s.swap_total_bytes)}`) : null)]);
+        }
+      }
+      for (const d of s.disks) {
+        rows.push([`Disk ${d.mount}`, el("span", {}, meter(d.used_bytes / d.total_bytes),
+          `${fmtBytes(d.free_bytes)} free of ${fmtBytes(d.total_bytes)} (${Math.round(100 * d.used_bytes / d.total_bytes)} % used)`)]);
+      }
+      if (s.available) {
+        rows.push(["Network", el("span", {}, `received ${fmtRate(s.net_rx_bps)}, sent ${fmtRate(s.net_tx_bps)}`,
+          el("span", { class: "muted" }, ` - since boot ${fmtBytes(s.net_rx_total_bytes)} in / ${fmtBytes(s.net_tx_total_bytes)} out`))]);
+      }
+      if (s.uptime_s !== null && s.uptime_s !== undefined) rows.push(["Uptime", fmtDuration(s.uptime_s)]);
+      kv(statsKv, rows);
+      chart.parentElement.hidden = !s.available;
+      if (s.available) drawChart(s);
+    };
+    // two panels on one canvas: CPU % (fixed 0-100 scale, filled) and bytes/s in and out (auto scale, lines)
+    const drawChart = (s) => {
+      const dpr = window.devicePixelRatio || 1;
+      const cssW = chart.clientWidth || 600, cssH = 220;
+      if (chart.width !== Math.round(cssW * dpr) || chart.height !== Math.round(cssH * dpr)) { chart.width = Math.round(cssW * dpr); chart.height = Math.round(cssH * dpr); }
+      const ctx = chart.getContext("2d");
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, cssW, cssH);
+      const left = 56, right = 8, gap = 18, top = 6, bottom = 18;
+      const panelH = (cssH - top - bottom - gap) / 2;
+      const plotW = cssW - left - right;
+      const now = Date.now() / 1000, span = s.history_s;
+      const x = (t) => left + plotW * (1 - Math.min(1, Math.max(0, (now - t) / span)));
+      const pts = s.history.filter((p) => now - p.t <= span);
+      ctx.font = "11px system-ui, sans-serif"; ctx.textBaseline = "middle";
+      const frame = (y0, h, ticks, fmt) => {
+        ctx.strokeStyle = "#d5dde2"; ctx.fillStyle = "#5f6b73"; ctx.lineWidth = 1;
+        for (const [frac, label] of ticks) {
+          const y = y0 + h * (1 - frac);
+          ctx.beginPath(); ctx.moveTo(left, y); ctx.lineTo(left + plotW, y); ctx.stroke();
+          ctx.textAlign = "right"; ctx.fillText(fmt(label), left - 6, y);
+        }
+      };
+      // CPU panel
+      const cpuY = top;
+      frame(cpuY, panelH, [[0, 0], [0.5, 50], [1, 100]], (v) => v + " %");
+      ctx.beginPath(); let started = false;
+      for (const p of pts) { if (p.cpu_pct === null) continue; const px = x(p.t), py = cpuY + panelH * (1 - p.cpu_pct / 100); if (!started) { ctx.moveTo(px, cpuY + panelH); ctx.lineTo(px, py); started = true; } else ctx.lineTo(px, py); }
+      if (started) {
+        const lastX = x(pts[pts.length - 1].t);
+        ctx.lineTo(lastX, cpuY + panelH); ctx.closePath();
+        ctx.fillStyle = "rgba(0, 114, 163, .18)"; ctx.fill();
+        ctx.beginPath(); started = false;
+        for (const p of pts) { if (p.cpu_pct === null) continue; const px = x(p.t), py = cpuY + panelH * (1 - p.cpu_pct / 100); if (!started) { ctx.moveTo(px, py); started = true; } else ctx.lineTo(px, py); }
+        ctx.strokeStyle = "#0072a3"; ctx.lineWidth = 1.5; ctx.stroke();
+      }
+      // network panel: scale to the peak (at least 1 MB/s so an idle helper does not look noisy)
+      const netY = top + panelH + gap;
+      const MiB = 1024 * 1024;
+      const peak = Math.max(MiB, ...pts.map((p) => Math.max(p.rx_bps || 0, p.tx_bps || 0)));
+      const nice = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1024, 2048, 5120, 10240].map((v) => v * MiB).find((v) => v >= peak) || peak;
+      frame(netY, panelH, [[0, 0], [0.5, nice / 2], [1, nice]], (v) => v ? fmtBytes(v) + "/s" : "0");
+      const line = (key, color) => {
+        ctx.beginPath(); let on = false;
+        for (const p of pts) { if (p[key] === null) { on = false; continue; } const px = x(p.t), py = netY + panelH * (1 - Math.min(1, p[key] / nice)); if (!on) { ctx.moveTo(px, py); on = true; } else ctx.lineTo(px, py); }
+        ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.stroke();
+      };
+      line("rx_bps", "#2f8b3a"); line("tx_bps", "#d9822b");
+      // time axis: "-10 min" ... "now"
+      ctx.fillStyle = "#5f6b73"; ctx.textAlign = "left"; ctx.fillText(`-${Math.round(span / 60)} min`, left, cssH - bottom / 2);
+      ctx.textAlign = "right"; ctx.fillText("now", left + plotW, cssH - bottom / 2);
+      ctx.textAlign = "center"; ctx.fillText(`-${Math.round(span / 120)} min`, left + plotW / 2, cssH - bottom / 2);
+      chartRange.textContent = pts.length ? `${pts.length} samples` : "collecting samples...";
+    };
+    const pollStats = async () => {
+      try { renderStats(await api("GET", "/setup/stats")); }
+      catch (e) { if (e.status === 401) return; statsNote.textContent = e.message; }
+      statsTimer = setTimeout(pollStats, 3000);
+    };
+    const onResize = () => { if (lastStats && lastStats.available) drawChart(lastStats); };
+    window.addEventListener("resize", onResize);
+
     try {
       const [inf, lg, op] = await Promise.all([api("GET", "/setup/info"), api("GET", "/setup/logging"), api("GET", "/setup/operation")]);
       info = inf;
       renderLogging(lg);
       renderOperation(op);
     } catch (e) { if (e.status !== 401) showError(e.message); return; }
+    activePoll = () => { clearTimeout(timer); clearTimeout(statsTimer); window.removeEventListener("resize", onResize); };
+    pollStats();
     await loadSoftware(true);
-    activePoll = () => clearTimeout(timer);
   }
 
   // ------------------------------------------------------------------- routing

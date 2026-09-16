@@ -325,6 +325,12 @@ def test_setup_info_and_software_status_without_source_install(env):
     sw = c.get("/api/setup/software").json()
     assert sw["install_method"] == "none" and sw["can_update"] is False and "not installed from source" in sw["reason"]
     assert c.post("/api/setup/software/update", json={}).status_code == 409
+    # resource usage: always answers; on a host without /proc only the disks are filled in
+    st = c.get("/api/setup/stats").json()
+    assert st["cpu_count"] >= 1 and st["interval_s"] > 0 and isinstance(st["history"], list)
+    assert st["disks"] and st["disks"][0]["total_bytes"] > 0
+    if not st["available"]:
+        assert "/proc" in st["note"] and st["cpu_pct"] is None
     assert not any(cmd[0] == "systemd-run" for cmd in env.commands)
 
 

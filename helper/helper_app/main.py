@@ -25,6 +25,7 @@ from helper_app.jobs.store import JobStore
 from helper_app.oci.clients import OciClients, build_clients
 from helper_app.oci.provision import Provisioner
 from helper_app.sessions import SessionStore
+from helper_app.sysstat import StatsSampler
 from helper_app.updater import Runner, Updater, _default_runner
 from helper_app.vsphere.session import VCenterConnector
 
@@ -42,6 +43,7 @@ def create_app(
     scan_devices: DeviceScanner = scan_block_devices,
     tunnel_factory: TunnelFactory = open_vnc_stream,
     guest_fixer=None,  # post-copy guest fix-up (injectable for tests; default: helper_app.guest.fixup.GuestFixer)
+    stats: Optional[StatsSampler] = None,  # helper resource usage for the Setup page
 ) -> FastAPI:
     settings = settings or get_settings()
 
@@ -69,12 +71,15 @@ def create_app(
         # remote consoles: instance console connections + SSH tunnels bridged into the browser
         app.state.consoles = ConsoleManager(app.state.clients, settings, tunnel_factory=tunnel_factory)
         app.state.consoles.start()
+        app.state.stats = stats or StatsSampler()
+        app.state.stats.start()
         ident = app.state.clients.identity_info
         log.info("helper %s ready in %s / %s; vCenter %s", ident.instance_id, ident.region,
                  ident.availability_domain, settings.vcenter_host or "(not configured)")
         try:
             yield
         finally:
+            app.state.stats.stop()
             await app.state.consoles.close_all()
             app.state.runner.shutdown()
             app.state.sessions.close_all()

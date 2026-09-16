@@ -101,6 +101,8 @@ helper/
     sessions.py        web sessions bound to per-user vCenter connections (pinned by running jobs)
     auth.py            cookie-based session dependency
     runtime_settings.py  Setup page overrides (logging, concurrency, session timeout) persisted to JSON
+    sysstat.py         helper resource usage for the Setup page (CPU, memory, disk, network from /proc,
+                       sampled every 2 s with a 10-minute history for the live chart)
     api/               routes_auth, routes_vms, routes_jobs, routes_console, routes_oci, routes_setup
     vsphere/           session (pyVmomi login), inventory (VM list, VmSpec, preflight), export (NFC lease)
     disk/              stream-optimized VMDK decoder/encoder, positional block-device writer

@@ -14,6 +14,7 @@ from helper_app.auth import require_session
 from helper_app.logging_config import LoggingSettings, LoggingStatus
 from helper_app.models import JobPhase
 from helper_app.runtime_settings import OperationSettings, OperationStatus
+from helper_app.sysstat import SystemStats
 from helper_app.updater import SoftwareStatus, UpdateError
 
 log = logging.getLogger(__name__)
@@ -50,6 +51,12 @@ def setup_info(request: Request):
         "sessions": len(st.sessions),
         "active_jobs": _active_jobs(request),
     }
+
+
+@router.get("/stats", response_model=SystemStats)
+def setup_stats(request: Request):
+    """Resource usage of the helper VM (CPU, memory, disk, network) with a short history for the chart."""
+    return request.app.state.stats.current()
 
 
 class JobsPurgeResult(BaseModel):

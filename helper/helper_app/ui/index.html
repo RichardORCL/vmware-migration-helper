@@ -267,6 +267,22 @@
       <section class="card">
         <h2>Helper</h2>
         <div id="setup-kv" class="kv"></div>
+        <hr class="sep">
+        <div class="toolbar">
+          <h3>Resource usage</h3>
+          <span id="stats-note" class="muted"></span>
+        </div>
+        <div id="stats-kv" class="kv"></div>
+        <!-- live chart: CPU utilisation (top) and network throughput (bottom) over the last 10 minutes -->
+        <div class="chart-wrap">
+          <canvas id="stats-chart" height="220" aria-label="CPU and network usage over the last 10 minutes" role="img"></canvas>
+          <div class="chart-legend muted">
+            <span><i class="swatch cpu"></i> CPU %</span>
+            <span><i class="swatch rx"></i> received</span>
+            <span><i class="swatch tx"></i> sent</span>
+            <span id="stats-chart-range"></span>
+          </div>
+        </div>
       </section>
 
       <section class="card">

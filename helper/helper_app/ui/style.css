@@ -67,6 +67,20 @@ pre.log { background: #1b2a32; color: #d7e0e5; padding: 10px; border-radius: 3px
 .badge.warn { background: #fff4d6; color: var(--warn); }
 .badge.bad { background: #fbe5e1; color: var(--danger); }
 .nowrap { white-space: nowrap; }
+/* Setup > Helper > Resource usage: meters next to the numbers and the live canvas chart */
+.setup .toolbar h3 { margin: 0; font-size: 14px; }
+.meter { display: inline-block; vertical-align: middle; width: 120px; height: 8px; margin-right: 8px; background: #e1e6ea; border-radius: 4px; overflow: hidden; }
+.meter > span { display: block; height: 100%; background: var(--primary); transition: width .4s; }
+.meter.warn > span { background: var(--warn); }
+.meter.bad > span { background: var(--danger); }
+.chart-wrap { margin-top: 10px; }
+.chart-wrap canvas { display: block; width: 100%; height: 220px; }
+.chart-legend { display: flex; gap: 16px; font-size: 12px; margin-top: 4px; flex-wrap: wrap; }
+.chart-legend span:last-child { margin-left: auto; }
+.swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+.swatch.cpu { background: #0072a3; }
+.swatch.rx { background: #2f8b3a; }
+.swatch.tx { background: #d9822b; }
 /* (i) button next to a badge: opens a help dialog */
 button.info { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; padding: 0; margin-left: 4px; border-radius: 50%; border: 1px solid var(--primary); background: #fff; color: var(--primary); font: 700 11px/1 Georgia, serif; vertical-align: middle; cursor: pointer; }
 button.info:hover { background: var(--primary); color: #fff; }

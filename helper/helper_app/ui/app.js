@@ -54,6 +54,34 @@
     for (const c of children) if (c !== null && c !== undefined) e.append(c.nodeType ? c : document.createTextNode(String(c)));
     return e;
   };
+  // "encrypted" badge with an (i) button opening the how-to-decrypt dialog; vm is a VmSummary (encrypted only)
+  // or a VmSpec (encrypted, has_vtpm, encrypted_disks), the steps are tailored to what is known
+  const encryptedBadge = (vm) => {
+    const disksOnly = !vm.encrypted && (vm.encrypted_disks || []).length > 0;
+    return el("span", { class: "nowrap" },
+      el("span", { class: "badge warn", title: "Encrypted VM: vSphere does not allow exporting it until it is decrypted" },
+        disksOnly ? "encrypted disks" : "encrypted"),
+      el("button", { class: "info", type: "button", title: "What to do to export this VM", "aria-label": "How to export an encrypted VM",
+        onclick: (ev) => { ev.preventDefault(); ev.stopPropagation(); showEncryptedHelp(vm); } }, "i"));
+  };
+  function showEncryptedHelp(vm) {
+    const dlg = document.getElementById("encrypted-help");
+    const known = "has_vtpm" in vm;  // VmSpec from the export page; the list only knows the flag
+    const windows = /windows/i.test(vm.guest_id || "") || /windows/i.test(vm.guest_full_name || "");
+    const disksOnly = known && !vm.encrypted && (vm.encrypted_disks || []).length > 0;
+    document.getElementById("encrypted-help-name").textContent = vm.name;
+    document.getElementById("encrypted-help-bitlocker").hidden = known && !windows;
+    document.getElementById("encrypted-help-vtpm").hidden = known && !vm.has_vtpm;
+    document.getElementById("encrypted-help-vm").hidden = disksOnly;
+    document.getElementById("encrypted-help-disks").hidden = known && !(vm.encrypted_disks || []).length;
+    if (!dlg.dataset.wired) {
+      dlg.dataset.wired = "1";
+      document.getElementById("encrypted-help-close").addEventListener("click", () => dlg.close());
+      dlg.addEventListener("click", (ev) => { if (ev.target === dlg) dlg.close(); });  // click on the backdrop
+      window.addEventListener("hashchange", () => { if (dlg.open) dlg.close(); });
+    }
+    dlg.showModal();
+  }
   const kv = (container, pairs) => {
     container.innerHTML = "";
     for (const [k, v] of pairs) { container.append(el("span", { class: "k" }, k), el("span", { class: "v" }, v)); }
@@ -437,7 +465,7 @@
         const why = vm.encrypted ? "The VM is encrypted (VM encryption or a virtual TPM): vSphere does not allow exporting it. Decrypt it in vCenter first"
           : off ? "" : on ? "The VM is powered on: it will be shut down just before the disk export" : "Resume and shut down, or power off the VM first";
         rows.append(el("tr", {},
-          el("td", { class: "name" }, vm.name, vm.encrypted ? el("span", { class: "badge warn", title: "Encrypted VM: not exportable until decrypted" }, "encrypted") : null),
+          el("td", { class: "name" }, vm.name, vm.encrypted ? " " : null, vm.encrypted ? encryptedBadge(vm) : null),
           el("td", { class: "muted" }, vm.folder || "-"),
           el("td", {}, el("span", { class: "power " + vm.power_state }, vm.power_state.replace("powered", "").toLowerCase())),
           el("td", {}, vm.guest_full_name || vm.guest_id || "-"),
@@ -499,8 +527,9 @@
       ["Power state", vm.power_state], ["ESXi host", vm.host_name || "-"],
       ["CPU / memory", `${vm.num_cpu} vCPU / ${fmtBytes(vm.memory_mb * 1024 * 1024)}`],
       ["Firmware", vm.firmware.toUpperCase() + (vm.secure_boot ? " (secure boot)" : "") + (vm.has_vtpm ? " + vTPM" : "")],
-      ...(vm.encrypted || vm.encrypted_disks.length ? [["Encryption", el("span", { class: "badge warn" },
-        vm.encrypted ? "VM encrypted" : "encrypted disks: " + vm.encrypted_disks.join(", "))]] : []),
+      ...(vm.encrypted || vm.encrypted_disks.length ? [["Encryption", el("span", {}, encryptedBadge(vm),
+        " ", vm.encrypted ? "VM encryption" + (vm.has_vtpm ? " with a Virtual TPM" : "") : vm.encrypted_disks.join(", "),
+        el("span", { class: "muted" }, " - click (i) for the steps to decrypt it in vCenter"))]] : []),
       ["Disks", vm.disks.map((d) => `${d.label}: ${fmtBytes(d.capacity_bytes)} on ${d.controller_type}`).join("; ")],
       // one line per adapter: type, port group and the last addresses VMware Tools reported (when vCenter knows them)
       ["Network", vm.nics.length ? el("span", {}, ...vm.nics.map((n) => el("div", {},

@@ -66,6 +66,16 @@ pre.log { background: #1b2a32; color: #d7e0e5; padding: 10px; border-radius: 3px
 .badge.ok { background: #e3f5e6; color: var(--ok); }
 .badge.warn { background: #fff4d6; color: var(--warn); }
 .badge.bad { background: #fbe5e1; color: var(--danger); }
+.nowrap { white-space: nowrap; }
+/* (i) button next to a badge: opens a help dialog */
+button.info { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; padding: 0; margin-left: 4px; border-radius: 50%; border: 1px solid var(--primary); background: #fff; color: var(--primary); font: 700 11px/1 Georgia, serif; vertical-align: middle; cursor: pointer; }
+button.info:hover { background: var(--primary); color: #fff; }
+dialog.help { max-width: 640px; border: 1px solid var(--border); border-radius: 4px; padding: 18px 22px; font-size: 14px; line-height: 1.5; }
+dialog.help::backdrop { background: rgba(0, 0, 0, .35); }
+dialog.help h2 { margin: 0 0 8px; font-size: 17px; }
+dialog.help ol { padding-left: 22px; }
+dialog.help li { margin: 6px 0; }
+dialog.help .actions { justify-content: flex-end; margin-top: 12px; }
 .form small { display: block; color: var(--muted); }
 .check { display: flex; gap: 6px; align-items: center; }
 .form fieldset { border: 1px solid var(--border); border-radius: 3px; margin: 8px 0; padding: 6px 10px; }

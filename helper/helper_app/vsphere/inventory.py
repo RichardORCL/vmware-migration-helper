@@ -351,7 +351,8 @@ def list_vm_summaries(si) -> list[VmSummary]:
                 num_disks=len(disks),
                 disk_capacity_bytes=capacity,
                 is_template=bool(vals.get("config.template", False)),
-                encrypted=vals.get("config.keyId") is not None or any(_is_vtpm(dev) for dev in devices),
+                encrypted=(vals.get("config.keyId") is not None or any(_is_vtpm(dev) for dev in devices)
+                           or any(_has_key(getattr(dev, "backing", None)) for dev in disks)),
             )
         )
     rows.sort(key=lambda r: (r.folder.lower(), r.name.lower()))

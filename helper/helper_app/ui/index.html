@@ -382,6 +382,34 @@
     </section>
   </template>
 
+  <!-- opened by the (i) next to an "encrypted" badge: what to do in vCenter before such a VM can be exported -->
+  <dialog id="encrypted-help" class="help">
+    <h2>Encrypted VM: <span id="encrypted-help-name"></span></h2>
+    <p>vSphere does not allow exporting an encrypted VM (<code>The operation is not supported on encrypted VM</code>),
+      and the helper needs that export to read the disks. A <strong>Virtual TPM</strong> device can only exist on an
+      encrypted VM, which is why Windows 11 VMs are usually encrypted. Decrypt the VM in vCenter first, the VM's data is
+      not touched:</p>
+    <ol>
+      <li id="encrypted-help-bitlocker">If BitLocker is enabled in Windows, <strong>suspend it</strong> first
+        (<code>manage-bde -protectors -disable C: -RebootCount 0</code>, or <em>Control Panel &gt; BitLocker &gt; Suspend
+        protection</em>). The OCI instance gets a different TPM anyway, so BitLocker would otherwise ask for the recovery
+        key after the migration.</li>
+      <li><strong>Power the VM off</strong> in vCenter.</li>
+      <li id="encrypted-help-vtpm"><em>Edit Settings &gt; Virtual Hardware</em>: <strong>remove the Virtual TPM device</strong>
+        (Windows 11 keeps booting without it once installed).</li>
+      <li id="encrypted-help-vm"><em>Edit Settings &gt; VM Options &gt; Encryption</em>: set <strong>Encrypt VM</strong> to
+        <strong>None</strong>. If the option is greyed out, the vTPM is still present or the account lacks the
+        <em>Cryptographic operations &gt; Decrypt</em> privilege.</li>
+      <li id="encrypted-help-disks">For an encrypted virtual disk: <em>Edit Settings &gt; VM Options &gt; Encryption</em> lists
+        the disks; pick a <strong>VM storage policy without encryption</strong> for each of them (or change the disk's
+        policy under <em>Virtual Hardware &gt; Hard disk &gt; VM storage policy</em>).</li>
+      <li>Back in the helper, click <em>Refresh</em> in the Source VMs list and start the migration. The OCI instance is
+        still launched as a shielded instance with Secure Boot and a vTPM when the source used Secure Boot.</li>
+    </ol>
+    <p class="muted">Optional afterwards: re-encrypt the source VM in vCenter, or keep it as it is for a rollback.</p>
+    <div class="actions"><button class="secondary" id="encrypted-help-close">Close</button></div>
+  </dialog>
+
   <script src="app.js"></script>
 </body>
 </html>

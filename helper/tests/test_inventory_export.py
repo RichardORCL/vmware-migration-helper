@@ -120,6 +120,7 @@ def test_encrypted_vms_are_refused_before_anything_is_created():
     (problem,) = preflight(win11)
     assert "encrypted" in problem and "Virtual TPM" in problem and "BitLocker" in problem and "Encrypt VM" in problem
     assert summary_of(make_vm(encrypted=True)).encrypted and summary_of(make_vm(vtpm=True)).encrypted
+    assert summary_of(make_vm(encrypted_disks=(0,))).encrypted
     assert summary_of(make_vm()).encrypted is False
 
     # encrypted VM home without vTPM

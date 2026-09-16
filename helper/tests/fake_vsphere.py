@@ -157,7 +157,8 @@ def summary_of(vm) -> VmSummary:
         memory_mb=vm.config.hardware.memoryMB, num_disks=len(disks),
         disk_capacity_bytes=sum(d.capacityInBytes for d in disks), is_template=bool(vm.config.template),
         encrypted=vm.config.keyId is not None
-        or any(type(dev).__name__.endswith("VirtualTPM") for dev in vm.config.hardware.device),
+        or any(type(dev).__name__.endswith("VirtualTPM") for dev in vm.config.hardware.device)
+        or any(getattr(d.backing, "keyId", None) is not None for d in disks),
     )
 
 

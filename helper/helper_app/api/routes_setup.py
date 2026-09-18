@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 
 from helper_app import __version__, logging_config, runtime_settings
-from helper_app.auth import require_vcenter_session
+from helper_app.auth import require_session
 from helper_app.logging_config import LoggingSettings, LoggingStatus
 from helper_app.models import JobPhase
 from helper_app.runtime_settings import OperationSettings, OperationStatus
@@ -19,7 +19,8 @@ from helper_app.updater import SoftwareStatus, UpdateError
 
 log = logging.getLogger(__name__)
 # the Setup page changes the helper's operation and can update it: vCenter-authenticated users only
-router = APIRouter(prefix="/api/setup", tags=["setup"], dependencies=[Depends(require_vcenter_session)])
+# any UI session: the Setup page (logging, concurrency, software update, image cleanup) needs no vCenter
+router = APIRouter(prefix="/api/setup", tags=["setup"], dependencies=[Depends(require_session)])
 
 
 class UpdateRequest(BaseModel):

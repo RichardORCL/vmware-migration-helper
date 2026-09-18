@@ -1094,14 +1094,14 @@ def test_anonymous_session_covers_iso_flow_but_not_vcenter_functions(env):
     assert len(env.app.state.sessions._sessions) == 1
     anonymous(c)
     assert len(env.app.state.sessions._sessions) == 1
-    # what the ISO flow needs works without a vCenter login...
+    # what the ISO flow needs works without a vCenter login, and so does the Setup page...
     for path in ("/api/jobs", "/api/oci/options", "/api/oci/buckets", f"/api/oci/objects?bucket={ISO_BUCKET}",
-                 "/api/oci/os-catalog"):
+                 "/api/oci/os-catalog", "/api/setup/logging", "/api/setup/info"):
         assert c.get(path).status_code == 200, path
-    # ...the VMware side does not: inventory, VMware job creation and the Setup page need a vCenter session
+    assert c.delete("/api/iso-images").status_code == 200
+    # ...the VMware side does not: inventory and VMware job creation need a vCenter session
     assert c.get("/api/vms").status_code == 403
     assert c.post("/api/jobs", json={"vm_moid": "vm-101", "target": target()}).status_code == 403
-    assert c.get("/api/setup/logging").status_code == 403
     assert env.vcenter.sessions == []  # nothing was opened towards vCenter
     # log out ends the anonymous session
     assert c.post("/api/auth/logout").status_code == 204

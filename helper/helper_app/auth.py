@@ -25,7 +25,7 @@ async def require_session(request: Request) -> UserSession:
 
 
 async def require_vcenter_session(request: Request) -> UserSession:
-    """A session with a vCenter connection behind it (VM inventory, VMware migrations, Setup page)."""
+    """A session with a vCenter connection behind it (VM inventory, VMware migrations)."""
     session = await require_session(request)
     if session.vc is None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "this function needs a vCenter login")

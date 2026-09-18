@@ -1571,10 +1571,10 @@
     if ((m = /^#\/jobs\/([^/]+)\/console$/.exec(hash))) return consoleView(decodeURIComponent(m[1]));
     if ((m = /^#\/jobs\/(.+)$/.exec(hash))) return jobDetailView(decodeURIComponent(m[1]));
     if (hash === "#/jobs") return jobsView();
-    // everything below needs a vCenter login; the anonymous session is sent to its own entry points
-    if (anonymous) { location.hash = hash === "#/setup" || hash === "#/vms" ? "#/iso" : "#/start"; return; }
-    if ((m = /^#\/export\/(.+)$/.exec(hash))) return exportView(decodeURIComponent(m[1]));
     if (hash === "#/setup") return setupView();
+    // everything below needs a vCenter login; the anonymous session is sent to its own entry points
+    if (anonymous) { location.hash = hash === "#/vms" ? "#/iso" : "#/start"; return; }
+    if ((m = /^#\/export\/(.+)$/.exec(hash))) return exportView(decodeURIComponent(m[1]));
     return vmsView();
   }
 

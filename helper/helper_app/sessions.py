@@ -14,6 +14,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+from helper_app.azure.session import AzureSession
 from helper_app.models import SessionInfo
 from helper_app.vsphere.session import VCenterSession
 
@@ -24,13 +25,15 @@ ANONYMOUS_USER = "anonymous"
 
 
 class UserSession:
-    """A web UI session.  ``vc`` is the vCenter connection of a logged-in user, or ``None`` for an
-    *anonymous* session (the ISO flow needs no vSphere)."""
+    """A web UI session.  ``vc`` is the vCenter connection of a logged-in user, ``azure`` the service
+    principal of an Azure login; both ``None`` for an *anonymous* session (the ISO flow needs neither)."""
 
-    def __init__(self, token: str, vc: Optional[VCenterSession], ttl_s: float):
+    def __init__(self, token: str, vc: Optional[VCenterSession], ttl_s: float,
+                 azure: Optional[AzureSession] = None):
         self.token = token
         self.vc = vc
-        self.username = vc.username if vc is not None else ANONYMOUS_USER
+        self.azure = azure
+        self.username = vc.username if vc is not None else (azure.username if azure is not None else ANONYMOUS_USER)
         self.created_at = datetime.now(timezone.utc)
         self.ttl_s = ttl_s
         self._last_used = time.monotonic()
@@ -62,12 +65,16 @@ class UserSession:
 
     @property
     def anonymous(self) -> bool:
-        return self.vc is None
+        return self.vc is None and self.azure is None
 
     def info(self) -> SessionInfo:
-        if self.vc is None:
+        if self.vc is None and self.azure is None:
             return SessionInfo(username=self.username, anonymous=True, created_at=self.created_at,
                                expires_at=self.expires_at)
+        if self.vc is None:
+            return SessionInfo(username=self.username, azure_tenant_id=self.azure.tenant_id,
+                               azure_client_id=self.azure.client_id, azure_subscriptions=self.azure.subscriptions,
+                               created_at=self.created_at, expires_at=self.expires_at)
         return SessionInfo(username=self.username, vcenter_host=self.vc.host,
                            vcenter_port=getattr(self.vc, "port", 443), vcenter_version=self.vc.version,
                            verify_ssl=bool(getattr(self.vc, "verify_ssl", False)),
@@ -82,8 +89,8 @@ class UserSession:
         with self._lock:
             self._pins.discard(job_id)
             close = self._dead and not self._pins
-        if close and self.vc is not None:
-            self.vc.close()
+        if close:
+            self._close_backends()
 
     @property
     def pinned_jobs(self) -> set[str]:
@@ -91,12 +98,18 @@ class UserSession:
             return set(self._pins)
 
     def kill(self) -> None:
-        """Mark the session unusable for the UI; disconnect from vCenter unless a job still needs it."""
+        """Mark the session unusable for the UI; disconnect from vCenter / Azure unless a job still needs it."""
         with self._lock:
             self._dead = True
             close = not self._pins
-        if close and self.vc is not None:
+        if close:
+            self._close_backends()
+
+    def _close_backends(self) -> None:
+        if self.vc is not None:
             self.vc.close()
+        if self.azure is not None:
+            self.azure.close()
 
 
 class SessionStore:
@@ -105,10 +118,11 @@ class SessionStore:
         self._sessions: dict[str, UserSession] = {}
         self._lock = threading.Lock()
 
-    def create(self, vc: Optional[VCenterSession]) -> UserSession:
-        """New session for a vCenter login, or an anonymous one (``vc=None``) for the ISO flow."""
+    def create(self, vc: Optional[VCenterSession], azure: Optional[AzureSession] = None) -> UserSession:
+        """New session for a vCenter login, an Azure login, or an anonymous one (both ``None``) for the ISO
+        flow."""
         token = secrets.token_urlsafe(32)
-        session = UserSession(token, vc, self.ttl_s)
+        session = UserSession(token, vc, self.ttl_s, azure=azure)
         with self._lock:
             self._sessions[token] = session
         log.info("session created for %s", session.username)
@@ -154,8 +168,7 @@ class SessionStore:
             sessions = list(self._sessions.values())
             self._sessions.clear()
         for s in sessions:
-            if s.vc is not None:
-                s.vc.close()
+            s._close_backends()
 
     def __len__(self) -> int:
         with self._lock:

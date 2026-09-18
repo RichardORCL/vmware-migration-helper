@@ -11,16 +11,20 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import PlainTextResponse
 
 from helper_app import diagnostics
+from helper_app.api import routes_azure_vms
 from helper_app.api.routes_vms import inspect
-from helper_app.auth import require_session, require_vcenter_session
+from helper_app.auth import require_azure_session, require_session, require_vcenter_session
 from helper_app.jobs.store import utcnow
 from helper_app.models import (
+    AzureSourceInfo,
+    CreateAzureJobRequest,
     CreateIsoJobRequest,
     CreateJobRequest,
     DiskState,
     InstanceStatus,
     Job,
     JobPhase,
+    VmInspection,
     WindowsLicenseType,
 )
 from helper_app.oci.clients import describe_error
@@ -75,6 +79,25 @@ async def _check_target(st, target, allow_arm: bool = False) -> None:
                                 f"cannot verify private IP {target.private_ip}: {describe_error(exc)}")
 
 
+async def _check_guest_os(st, inspection: VmInspection, target, source: str) -> None:
+    """Windows license and OS release checks shared by the VMware and Azure jobs."""
+    if inspection.vm.is_windows and target.windows_license_type is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "a Windows license type must be selected")
+    os_meta = map_guest_os(inspection.vm.guest_id, inspection.vm.guest_full_name)
+    if not os_meta.version_detected and not target.operating_system_version and os_version_choices(os_meta):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"{source} does not report which {os_meta.operating_system} release the guest runs; select the "
+            f"OS version ({', '.join(os_version_choices(os_meta))})",
+        )
+    os_meta = with_os_version(os_meta, target.operating_system_version)
+    if (os_meta.operating_system_version in WINDOWS_CLIENT_VERSIONS
+            and target.windows_license_type == WindowsLicenseType.OCI_PROVIDED):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            "OCI does not provide licenses for Windows 10/11; select Bring your own license")
+    await _check_target(st, target)
+
+
 @router.post("", response_model=Job, status_code=status.HTTP_202_ACCEPTED)
 async def create_job(body: CreateJobRequest, request: Request,
                      session: UserSession = Depends(require_vcenter_session)):
@@ -86,21 +109,7 @@ async def create_job(body: CreateJobRequest, request: Request,
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             f"{inspection.vm.name} is powered on; confirm that it may be shut down for the "
                             "migration (power_off_source), or power it off in vCenter first")
-    if inspection.vm.is_windows and body.target.windows_license_type is None:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "a Windows license type must be selected")
-    os_meta = map_guest_os(inspection.vm.guest_id, inspection.vm.guest_full_name)
-    if not os_meta.version_detected and not body.target.operating_system_version and os_version_choices(os_meta):
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            f"vSphere does not report which {os_meta.operating_system} release the guest runs; select the "
-            f"OS version ({', '.join(os_version_choices(os_meta))})",
-        )
-    os_meta = with_os_version(os_meta, body.target.operating_system_version)
-    if (os_meta.operating_system_version in WINDOWS_CLIENT_VERSIONS
-            and body.target.windows_license_type == WindowsLicenseType.OCI_PROVIDED):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST,
-                            "OCI does not provide licenses for Windows 10/11; select Bring your own license")
-    await _check_target(st, body.target)
+    await _check_guest_os(st, inspection, body.target, "vSphere")
     active = st.store.active_for_vm(body.vm_moid)
     if active is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, f"job {active.id} for this VM is still {active.phase.value}")
@@ -115,6 +124,55 @@ async def create_job(body: CreateJobRequest, request: Request,
         phase=JobPhase.QUEUED,
         message="Queued" + (" (the VM is shut down right before the disk export)" if inspection.needs_power_off
                             else ""),
+        disks=[DiskState(index=d.index, label=d.label, capacity_bytes=d.capacity_bytes, is_boot=(d.index == 0))
+               for d in inspection.vm.disks],
+        created_by=session.username,
+        created_at=now,
+        updated_at=now,
+    )
+    st.store.put(job)
+    st.runner.submit(job.id, session)
+    return job
+
+
+@router.post("/azure", response_model=Job, status_code=status.HTTP_202_ACCEPTED)
+async def create_azure_job(body: CreateAzureJobRequest, request: Request,
+                           session: UserSession = Depends(require_azure_session)):
+    """Migrate an Azure VM: its managed disks are exported (after deallocating the VM, or from snapshots
+    while it runs) and copied onto OCI volumes like a vSphere VM's."""
+    st = request.app.state
+    details = await asyncio.to_thread(routes_azure_vms.inspect_details, session, body.vm_id)
+    inspection = routes_azure_vms.inspect(session, body.vm_id, body.capture_mode, details)
+    if not inspection.can_export:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "; ".join(inspection.problems))
+    if inspection.needs_power_off and not body.power_off_source:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            f"{inspection.vm.name} is {inspection.vm.power_state.replace('poweredOn', 'running')}; "
+                            "confirm that it may be deallocated for the migration (power_off_source), deallocate "
+                            "it in Azure first, or choose snapshot mode")
+    await _check_guest_os(st, inspection, body.target, "Azure")
+    vm_key = inspection.vm.moid
+    active = st.store.active_for_vm(vm_key)
+    if active is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, f"job {active.id} for this VM is still {active.phase.value}")
+    now = utcnow()
+    az = session.azure
+    job = Job(
+        id=uuid.uuid4().hex,
+        kind="azure",
+        vm=inspection.vm,
+        azure=AzureSourceInfo(
+            tenant_id=az.tenant_id, subscription_id=details.subscription_id,
+            subscription_name=az.subscription_name(details.subscription_id), resource_group=details.resource_group,
+            location=details.location, vm_size=details.vm_size, capture_mode=body.capture_mode,
+            disk_ids=details.disk_ids,
+        ),
+        target=body.target,
+        power_off_source=inspection.needs_power_off,
+        phase=JobPhase.QUEUED,
+        message="Queued" + (" (the VM is deallocated right before the disk export)" if inspection.needs_power_off
+                            else (" (the disks are snapshotted right before the export)"
+                                  if body.capture_mode == "snapshot" else "")),
         disks=[DiskState(index=d.index, label=d.label, capacity_bytes=d.capacity_bytes, is_boot=(d.index == 0))
                for d in inspection.vm.disks],
         created_by=session.username,
@@ -221,7 +279,7 @@ async def job_diagnostics(job_id: str, request: Request):
 
 
 @router.post("/{job_id}/cancel", response_model=Job, status_code=status.HTTP_202_ACCEPTED)
-def cancel_job(job_id: str, request: Request):
+def cancel_job(job_id: str, request: Request, session: UserSession = Depends(require_session)):
     st = request.app.state
     job = _get_job(request, job_id)
     if job.phase in (JobPhase.COMPLETED, JobPhase.CANCELLED):
@@ -231,11 +289,12 @@ def cancel_job(job_id: str, request: Request):
         job.message = "Cancellation requested"
         st.store.put(job)
         return job
-    # not running (failed or interrupted by a restart): tear down whatever was created
+    # not running (failed or interrupted by a restart): tear down whatever was created.  An Azure job may
+    # still hold export SAS / snapshots; the caller's Azure login (if any) is used to release them.
     job.step = "cancel_queued"
     job.message = "Cleaning up OCI resources"
     st.store.put(job)
-    st.runner.cleanup(job.id)
+    st.runner.cleanup(job.id, session if session.azure is not None else None)
     return job
 
 

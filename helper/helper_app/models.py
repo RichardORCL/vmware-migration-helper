@@ -94,6 +94,8 @@ class VmSummary(BaseModel):
     disk_capacity_bytes: int = 0
     is_template: bool = False
     encrypted: bool = False  # VM encryption (or a vTPM, which requires it): not exportable until decrypted
+    vm_size: str = ""  # Azure: the VM size name (Standard_D2s_v3); the list has no vCPU/RAM figures
+    location: str = ""  # Azure: region of the VM
 
 
 class GuestOsMapping(BaseModel):
@@ -345,24 +347,50 @@ class GuestFixup(BaseModel):
     log: list[str] = Field(default_factory=list, description="Step-by-step notes for diagnostics")
 
 
-JobKind = Literal["vmware", "iso"]
+JobKind = Literal["vmware", "iso", "azure"]
+
+AzureCaptureMode = Literal["deallocate", "snapshot"]
+
+
+class AzureSourceInfo(BaseModel):
+    """Where an Azure job's VM lives and how its disks are captured."""
+
+    tenant_id: str
+    subscription_id: str
+    subscription_name: str = ""
+    resource_group: str
+    location: str = ""
+    vm_size: str = ""
+    capture_mode: AzureCaptureMode = Field(
+        default="deallocate",
+        description="deallocate: stop (deallocate) the VM and export its disks - consistent copy, the VM is down "
+                    "during the copy; snapshot: snapshot the disks and export the snapshots while the VM keeps "
+                    "running - crash-consistent copy, snapshot storage cost until the job ends",
+    )
+    disk_ids: list[str] = Field(default_factory=list, description="Managed disk resource IDs, in DiskSpec order")
+    snapshot_ids: list[str] = Field(default_factory=list, description="Snapshots created by this job (snapshot mode)")
+    sas_granted: list[str] = Field(default_factory=list,
+                                   description="Resource IDs (disks or snapshots) with an export SAS still granted")
+    sas_expires_at: Optional[datetime] = None
 
 
 class Job(BaseModel):
     id: str
-    kind: JobKind = "vmware"  # vmware: VM migrated from vSphere; iso: instance installed from an ISO image
+    kind: JobKind = "vmware"  # vmware: VM from vSphere; iso: instance installed from an ISO; azure: VM from Azure
     phase: JobPhase = JobPhase.QUEUED
     step: str = ""
     step_percent: Optional[int] = None  # progress of the current step when OCI reports one (work requests)
     message: str = ""
     error: Optional[str] = None
-    vm: Optional[VmSpec] = None  # the source VM (vmware jobs)
+    vm: Optional[VmSpec] = None  # the source VM (vmware and azure jobs)
     iso: Optional[IsoSpec] = None  # the installer ISO (iso jobs)
     iso_image_id: Optional[str] = None  # custom image imported from the ISO (iso jobs)
+    azure: Optional[AzureSourceInfo] = None  # subscription / resource group / capture mode (azure jobs)
     vcenter_host: str = ""  # vCenter the VM was inspected on ("host" or "host:port"); tagged onto the instance
     target: OciTarget
     power_off_source: bool = False  # VM was powered on when the job was created; shut it down before the export
-    power_off_result: Optional[str] = None  # already_off | guest_shutdown | powered_off (hard)
+    # already_off | guest_shutdown | powered_off (hard) | deallocated (Azure) | snapshotted (Azure snapshot mode)
+    power_off_result: Optional[str] = None
     launch_options: Optional[LaunchOptionsSpec] = None
     seed_image_id: Optional[str] = None
     instance_id: Optional[str] = None
@@ -441,6 +469,19 @@ class CreateIsoJobRequest(BaseModel):
     target: OciTarget
 
 
+class CreateAzureJobRequest(BaseModel):
+    """Migrate an Azure VM (needs an Azure login on the session)."""
+
+    vm_id: str = Field(description="Azure resource ID of the virtual machine")
+    target: OciTarget
+    capture_mode: AzureCaptureMode = "deallocate"
+    power_off_source: bool = Field(
+        default=False,
+        description="Deallocate mode with a running VM: the user confirmed that the migration tool deallocates "
+                    "(stops) the VM right before the disk export",
+    )
+
+
 class InstanceStatus(BaseModel):
     """Live state of the job's target instance as OCI reports it (GET /api/jobs/{id}/instance)."""
 
@@ -465,13 +506,28 @@ class LoginRequest(BaseModel):
                                   "None = HELPER_VCENTER_VERIFY_SSL")
 
 
+class AzureLoginRequest(BaseModel):
+    tenant_id: str = Field(description="Entra ID tenant: GUID or verified domain (contoso.onmicrosoft.com)")
+    client_id: str = Field(description="Application (client) ID of the service principal")
+    client_secret: str
+
+
+class AzureSubscription(BaseModel):
+    id: str
+    name: str = ""
+    state: str = ""
+
+
 class SessionInfo(BaseModel):
     username: str
-    anonymous: bool = False  # ISO flow: a UI session without a vCenter login
+    anonymous: bool = False  # ISO flow: a UI session without a vCenter or Azure login
     vcenter_host: str = ""
     vcenter_port: int = 443
     vcenter_version: str = ""
     verify_ssl: bool = False
+    azure_tenant_id: str = ""  # set when the session is an Azure (service principal) login
+    azure_client_id: str = ""
+    azure_subscriptions: list[AzureSubscription] = Field(default_factory=list)
     created_at: datetime
     expires_at: datetime
 

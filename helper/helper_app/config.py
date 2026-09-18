@@ -44,6 +44,14 @@ class Settings(BaseSettings):
     # hard power-off when Tools is not running or the guest has not stopped after this many seconds
     guest_shutdown_timeout_s: int = 300
 
+    # Azure source: managed disks are exported through a read SAS (beginGetAccess) on the disk or on a
+    # snapshot; the allocated page ranges are downloaded with parallel range requests.
+    azure_sas_duration_s: int = 24 * 3600  # validity of the export SAS; renewed when a copy outlives it
+    azure_range_workers: int = 4  # concurrent range downloads per disk
+    azure_range_chunk_bytes: int = 8 * 1024 * 1024  # size of one range request
+    azure_deallocate_timeout_s: int = 900
+    azure_snapshot_timeout_s: int = 900  # snapshot creation (snapshot mode), per disk
+
     # Logging (both adjustable from the Setup page; changes persist in runtime_settings_path)
     log_level: str = "INFO"
     oci_log_requests: bool = False  # log every OCI SDK request/response (bodies included) at DEBUG

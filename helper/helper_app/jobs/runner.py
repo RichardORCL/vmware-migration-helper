@@ -4,6 +4,9 @@
     (confirmed by the user) -> open NFC lease on the user's vCenter session
     -> for each disk: GET stream-optimized VMDK, decode grains onto the attached OCI volume
        (retried from the beginning on failure) -> finalize (Provisioner.finalize)
+
+Azure jobs follow the same shape: provision -> deallocate the VM (or snapshot its disks) -> grant an export
+SAS per disk -> copy the allocated page ranges onto the attached OCI volume -> finalize.
 """
 
 from __future__ import annotations
@@ -16,8 +19,12 @@ from typing import Callable, Optional
 
 import httpx
 
+from helper_app.azure.client import AzureError
+from helper_app.azure.export import AzureDiskExport, release_azure_resources
+from helper_app.azure.inventory import power_state
 from helper_app.config import Settings
 from helper_app.disk.pipeline import PipelinedDecoder
+from helper_app.disk.vhd_range_copy import VhdCopyError, blob_length, copy_ranges, list_page_ranges
 from helper_app.disk.vmdk_stream import DecodeStats, StreamOptimizedDecoder, VmdkFormatError
 from helper_app.disk.writer import BlockDeviceWriter
 from helper_app.guest.fixup import GuestFixer, GuestFixerFn
@@ -85,7 +92,8 @@ class MigrationRunner:
 
     # --------------------------------------------------------------- control
     def submit(self, job_id: str, session: UserSession) -> Future:
-        """Start the migration ``job_id`` using ``session``'s vCenter connection."""
+        """Start the migration ``job_id`` using ``session``'s vCenter connection (VMware jobs) or Azure
+        service principal (Azure jobs)."""
         session.pin(job_id)
         with self._lock:
             self._sessions[job_id] = session
@@ -98,10 +106,14 @@ class MigrationRunner:
             self._running.add(job_id)
         return self.pool.submit(self._run_iso_safely, job_id)
 
-    def cleanup(self, job_id: str) -> Future:
-        """Tear down the OCI resources of a job that is not running (failed or restarted)."""
+    def cleanup(self, job_id: str, session: Optional[UserSession] = None) -> Future:
+        """Tear down the OCI resources of a job that is not running (failed or restarted).  ``session`` (an
+        Azure login) lets the cleanup also revoke export SAS / delete snapshots an Azure job left behind."""
         with self._lock:
             self._running.add(job_id)
+            if session is not None:
+                session.pin(job_id)
+                self._sessions[job_id] = session
         return self.pool.submit(self._cleanup_safely, job_id)
 
     def resume_finalize(self, job_id: str) -> Future:
@@ -203,11 +215,15 @@ class MigrationRunner:
         try:
             self._acquire_slot(job)
             slot = True
-            self._run(job)
+            if job.kind == "azure":
+                self._run_azure(job)
+            else:
+                self._run(job)
         except JobCancelled:
             self._save(job, message="Cancelled; cleaning up OCI resources")
             try:
                 self.prov.cleanup(job)
+                self._release_azure(job)
             except Exception as exc:  # noqa: BLE001
                 log.warning("cleanup for %s failed: %s", job.id, describe_error(exc))
                 job.phase = JobPhase.CANCELLED
@@ -222,6 +238,26 @@ class MigrationRunner:
             if slot:
                 self._release_slot()
             self._finish(job_id)
+
+    def _release_azure(self, job: Job) -> None:
+        """Revoke export SAS / delete snapshots still recorded on an Azure job, with the session that runs
+        (or cleans up) the job.  Appends the outcome to the job message."""
+        info = job.azure
+        if job.kind != "azure" or info is None or not (info.sas_granted or info.snapshot_ids):
+            return
+        session = self._sessions.get(job.id)
+        if session is None or session.azure is None:
+            left = [s.rsplit("/", 1)[-1] for s in info.sas_granted] + [s.rsplit("/", 1)[-1] for s in info.snapshot_ids]
+            job.message = (job.message + "; " if job.message else "") + (
+                "Azure resources left behind (no Azure login to release them): " + ", ".join(left)
+                + " - log in to Azure and cancel the job again, or revoke the export access (az disk/snapshot "
+                "revoke-access) and delete the snapshots in the portal")
+            self.store.put(job)
+            return
+        actions = release_azure_resources(session.azure.client, info)
+        if actions:
+            job.message = (job.message + "; " if job.message else "") + "Azure: " + "; ".join(actions)
+        self.store.put(job)
 
     def _run_iso_safely(self, job_id: str) -> None:
         job = self.store.get(job_id)
@@ -273,6 +309,7 @@ class MigrationRunner:
                 self.iso.cleanup(job)
             elif job is not None:
                 self.prov.cleanup(job)
+                self._release_azure(job)
         except Exception as exc:  # noqa: BLE001
             log.exception("cleanup of %s failed", job_id)
             if job is not None:
@@ -350,6 +387,179 @@ class MigrationRunner:
         self._save(job, JobPhase.FINALIZING, "Attaching volumes to the target instance")
         self.prov.finalize(job)
         self._save(job, message=f"Migration complete: instance {job.instance_id}")
+
+    # ------------------------------------------------------------------ Azure
+    def _run_azure(self, job: Job) -> None:
+        session = self._sessions[job.id]
+        if session.azure is None:
+            raise ExportError("the session that created the job has no Azure login")
+        client = session.azure.client
+        info = job.azure
+        if info is None:
+            raise ExportError("job has no Azure source information")
+
+        # 1. provision the OCI target and attach its volumes to the helper (identical to the VMware path)
+        self._save(job, JobPhase.PROVISIONING, "Requesting target instance and volumes in OCI")
+        self.prov.prepare(job, check_cancel=lambda: self._check_cancel(job))
+        self._check_cancel(job)
+
+        # 2. capture the source: deallocate the VM (its disks can only be exported then), or leave it running
+        #    and snapshot the disks (done inside AzureDiskExport)
+        self._save(job, JobPhase.EXPORTING, "Checking the source VM in Azure")
+        vm_id = job.vm.moid
+        vm = client.get_vm(vm_id)
+        state = power_state(vm)
+        job.vm.power_state = state
+        if info.capture_mode == "deallocate":
+            if state != "poweredOff":
+                if not job.power_off_source:
+                    raise ExportError(f"VM is {state.replace('poweredOn', 'running')}; it must be deallocated during "
+                                      "the export (or use snapshot mode)")
+                job.step = "power_off"
+                self._save(job, message=f"Deallocating {job.vm.name} in Azure")
+                client.deallocate_vm(vm_id, timeout_s=self.s.azure_deallocate_timeout_s,
+                                     on_wait=lambda: self._check_cancel(job))
+                job.power_off_result = "deallocated"
+                job.vm.power_state = "poweredOff"
+                self._save(job, message=f"{job.vm.name} deallocated")
+            elif job.power_off_source:
+                job.power_off_result = "already_off"
+        else:
+            job.power_off_result = "snapshotted"
+
+        job.step = "export_access"
+        what = "snapshots" if info.capture_mode == "snapshot" else "disks"
+        self._save(job, message=f"Granting export access to the {what} of {job.vm.name}")
+        export = AzureDiskExport(client, job.id, info, sas_duration_s=self.s.azure_sas_duration_s,
+                                 snapshot_timeout_s=self.s.azure_snapshot_timeout_s, save=lambda: self.store.put(job),
+                                 check_cancel=lambda: self._check_cancel(job))
+        with export:
+            job.transfer.started_at = job.transfer.started_at or utcnow()
+            job.transfer.percent = 0
+            self.store.put(job)
+            try:
+                for disk in job.disks:
+                    if disk.status == DiskStatus.COPIED:
+                        continue
+                    self._check_cancel(job)
+                    self._copy_azure_disk(job, disk, export, client)
+                job.transfer.percent = 100
+            finally:
+                job.transfer.finished_at = utcnow()
+                job.transfer.throughput_bps = 0.0
+        job.step = "export_released"
+        self._save(job, message="Export access revoked" + (", snapshots deleted" if info.capture_mode == "snapshot"
+                                                               else ""))
+
+        # 3. guest fix-up (Linux guests built on Hyper-V drivers need virtio in the initramfs like VMware ones)
+        self._check_cancel(job)
+        self._guest_fixup(job)
+
+        # 4. finalize
+        self._save(job, JobPhase.FINALIZING, "Attaching volumes to the target instance")
+        self.prov.finalize(job)
+        self._save(job, message=f"Migration complete: instance {job.instance_id}")
+
+    def _record_azure_progress(self, job: Job, disk: DiskState, received: int, written: int, chunks: int,
+                               rate_bps: float, written_before: int) -> None:
+        disk.bytes_received = received
+        disk.bytes_written = written
+        disk.grains_written = chunks
+        disk.throughput_bps = rate_bps
+        total = disk.stream_bytes or disk.capacity_bytes
+        disk.percent = max(0, min(99, int(received * 100 / total))) if total else 0
+        job.transfer.bytes_written = written_before + written
+        job.transfer.throughput_bps = rate_bps
+        job_total = sum(d.stream_bytes or d.capacity_bytes for d in job.disks)
+        done = sum(d.bytes_written for d in job.disks if d is not disk) + written
+        job.transfer.percent = max(0, min(99, int(done * 100 / job_total))) if job_total else 0
+
+    def _azure_progress_callback(self, job: Job, disk: DiskState, meter: RateMeter,
+                                 written_before: int) -> Callable[[int], None]:
+        """Per-chunk progress hook for ``copy_ranges`` (called from several download threads): counts the
+        bytes and persists the job every PROGRESS_SAVE_BYTES / PROGRESS_SAVE_SECONDS."""
+        lock = threading.Lock()
+        state = {"received": 0, "chunks": 0, "last_saved": 0, "last_saved_at": time.monotonic()}
+
+        def on_progress(n: int) -> None:
+            with lock:
+                state["received"] += n
+                state["chunks"] += 1
+                job.transfer.bytes_received += n
+                meter.add(n)
+                now = time.monotonic()
+                if (state["received"] - state["last_saved"] >= PROGRESS_SAVE_BYTES
+                        or now - state["last_saved_at"] >= PROGRESS_SAVE_SECONDS):
+                    state["last_saved"], state["last_saved_at"] = state["received"], now
+                    self._record_azure_progress(job, disk, state["received"], state["received"], state["chunks"],
+                                                meter.rate(), written_before)
+                    self.store.put(job)
+
+        return on_progress
+
+    def _copy_azure_disk(self, job: Job, disk: DiskState, export: AzureDiskExport, client) -> None:
+        last_error: Optional[Exception] = None
+        label = disk.label or f"disk {disk.index}"
+        for attempt in range(1, self.s.disk_retry_attempts + 1):
+            self._check_cancel(job)
+            disk.attempts = attempt
+            disk.status = DiskStatus.COPYING
+            disk.bytes_received = disk.bytes_written = disk.grains_written = 0
+            disk.percent = 0
+            disk.error = None
+            job.step = "copying"
+            self._save(job, message=f"Listing the allocated pages of {label} "
+                                    f"(attempt {attempt}/{self.s.disk_retry_attempts})")
+            try:
+                writer = BlockDeviceWriter(disk.device, expected_min_size=disk.capacity_bytes)
+            except (OSError, ValueError) as exc:
+                raise ExportError(f"cannot open {disk.device}: {exc}") from exc
+            meter = RateMeter()
+            written_before = sum(d.bytes_written for d in job.disks if d is not disk)
+            try:
+                writer.ensure_size(disk.capacity_bytes)
+                if export.expires_soon:
+                    export.refresh(disk.index)
+                sas = export.sas_url(disk.index)
+                length = blob_length(client, sas)
+                disk_bytes = min(disk.capacity_bytes, max(0, length - 512))
+                ranges = list_page_ranges(client, sas, disk_bytes)
+                allocated = sum(ln for _, ln in ranges)
+                disk.stream_bytes = allocated or None
+                self._save(job, message=f"Copying {label} to {disk.device}: {allocated:,} of {disk_bytes:,} bytes "
+                                        f"allocated in {len(ranges)} range(s)")
+                stats = copy_ranges(
+                    client, lambda: export.sas_url(disk.index), ranges, writer,
+                    chunk_bytes=self.s.azure_range_chunk_bytes, workers=self.s.azure_range_workers,
+                    check_cancel=lambda: self._check_cancel(job),
+                    on_progress=self._azure_progress_callback(job, disk, meter, written_before),
+                    refresh=lambda: export.refresh(disk.index),
+                )
+                self._record_azure_progress(job, disk, stats.bytes_received, stats.bytes_written,
+                                            stats.chunks_written, meter.rate(), written_before)
+                disk.percent = 100
+                disk.throughput_bps = 0.0
+                disk.status = DiskStatus.COPIED
+                self._save(job, message=f"{label} copied ({stats.bytes_received:,} bytes in "
+                                        f"{stats.chunks_written:,} range request(s)"
+                                        + (f", {stats.retries} retried" if stats.retries else "") + ")")
+                return
+            except JobCancelled:
+                disk.status = DiskStatus.FAILED
+                disk.error = "cancelled"
+                raise
+            except (ExportError, VhdCopyError, AzureError, OSError, httpx.HTTPError) as exc:
+                last_error = exc
+                disk.status = DiskStatus.FAILED
+                disk.throughput_bps = 0.0
+                job.transfer.throughput_bps = 0.0
+                disk.error = str(exc)
+                self._save(job, message=f"{label} attempt {attempt} failed: {exc}")
+                if attempt < self.s.disk_retry_attempts:
+                    time.sleep(min(30, 5 * attempt))
+            finally:
+                writer.close()
+        raise ExportError(f"{label} failed after {disk.attempts} attempts: {last_error}")
 
     def _guest_fixup(self, job: Job) -> None:
         want_initramfs, want_network = job.target.rebuild_initramfs, job.target.fix_network

@@ -1,4 +1,4 @@
-"""Login / logout with vCenter credentials."""
+"""Login / logout with vCenter credentials or an Azure service principal."""
 
 from __future__ import annotations
 
@@ -7,7 +7,8 @@ import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 
 from helper_app.auth import require_session, session_token
-from helper_app.models import LoginRequest, SessionInfo
+from helper_app.azure.client import AzureAuthError, AzureError
+from helper_app.models import AzureLoginRequest, LoginRequest, SessionInfo
 from helper_app.sessions import UserSession
 from helper_app.vsphere.session import VCenterAuthError, VCenterError
 
@@ -35,15 +36,36 @@ async def login(body: LoginRequest, request: Request, response: Response):
     # replace a previous session of this browser, if any
     st.sessions.logout(session_token(request))
     session = st.sessions.create(vc)
+    _set_cookie(st, response, session.token)
+    return session.info()
+
+
+@router.post("/azure/login", response_model=SessionInfo)
+async def azure_login(body: AzureLoginRequest, request: Request, response: Response):
+    """Log in with an Azure service principal (tenant, application/client ID, client secret).  The
+    credentials stay in memory with the session, like a vCenter login."""
+    st = request.app.state
+    try:
+        az = await asyncio.to_thread(st.azure.login, body.tenant_id, body.client_id, body.client_secret)
+    except AzureAuthError as exc:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc))
+    except AzureError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc))
+    st.sessions.logout(session_token(request))
+    session = st.sessions.create(None, azure=az)
+    _set_cookie(st, response, session.token)
+    return session.info()
+
+
+def _set_cookie(st, response: Response, token: str) -> None:
     response.set_cookie(
         st.settings.session_cookie_name,
-        session.token,
+        token,
         httponly=True,
         secure=st.settings.cookie_secure,
         samesite="strict",
         path="/",
     )
-    return session.info()
 
 
 @router.post("/anonymous", response_model=SessionInfo)
@@ -55,14 +77,7 @@ def anonymous(request: Request, response: Response):
     if existing is not None:
         return existing.info()
     session = st.sessions.create(None)
-    response.set_cookie(
-        st.settings.session_cookie_name,
-        session.token,
-        httponly=True,
-        secure=st.settings.cookie_secure,
-        samesite="strict",
-        path="/",
-    )
+    _set_cookie(st, response, session.token)
     return session.info()
 
 

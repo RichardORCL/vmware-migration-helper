@@ -17,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from helper_app import __version__, logging_config, runtime_settings
 from helper_app.api import (
     routes_auth,
+    routes_azure_vms,
     routes_console,
     routes_instances,
     routes_jobs,
@@ -24,6 +25,7 @@ from helper_app.api import (
     routes_setup,
     routes_vms,
 )
+from helper_app.azure.session import AzureConnector
 from helper_app.config import Settings, get_settings
 from helper_app.console.manager import ConsoleManager
 from helper_app.console.tunnel import TunnelFactory, open_vnc_stream
@@ -45,6 +47,7 @@ def create_app(
     clients: Optional[OciClients] = None,
     store: Optional[JobStore] = None,
     vcenter: Optional[VCenterConnector] = None,
+    azure: Optional[AzureConnector] = None,
     export_factory=None,
     updater: Optional[Updater] = None,
     command_runner: Runner = _default_runner,
@@ -67,6 +70,7 @@ def create_app(
         app.state.clients = clients or build_clients(settings)
         logging_config.apply(settings)  # the SDK clients exist now; enable their request loggers if asked
         app.state.vcenter = vcenter or VCenterConnector(settings)
+        app.state.azure = azure or AzureConnector(settings)
         app.state.sessions = SessionStore(settings.session_ttl_s)
         app.state.command_runner = command_runner  # runs git/systemctl/journalctl (injectable for tests)
         app.state.updater = updater or Updater(settings, runner=command_runner)
@@ -96,6 +100,7 @@ def create_app(
     app = FastAPI(title="OCI Ultimate Migration Tool", version=__version__, lifespan=lifespan)
     app.include_router(routes_auth.router)
     app.include_router(routes_vms.router)
+    app.include_router(routes_azure_vms.router)
     app.include_router(routes_jobs.router)
     app.include_router(routes_console.router)
     app.include_router(routes_oci.router)

@@ -64,6 +64,20 @@ def _fixup_lines(job: Job) -> str:
 
 
 def _source_lines(job: Job, settings: Settings) -> list[str]:
+    if job.vm is not None and job.azure is not None:
+        az = job.azure
+        return [
+            f"  source Azure VM: {job.vm.name} ({job.vm.moid}) guest={job.vm.guest_id} firmware={job.vm.firmware} "
+            f"cpu={job.vm.num_cpu} mem_mb={job.vm.memory_mb} disks={len(job.vm.disks)} "
+            f"power_off_source={job.power_off_source} power_off_result={job.power_off_result or '-'}",
+            f"  azure: tenant={az.tenant_id} subscription={az.subscription_id} resource_group={az.resource_group} "
+            f"location={az.location or '-'} vm_size={az.vm_size or '-'} capture_mode={az.capture_mode} "
+            f"snapshots={','.join(s.rsplit('/', 1)[-1] for s in az.snapshot_ids) or '-'} "
+            f"sas_granted={len(az.sas_granted)} "
+            f"sas_expires_at={az.sas_expires_at.isoformat() if az.sas_expires_at else '-'} "
+            f"range_workers={settings.azure_range_workers} chunk_bytes={settings.azure_range_chunk_bytes}",
+            _fixup_lines(job),
+        ]
     if job.vm is not None:
         return [
             f"  source VM: {job.vm.name} ({job.vm.moid}) guest={job.vm.guest_id} firmware={job.vm.firmware} "

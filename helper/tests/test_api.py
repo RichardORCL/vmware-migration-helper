@@ -20,6 +20,7 @@ from helper_app.models import GuestFixup, Job, JobPhase
 from helper_app.updater import Updater
 from helper_app.vsphere.inventory import vm_spec_from_vm
 
+from .fake_azure import make_fleet
 from .fake_oci import FakeOci, service_error
 from .fake_vsphere import FakeExport, FakeVCenterConnector, make_vm
 from .test_vmdk_stream import make_raw
@@ -57,7 +58,8 @@ def target(**kw):
 
 
 class Env:
-    def __init__(self, tmp_path, fail_once=frozenset({1}), block_event=None, store=None, tunnel_factory=None):
+    def __init__(self, tmp_path, fail_once=frozenset({1}), block_event=None, store=None, tunnel_factory=None,
+                 azure=None):
         self.settings = Settings(device_prefix=str(tmp_path / "dev" / "oraclevd"), db_path=str(tmp_path / "jobs.db"),
                                  seed_bucket="vc-oci-seed", launch_timeout_s=5, volume_timeout_s=5,
                                  image_import_timeout_s=5, cookie_secure=False, console_connect_timeout_s=5,
@@ -86,6 +88,7 @@ class Env:
             "vm-tpl": make_vm(moid="vm-tpl", name="golden", template=True),
         }
         self.vcenter = FakeVCenterConnector(self.vms)
+        self.azure = azure or make_fleet(self.raws)  # Azure VMs whose disks hold the same raw content
         self.store = store or JobStore(self.settings.db_path)
         FakeExport.instances.clear()
         self.updater = Updater(self.settings, runner=self._run_command, http_get=self._http_get)
@@ -114,6 +117,7 @@ class Env:
         extra = {"tunnel_factory": tunnel_factory} if tunnel_factory else {}
         self.app = create_app(
             settings=self.settings, clients=self.fake.clients(), store=self.store, vcenter=self.vcenter,
+            azure=self.azure.connector(self.settings),
             export_factory=export_factory, updater=self.updater, command_runner=self._run_command,
             scan_devices=self.fake.scan_devices, guest_fixer=guest_fixer, **extra,
         )
@@ -151,18 +155,6 @@ class Env:
         sha, date, subject = self.remote_head
         return SimpleNamespace(status_code=200, json=lambda: {"sha": sha, "commit": {"committer": {"date": date},
                                                                                       "message": subject + "\n\nbody"}})
-
-
-@pytest.fixture
-def fast_retries():
-    import helper_app.jobs.runner as runner_mod
-
-    orig_sleep = runner_mod.time.sleep
-    runner_mod.time.sleep = lambda s: orig_sleep(min(s, 0.05))
-    try:
-        yield
-    finally:
-        runner_mod.time.sleep = orig_sleep
 
 
 @pytest.fixture

@@ -490,6 +490,8 @@ def source_tags(job: Job) -> dict[str, str]:
         tags["vc-oci-source-vcenter"] = job.vcenter_host[:TAG_VALUE_MAX]
     if vm.host_name:
         tags["vc-oci-source-esxi-host"] = vm.host_name[:TAG_VALUE_MAX]
+    if job.azure is not None:
+        tags["vc-oci-source-azure"] = f"{job.azure.subscription_id}/{job.azure.resource_group}"[:TAG_VALUE_MAX]
     return tags
 
 

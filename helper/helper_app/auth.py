@@ -30,3 +30,11 @@ async def require_vcenter_session(request: Request) -> UserSession:
     if session.vc is None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "this function needs a vCenter login")
     return session
+
+
+async def require_azure_session(request: Request) -> UserSession:
+    """A session with an Azure service principal behind it (Azure VM inventory and migrations)."""
+    session = await require_session(request)
+    if session.azure is None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "this function needs an Azure login")
+    return session

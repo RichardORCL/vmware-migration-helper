@@ -81,6 +81,15 @@ def import_failure_detail(c: OciClients, work_request_id: str, bucket: str, obje
     parts += [f"OCI error {e.code}: {e.message}" for e in errors]
     if logs:
         parts.append("import log: " + " / ".join(entry.message for entry in logs))
+    if any("bucket for image import does not exist" in (e.message or "") for e in errors):
+        # what OCI says when the import service (acting as the migration tool VM) may not read the bucket
+        parts.append(
+            f"the bucket '{bucket}' exists (it was listed a moment ago), so this is a permission problem: the "
+            "image import service reads the object through a pre-authenticated request created as the migration "
+            "tool VM, and its policy lacks \"manage buckets in <compartment of the bucket> where "
+            "request.permission = 'PAR_MANAGE'\" (plus read buckets / read objects); re-apply the current stack "
+            "or add the statements to the policy (see docs/limitations.md)"
+        )
     if not errors and not logs:
         obj = f" ({object_name})" if object_name else ""
         parts.append(

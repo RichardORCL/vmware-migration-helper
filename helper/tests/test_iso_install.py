@@ -270,6 +270,17 @@ def test_import_progress_is_tracked_and_failure_explains_the_work_request(env):
     assert "does-not-exist.iso not found in bucket isos" in str(exc.value)
     assert missing.instance_id is None and len(fake.compute.launch_details) == 1  # only the first job's
 
+    # a bucket the import service may not read: OCI claims it "does not exist"; the job names the policy gap
+    fake.import_outcome, fake.import_errors = "DELETED", [
+        ("InvalidParameter", "Specified namespace or bucket for image import does not exist.")]
+    fake.import_logs = ["Preparing environment for image conversion."]
+    denied = make_job(make_iso(etag="etag-ubuntu-3"), make_target(), job_id="iso0003")
+    with pytest.raises(OciError) as exc:
+        installer.run(denied)
+    msg = str(exc.value)
+    assert "bucket for image import does not exist" in msg and "permission problem" in msg
+    assert "PAR_MANAGE" in msg and "bucket 'isos' exists" in msg
+
 
 def test_launch_failure_reports_work_request_error(env):
     settings, fake, store, installer = env

@@ -1,7 +1,8 @@
 """Create an OCI instance that boots an installer ISO.
 
-The ISO in Object Storage is imported as a custom image with the (undocumented but working) source image
-type ``ISO``.  An instance launched from such an image boots the ISO as installation media and gets a
+The ISO in Object Storage is imported as a custom image with source image type ``VMDK`` (documented for
+disk images; OCI recognises ISO content and treats the image as boot media, which is not documented but
+works).  An instance launched from such an image boots the ISO as installation media and gets a
 blank boot volume of the requested size to install onto; after the installation the instance boots from
 the boot volume.  Nothing is copied by the helper: the job ends in ``INSTALLING`` and hands the user the
 remote console to run the installer; *Installation finished* completes the job.
@@ -91,16 +92,6 @@ def iso_image_tags(iso: IsoSpec, lo: LaunchOptionsSpec) -> dict[str, str]:
         "vc-oci-launch-mode": import_launch_mode(lo),
         "vc-oci-os": _slug(f"{iso.operating_system}-{iso.operating_system_version}"),
     }
-
-
-def set_source_image_type(source: Any, image_type: str) -> None:
-    """Set ``sourceImageType`` on the import details.  The SDK model only lists the documented formats
-    (``QCOW2``, ``VMDK``) in its setter, so ``ISO`` has to bypass that check; the service accepts it and
-    the request is serialised from the private attribute the property reads."""
-    try:
-        source.source_image_type = image_type
-    except ValueError:
-        source._source_image_type = image_type  # noqa: SLF001 - deliberately around the SDK's allow-list
 
 
 def _slug(text: str) -> str:
@@ -276,22 +267,22 @@ class IsoInstaller:
                  iso.operating_system, iso.operating_system_version)
         if on_progress:
             on_progress(0, f"Importing ISO {iso.object_name} as image {display}")
-        source = M.ImageSourceViaObjectStorageTupleDetails(
-            source_type="objectStorageTuple",
-            namespace_name=iso.namespace,
-            bucket_name=iso.bucket,
-            object_name=iso.object_name,
-            operating_system=os_name,
-            operating_system_version=os_version,
-        )
-        set_source_image_type(source, self.s.iso_source_image_type)
         resp = self.c.compute.create_image(
             M.CreateImageDetails(
                 compartment_id=self.image_compartment,
                 display_name=display,
                 launch_mode=launch_mode,
                 freeform_tags=tags,
-                image_source_details=source,
+                image_source_details=M.ImageSourceViaObjectStorageTupleDetails(
+                    source_type="objectStorageTuple",
+                    namespace_name=iso.namespace,
+                    bucket_name=iso.bucket,
+                    object_name=iso.object_name,
+                    # an ISO is imported as VMDK: OCI recognises the ISO content and boots it as install media
+                    source_image_type=self.s.iso_source_image_type,
+                    operating_system=os_name,
+                    operating_system_version=os_version,
+                ),
             )
         )
         image = resp.data

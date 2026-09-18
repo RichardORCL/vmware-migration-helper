@@ -66,9 +66,10 @@ class Settings(BaseSettings):
     seed_compartment_id: str = ""  # defaults to the helper compartment
     seed_disk_size_gb: int = 1
 
-    # ISO based instances: the installer ISO in Object Storage is imported as a custom image.  OCI accepts
-    # the (undocumented) image type ``ISO`` for that; the token is configurable in case it changes.
-    iso_source_image_type: str = "ISO"
+    # ISO based instances: the installer ISO in Object Storage is imported as a custom image with the
+    # documented ``VMDK`` source type (OCI recognises the ISO content and boots it as installation media);
+    # the token is configurable in case OCI introduces a dedicated type.
+    iso_source_image_type: str = "VMDK"
     iso_image_compartment_id: str = ""  # where the imported ISO images live; defaults to the seed compartment
 
     # Instance defaults

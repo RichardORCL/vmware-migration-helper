@@ -1160,7 +1160,7 @@ def test_iso_job_installs_via_console_and_is_finished_by_the_user(env):
     assert job["step"] == "installing" and "remote console" in job["message"]
     assert job["iso_image_id"] in fake.compute.images and job["instance_id"] in fake.compute.instances
     img = fake.compute.images[job["iso_image_id"]]
-    assert img.source_image_type == "ISO" and img.object_name == ISO_NAME
+    assert img.source_image_type == "VMDK" and img.object_name == ISO_NAME  # ISOs are imported as VMDK
     d = fake.compute.launch_details[-1]
     assert d.source_details.boot_volume_size_in_gbs == 80 and d.source_details.image_id == job["iso_image_id"]
     # the job is listed under its ISO (source column) and the live instance state is available

@@ -365,13 +365,12 @@ class FakeCompute:
             raise service_error(400, "InvalidParameter",
                                 f"Invalid operatingSystemVersion: {os_version} (The operating system version is "
                                 "not supported.)", "create_image")
-        # the documented types plus ISO, which the service accepts (an instance launched from such an image
-        # boots the ISO as installation media and gets a blank boot volume)
-        if src.source_image_type not in ("QCOW2", "VMDK", "ISO"):
+        # only the documented types; an ISO is imported as VMDK (OCI recognises the content as boot media)
+        if src.source_image_type not in ("QCOW2", "VMDK"):
             raise service_error(400, "InvalidParameter",
                                 f"Invalid sourceImageType: {src.source_image_type}", "create_image")
         import_errors, outcome = list(self.f.import_errors), self.f.import_outcome
-        if src.source_image_type == "ISO" and not self.f.object_storage.has_object(src.bucket_name, src.object_name):
+        if not self.f.object_storage.has_object(src.bucket_name, src.object_name):
             # like a real import of a missing object: accepted, then fails asynchronously
             outcome = "DELETED"
             import_errors.append(("InvalidParameter", f"Object {src.object_name} not found in bucket "

@@ -126,7 +126,7 @@ def test_run_imports_iso_launches_with_blank_boot_volume_and_hands_over(env):
     # 1. the image: imported from the ISO object with source type ISO, tagged, capability schema applied
     assert job.iso_image_id in fake.compute.images
     img = fake.compute.images[job.iso_image_id]
-    assert img.source_image_type == "ISO" and img.launch_mode == "PARAVIRTUALIZED"
+    assert img.source_image_type == "VMDK" and img.launch_mode == "PARAVIRTUALIZED"  # ISOs import as VMDK
     assert (img.namespace_name, img.bucket_name, img.object_name) == (NS, "isos",
                                                                       "images/ubuntu-24.04-live-server-amd64.iso")
     assert (img.operating_system, img.operating_system_version) == ("Ubuntu", "24.04")
@@ -323,13 +323,17 @@ def test_cleanup_images_deletes_only_iso_images(env):
     # a seed image in the same compartment must survive
     import oci.core.models as M
 
+    fake.object_storage.add_bucket("vc-oci-seed")
+    fake.object_storage.put_object(NS, "vc-oci-seed", "seed.vmdk", b"KDMV")
     seed = fake.compute.create_image(M.CreateImageDetails(
         compartment_id=installer.image_compartment, display_name="vc-oci-seed", launch_mode="PARAVIRTUALIZED",
         freeform_tags={"vc-oci-seed": "true"},
         image_source_details=M.ImageSourceViaObjectStorageTupleDetails(
             source_type="objectStorageTuple", namespace_name=NS, bucket_name="vc-oci-seed", object_name="seed.vmdk",
             source_image_type="VMDK"))).data
+    fake.compute.get_image(seed.id)  # settle the import
     deleted = installer.cleanup_images()
     assert len(deleted) == 2 and seed.id not in deleted
+    assert fake.compute.images[seed.id].lifecycle_state == "AVAILABLE"
     assert all(fake.compute.images[i].lifecycle_state == "DELETED" for i in deleted)
     assert installer.cleanup_images() == []  # nothing left

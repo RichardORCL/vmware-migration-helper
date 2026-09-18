@@ -93,7 +93,7 @@ To replace the self-signed certificate, put your own into `/etc/vc-oci-helper/se
 | `HELPER_SEED_BUCKET` | `vc-oci-seed-images` | Bucket for seed image imports |
 | `HELPER_SEED_COMPARTMENT_ID` | migration tool compartment | Where seed images are kept |
 | `HELPER_ISO_IMAGE_COMPARTMENT_ID` | seed compartment | Where the custom images imported from installer ISOs (*Create OCI instance based on ISO*) are kept |
-| `HELPER_ISO_SOURCE_IMAGE_TYPE` | `ISO` | `sourceImageType` sent to `CreateImage` for an ISO. OCI accepts `ISO` although the public documentation only lists `QCOW2` and `VMDK`; change it only if OCI renames the type |
+| `HELPER_ISO_SOURCE_IMAGE_TYPE` | `VMDK` | `sourceImageType` sent to `CreateImage` for an ISO. OCI recognises the ISO content behind the `VMDK` type and boots it as installation media; change it only if OCI introduces a dedicated ISO type |
 | `HELPER_DEFAULT_SHAPE` | `VM.Standard.E5.Flex` | Flex shape for target instances |
 | `HELPER_MIN_VOLUME_GB` | `50` | Minimum OCI volume size |
 | `HELPER_DEVICE_PREFIX` | `/dev/oracleoci/oraclevd` | Consistent device path prefix |

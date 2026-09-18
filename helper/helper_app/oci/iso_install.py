@@ -38,7 +38,7 @@ from helper_app.oci.image_import import (
     wait_import,
 )
 from helper_app.oci.launch import free_hostname_label, secure_boot_platform_config
-from helper_app.oci.mapping import WINDOWS_CLIENT_VERSIONS, remote_data_volume_type_for
+from helper_app.oci.mapping import WINDOWS_CLIENT_VERSIONS, is_bare_metal_shape, remote_data_volume_type_for
 
 log = logging.getLogger(__name__)
 
@@ -150,8 +150,10 @@ class IsoInstaller:
         lo = iso_launch_options(iso, target)
         job.launch_options = lo
         shape = target.shape or self.s.default_shape
+        bare_metal = is_bare_metal_shape(shape)  # fixed cores and memory: no shape config
         ocpus = float(target.ocpus or 1)
         memory_gb = float(target.memory_gb or max(1.0, ocpus * 8))
+        sizing = "bare metal, fixed size" if bare_metal else f"{ocpus:g} OCPU, {memory_gb:g} GB"
         # Secure Boot -> shielded instance; decided first so an unsuitable shape fails before anything exists
         platform_config = (secure_boot_platform_config(shape, iso.is_windows, what="Secure Boot was requested")
                            if lo.secure_boot else None)
@@ -173,7 +175,7 @@ class IsoInstaller:
                 shielded = ", shielded: Secure Boot"
                 if platform_config.is_measured_boot_enabled:
                     shielded += " + Measured Boot + TPM"
-            self._step(job, STEP_LAUNCH, f"Launching {display} ({shape}, {ocpus:g} OCPU, {memory_gb:g} GB, "
+            self._step(job, STEP_LAUNCH, f"Launching {display} ({shape}, {sizing}, "
                                         f"{iso.boot_disk_gb} GB boot volume, firmware {lo.firmware}{shielded})",
                        check_cancel)
             details = M.LaunchInstanceDetails(
@@ -181,7 +183,8 @@ class IsoInstaller:
                 compartment_id=target.compartment_id,
                 display_name=display,
                 shape=shape,
-                shape_config=M.LaunchInstanceShapeConfigDetails(ocpus=ocpus, memory_in_gbs=memory_gb),
+                shape_config=None if bare_metal
+                else M.LaunchInstanceShapeConfigDetails(ocpus=ocpus, memory_in_gbs=memory_gb),
                 create_vnic_details=M.CreateVnicDetails(
                     subnet_id=target.subnet_id,
                     assign_public_ip=target.assign_public_ip,

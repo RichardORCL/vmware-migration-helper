@@ -304,7 +304,7 @@
       ["Instance", ocidLink("instances", job.instance_id)],
       ["State in OCI", ociStateEl(root, job)],
       ...sourceRows,
-      ["Shape", `${job.target.shape || "(migration tool default)"}${job.target.ocpus || job.target.memory_gb ? ` - ${job.target.ocpus ?? "auto"} OCPU / ${job.target.memory_gb ?? "auto"} GB${iso ? "" : " (custom)"}` : " - sized from the source VM"}`],
+      ["Shape", `${job.target.shape || "(migration tool default)"}${job.target.ocpus || job.target.memory_gb ? ` - ${job.target.ocpus ?? "auto"} OCPU / ${job.target.memory_gb ?? "auto"} GB${iso ? "" : " (custom)"}` : /^BM\./i.test(job.target.shape || "") ? " - bare metal, fixed cores and memory" : " - sized from the source VM"}`],
       ["IP addresses", ociIpsEl(root, job)],
       ["Launch options", job.launch_options ? `${job.launch_options.firmware}${job.launch_options.secure_boot ? " + Secure Boot (shielded instance, with Measured Boot + vTPM on VM shapes)" : ""}, boot ${job.launch_options.boot_volume_type}, nic ${job.launch_options.network_type}` : "-"],
       ...(job.target.windows_license_type ? [["Windows license", job.target.windows_license_type === "OCI_PROVIDED"
@@ -825,24 +825,47 @@
     };
     sel("vcn_id").addEventListener("change", fillSubnets);
     fillNetworks(options);
-    // shapes: x86 flex shapes only (the API already drops Ampere/ARM shapes)
+    // shapes: the API lists x86 flex VM shapes and x86 bare metal shapes (Ampere/ARM already dropped).
+    // The migration form only offers VM shapes; the ISO form has an instance_kind switch (VM / BM).
     let shapes = options.shapes;
+    let shapeOptions = options;
+    const kindInput = () => form.elements.instance_kind;  // RadioNodeList, or undefined on the migration form
+    const currentKind = () => (kindInput() && kindInput().value) || "VM";
     const fillShapes = (o) => {
-      shapes = o.shapes;
+      shapeOptions = o;
+      const kind = currentKind();
+      shapes = o.shapes.filter((s) => (s.kind || "VM") === kind);
       const shapeSel = sel("shape"); const previous = shapeSel.value;
       shapeSel.innerHTML = "";
-      shapeSel.append(el("option", { value: "" }, `${o.default_shape} (default)`));
-      for (const s of o.shapes) if (s.name !== o.default_shape) shapeSel.append(el("option", { value: s.name }, s.name));
+      if (kind === "VM") shapeSel.append(el("option", { value: "" }, `${o.default_shape} (default)`));
+      for (const s of shapes) {
+        if (s.name === o.default_shape) continue;
+        const fixed = !s.is_flex && s.max_ocpus != null ? ` - ${s.max_ocpus} OCPU / ${s.max_memory_gb} GB` : "";
+        shapeSel.append(el("option", { value: s.name }, `${s.name}${fixed}`));
+      }
       if ([...shapeSel.options].some((op) => op.value === previous)) shapeSel.value = previous;
+      document.getElementById("shape-hint").textContent = "";
+      if (kind === "BM" && !shapes.length) document.getElementById("shape-hint").textContent = "No x86 bare metal shapes are available in this compartment and availability domain.";
       renderSizing();
     };
     // sizing mirrors mapping.map_shape: 2 vCPU = 1 OCPU, RAM rounded up to whole GB; both can be overridden.
     // Without a source VM (ISO form) the fields are required and only the shape bounds are applied.
+    // Bare metal shapes have fixed cores and memory: the sizing inputs are hidden and not submitted.
     const sizing = cfg.sizing || null;
-    const currentShape = () => shapes.find((s) => s.name === (sel("shape").value || options.default_shape));
+    const currentShape = () => shapes.find((s) => s.name === (sel("shape").value || shapeOptions.default_shape));
+    const sizingRow = document.getElementById("sizing-row");
     const renderSizing = () => {
       const shape = currentShape();
       const ocpusIn = sel("ocpus"), memIn = sel("memory_gb");
+      const fixed = currentKind() === "BM";
+      if (sizingRow) {
+        sizingRow.hidden = fixed;
+        ocpusIn.required = memIn.required = !fixed && !sizing;
+      }
+      if (fixed) {
+        document.getElementById("sizing-hint").textContent = shape ? `Bare metal instance: ${shape.name} comes with ${shape.max_ocpus} OCPU / ${shape.max_memory_gb} GB, fixed.` : "";
+        return;
+      }
       if (sizing) { ocpusIn.placeholder = `${sizing.autoOcpus} (auto)`; memIn.placeholder = `${sizing.autoMemoryGb} (auto)`; }
       if (shape && shape.is_flex) {
         if (shape.min_ocpus != null) ocpusIn.min = shape.min_ocpus;
@@ -867,6 +890,7 @@
     sel("shape").addEventListener("change", renderSizing);
     sel("ocpus").addEventListener("input", renderSizing);
     sel("memory_gb").addEventListener("input", renderSizing);
+    if (kindInput()) for (const r of kindInput()) r.addEventListener("change", () => fillShapes(shapeOptions));
     fillShapes(options);
     // both compartment pickers start at the helper's compartment; the instance compartment drives the shape
     // list, the network compartment the VCN/subnet list
@@ -1052,8 +1076,9 @@
           subnet_id: fd.get("subnet_id"),
           private_ip: (fd.get("private_ip") || "").trim() || null,
           shape: fd.get("shape") || null,
-          ocpus: Number(fd.get("ocpus")),
-          memory_gb: Number(fd.get("memory_gb")),
+          // bare metal shapes have fixed cores and memory; the sizing inputs are hidden then
+          ocpus: fd.get("instance_kind") === "BM" ? null : Number(fd.get("ocpus")),
+          memory_gb: fd.get("instance_kind") === "BM" ? null : Number(fd.get("memory_gb")),
           display_name: (fd.get("display_name") || "").trim(),
           assign_public_ip: fd.get("assign_public_ip") === "on",
           windows_license_type: isWin() ? fd.get("windows_license_type") : null,

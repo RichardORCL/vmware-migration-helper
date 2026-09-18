@@ -131,11 +131,17 @@
             <small id="private-ip-hint">Leave empty to let OCI pick a free address from the subnet. A fixed address must lie inside the subnet's CIDR and not be in use; it is checked with OCI as soon as you have typed it.</small>
           </label>
           <label class="check"><input type="checkbox" name="assign_public_ip"> Assign a public IP</label>
+          <fieldset>
+            <legend>Instance type</legend>
+            <label class="check"><input type="radio" name="instance_kind" value="VM" checked> Virtual machine</label>
+            <label class="check"><input type="radio" name="instance_kind" value="BM"> Bare metal</label>
+            <small id="instance-kind-hint">Virtual machines are sized freely within the shape's limits; bare metal shapes come with fixed cores and memory.</small>
+          </fieldset>
           <label>Shape
             <select name="shape"></select>
             <small id="shape-hint"></small>
           </label>
-          <div class="row2">
+          <div class="row2" id="sizing-row">
             <label>OCPUs
               <input name="ocpus" type="number" min="1" step="1" value="1" required inputmode="numeric">
             </label>

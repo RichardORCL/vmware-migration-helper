@@ -147,25 +147,31 @@ def list_subnets(c: OciClients, compartment_id: str, vcns: list[OciVcn]) -> list
     )
 
 
-def list_flex_shapes(c: OciClients, compartment_id: str, availability_domain: str) -> list[OciShape]:
+def list_shapes(c: OciClients, compartment_id: str, availability_domain: str) -> list[OciShape]:
+    """x86 shapes the forms offer: flexible VM shapes (the VMware and the ISO form) and bare metal shapes
+    with their fixed cores and memory (ISO form only).  Ampere (aarch64) shapes are dropped: neither a
+    vSphere guest nor an x86 installer ISO boots on them."""
     shapes = _all(c.compute.list_shapes, compartment_id=compartment_id, availability_domain=availability_domain)
     seen: dict[str, OciShape] = {}
     for s in shapes:
-        if not s.shape.startswith("VM.") or s.shape in seen or is_arm_shape(s.shape):
-            continue  # x86 VM shapes only: an Ampere (aarch64) instance cannot boot a vSphere guest
+        kind = "BM" if s.shape.startswith("BM.") else "VM" if s.shape.startswith("VM.") else None
+        if kind is None or s.shape in seen or is_arm_shape(s.shape):
+            continue
         is_flex = bool(getattr(s, "is_flexible", False)) or s.shape.endswith(".Flex")
+        if kind == "VM" and not is_flex:
+            continue  # fixed VM shapes bring nothing over the flex ones
         oc = getattr(s, "ocpu_options", None)
         mem = getattr(s, "memory_options", None)
         seen[s.shape] = OciShape(
             name=s.shape,
+            kind=kind,
             is_flex=is_flex,
             min_ocpus=getattr(oc, "min", None) if oc else s.ocpus,
             max_ocpus=getattr(oc, "max", None) if oc else s.ocpus,
             min_memory_gb=getattr(mem, "min_in_g_bs", None) if mem else s.memory_in_gbs,
             max_memory_gb=getattr(mem, "max_in_g_bs", None) if mem else s.memory_in_gbs,
         )
-    flex = [x for x in seen.values() if x.is_flex]
-    return sorted(flex, key=lambda x: x.name)
+    return sorted(seen.values(), key=lambda x: (x.kind, x.name))
 
 
 def object_storage_namespace(c: OciClients) -> str:
@@ -235,5 +241,5 @@ def build_options(
         availability_domains=list_availability_domains(c),
         vcns=vcns,
         subnets=list_subnets(c, net_comp, vcns),
-        shapes=list_flex_shapes(c, comp, ident.availability_domain),
+        shapes=list_shapes(c, comp, ident.availability_domain),
     )

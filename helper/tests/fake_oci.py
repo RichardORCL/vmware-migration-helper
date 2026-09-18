@@ -74,6 +74,11 @@ class FakeCompute:
         check_tags(details, "launch_instance")
         check_volume_size(getattr(details.source_details, "boot_volume_size_in_gbs", None), "launch_instance")
         self.launch_details.append(details)
+        # OCI: shapeConfig only exists for flexible shapes; bare metal (and fixed VM) shapes refuse it
+        fixed = {s.shape for s in self.list_shapes(details.compartment_id).data if not getattr(s, "is_flexible", False)}
+        if details.shape in fixed and getattr(details, "shape_config", None) is not None:
+            raise service_error(400, "InvalidParameter",
+                                f"Shape {details.shape} does not support shapeConfig", "launch_instance")
         # OCI: one device class per instance.  The boot volume, the data volumes and the image's import
         # launch mode must all be paravirtualized or all emulated.
         lo = details.launch_options
@@ -203,6 +208,12 @@ class FakeCompute:
                memory_options=None),
             NS(shape="VM.Standard.A1.Flex", is_flexible=True, ocpus=1, memory_in_gbs=6,  # Ampere: filtered
                ocpu_options=NS(min=1, max=80), memory_options=NS(min_in_g_bs=1, max_in_g_bs=512)),
+            NS(shape="BM.Standard.E5.192", is_flexible=False, ocpus=192, memory_in_gbs=2304, ocpu_options=None,
+               memory_options=None),
+            NS(shape="BM.Standard3.64", is_flexible=False, ocpus=64, memory_in_gbs=1024, ocpu_options=None,
+               memory_options=None),
+            NS(shape="BM.Standard.A1.160", is_flexible=False, ocpus=160, memory_in_gbs=1024,  # Ampere: filtered
+               ocpu_options=None, memory_options=None),
         ])
 
     # console connections -------------------------------------------------

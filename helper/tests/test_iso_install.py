@@ -172,6 +172,33 @@ def test_run_imports_iso_launches_with_blank_boot_volume_and_hands_over(env):
     assert store.list(vm_moid=stored.source_key)[0].id == job.id  # stored in the source column
 
 
+def test_run_bare_metal_shape_launches_without_shape_config(env):
+    """BM shapes have fixed cores and memory: no shapeConfig (OCI rejects one), and Secure Boot uses the
+    generic BM platform config (Secure Boot only for Linux: Measured Boot + TPM stay off)."""
+    settings, fake, store, installer = env
+    job = make_job(make_iso(secure_boot=True), make_target(shape="BM.Standard.E5.192", ocpus=None, memory_gb=None))
+    store.put(job)
+    messages: list[str] = []
+    orig_put = store.put
+    installer.save = lambda j: (messages.append(j.message or ""), orig_put(j))[1]
+    installer.run(job)
+    assert job.phase == JobPhase.INSTALLING, job.error
+    d = fake.compute.launch_details[-1]
+    assert d.shape == "BM.Standard.E5.192" and d.shape_config is None
+    assert d.platform_config.is_secure_boot_enabled
+    assert not d.platform_config.is_measured_boot_enabled and not d.platform_config.is_trusted_platform_module_enabled
+    # the step text tells the fixed size rather than OCPU / GB numbers
+    assert any("BM.Standard.E5.192, bare metal, fixed size" in m for m in messages)
+    assert not any("OCPU" in m for m in messages)
+
+    # sizing that slipped through with a BM shape is ignored (the API drops it anyway)
+    job2 = make_job(make_iso(), make_target(shape="BM.Standard3.64", ocpus=4, memory_gb=32))
+    store.put(job2)
+    installer.run(job2)
+    assert job2.phase == JobPhase.INSTALLING, job2.error
+    assert fake.compute.launch_details[-1].shape_config is None
+
+
 def test_run_reuses_an_image_with_matching_tags_and_skips_the_import(env):
     settings, fake, store, installer = env
     first = make_job(make_iso(), make_target(display_name="first"))

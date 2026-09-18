@@ -257,6 +257,11 @@ def is_arm_shape(shape: str) -> bool:
     return bool(re.match(r"^(VM|BM)\.STANDARD\.A\d", (shape or "").upper()))
 
 
+def is_bare_metal_shape(shape: str) -> bool:
+    """Bare metal shapes have fixed cores and memory: no ``shapeConfig`` at launch."""
+    return (shape or "").upper().startswith("BM.")
+
+
 def volume_size_gb(capacity_bytes: int, min_volume_gb: int = 50) -> int:
     return max(min_volume_gb, math.ceil(capacity_bytes / 1024**3))
 

@@ -503,6 +503,7 @@ class OciSubnet(BaseModel):
 
 class OciShape(BaseModel):
     name: str
+    kind: Literal["VM", "BM"] = "VM"  # virtual machine (flexible sizing) or bare metal (fixed cores and memory)
     is_flex: bool
     min_ocpus: Optional[float] = None
     max_ocpus: Optional[float] = None

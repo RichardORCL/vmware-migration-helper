@@ -446,8 +446,14 @@ def test_vm_list_and_inspect(env):
     by_subnet = {s["name"]: s for s in opts["subnets"]}
     assert by_subnet["private"]["vcn_id"] == "ocid1.vcn.oc1..1" and by_subnet["private"]["vcn_name"] == "vcn-main"
     assert by_subnet["app"]["vcn_name"] == "vcn-shared"
-    # Ampere (ARM) shapes are not offered: an x86 guest cannot boot on them
-    assert [s["name"] for s in opts["shapes"]] == ["VM.Standard.E5.Flex"]
+    # x86 only: flex VM shapes plus bare metal shapes with their fixed size; Ampere (ARM) and fixed VM
+    # shapes are not offered
+    shapes = {s["name"]: s for s in opts["shapes"]}
+    assert list(shapes) == ["BM.Standard.E5.192", "BM.Standard3.64", "VM.Standard.E5.Flex"]
+    assert shapes["VM.Standard.E5.Flex"]["kind"] == "VM" and shapes["VM.Standard.E5.Flex"]["is_flex"]
+    bm = shapes["BM.Standard.E5.192"]
+    assert bm["kind"] == "BM" and not bm["is_flex"]
+    assert (bm["min_ocpus"], bm["max_ocpus"], bm["min_memory_gb"], bm["max_memory_gb"]) == (192, 192, 2304, 2304)
 
 
 def test_oci_options_network_compartment(env):
@@ -1240,6 +1246,33 @@ def test_iso_job_validation(env):
     assert (d.launch_options.boot_volume_type, d.launch_options.network_type) == ("IDE", "E1000")
     assert d.licensing_configs[0].license_type == "BRING_YOUR_OWN_LICENSE"
     assert env.fake.compute.images[job["iso_image_id"]].launch_mode == "EMULATED"
+
+
+def test_iso_job_bare_metal_shape(env):
+    """A bare metal shape has fixed cores and memory: sizing is not required, ignored when sent, and the
+    instance is launched without a shape config (OCI rejects one for BM shapes)."""
+    c = env.client
+    add_isos(env)
+    anonymous(c)
+    tgt = target(display_name="bm-box", shape="BM.Standard.E5.192")  # no ocpus / memory_gb
+    r = c.post("/api/jobs/iso", json={"iso": iso_spec(), "target": tgt})
+    assert r.status_code == 202, r.text
+    job = wait_phase(c, r.json()["id"], "INSTALLING", "FAILED")
+    assert job["phase"] == "INSTALLING", job
+    assert job["target"]["shape"] == "BM.Standard.E5.192"
+    assert job["target"]["ocpus"] is None and job["target"]["memory_gb"] is None
+    d = env.fake.compute.launch_details[-1]
+    assert d.shape == "BM.Standard.E5.192" and d.shape_config is None
+    assert d.platform_config is None
+    # sizing sent along with a BM shape is dropped rather than rejected
+    r = c.post("/api/jobs/iso", json={"iso": iso_spec(), "target": iso_target(display_name="bm-2", shape="BM.Standard3.64")})
+    assert r.status_code == 202, r.text
+    job = wait_phase(c, r.json()["id"], "INSTALLING", "FAILED")
+    assert job["phase"] == "INSTALLING" and job["target"]["ocpus"] is None
+    assert env.fake.compute.launch_details[-1].shape_config is None
+    # Ampere bare metal is refused like the Ampere VM shapes
+    r = c.post("/api/jobs/iso", json={"iso": iso_spec(), "target": target(display_name="x", shape="BM.Standard.A1.160")})
+    assert r.status_code == 400 and "Ampere" in r.text
 
 
 def test_iso_job_failure_and_cancel_clean_up(env):

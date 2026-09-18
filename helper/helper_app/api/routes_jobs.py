@@ -28,6 +28,7 @@ from helper_app.oci.mapping import (
     OS_VERSION_CHOICES,
     WINDOWS_CLIENT_VERSIONS,
     is_arm_shape,
+    is_bare_metal_shape,
     map_guest_os,
     os_version_choices,
     with_os_version,
@@ -146,8 +147,10 @@ async def create_iso_job(body: CreateIsoJobRequest, request: Request,
     if choices and iso.operating_system_version not in choices:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             f"select a {iso.operating_system} release OCI knows ({', '.join(choices)})")
-    if not target.ocpus or not target.memory_gb:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "OCPUs and memory are required for an ISO instance")
+    if is_bare_metal_shape(target.shape or st.settings.default_shape):
+        target.ocpus = target.memory_gb = None  # bare metal: cores and memory come with the shape
+    elif not target.ocpus or not target.memory_gb:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "OCPUs and memory are required for a VM shape")
     await _check_target(st, target)
     now = utcnow()
     job = Job(

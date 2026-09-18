@@ -25,7 +25,8 @@ firmware mode (BIOS/UEFI, Secure Boot), CPU/memory sizing and Windows licensing 
 - **First boot debugging**: a *Remote console* button on a completed job opens the instance's VNC console
   in the browser (OCI console connection created on the fly, tunnelled through the migration tool VM).
 - **Create OCI instance based on ISO** (no vCenter needed): pick an installer ISO from an Object Storage
-  bucket, choose shape, OS type, firmware (BIOS/UEFI, Secure Boot) and boot disk size; the migration tool
+  bucket, choose a virtual machine (x86 flex shape with OCPUs and memory) or a bare metal shape (fixed
+  cores and memory), OS type, firmware (BIOS/UEFI, Secure Boot) and boot disk size; the migration tool
   imports the ISO as a custom image, launches the instance booting it with a blank boot volume and hands
   you the remote console to run the installer.
 

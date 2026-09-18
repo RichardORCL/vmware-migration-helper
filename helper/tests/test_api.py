@@ -446,11 +446,15 @@ def test_vm_list_and_inspect(env):
     by_subnet = {s["name"]: s for s in opts["subnets"]}
     assert by_subnet["private"]["vcn_id"] == "ocid1.vcn.oc1..1" and by_subnet["private"]["vcn_name"] == "vcn-main"
     assert by_subnet["app"]["vcn_name"] == "vcn-shared"
-    # x86 only: flex VM shapes plus bare metal shapes with their fixed size; Ampere (ARM) and fixed VM
-    # shapes are not offered
+    # flex VM shapes plus bare metal shapes with their fixed size, x86 and Ampere (tagged by architecture,
+    # the UI decides which form shows them); fixed VM shapes are not offered
     shapes = {s["name"]: s for s in opts["shapes"]}
-    assert list(shapes) == ["BM.Standard.E5.192", "BM.Standard3.64", "VM.Standard.E5.Flex"]
+    assert list(shapes) == ["BM.Standard.A1.160", "BM.Standard.E5.192", "BM.Standard3.64", "VM.Standard.A1.Flex",
+                            "VM.Standard.E5.Flex"]
     assert shapes["VM.Standard.E5.Flex"]["kind"] == "VM" and shapes["VM.Standard.E5.Flex"]["is_flex"]
+    assert shapes["VM.Standard.E5.Flex"]["arch"] == "x86_64" and shapes["BM.Standard3.64"]["arch"] == "x86_64"
+    assert shapes["VM.Standard.A1.Flex"]["arch"] == "aarch64" and shapes["VM.Standard.A1.Flex"]["is_flex"]
+    assert shapes["BM.Standard.A1.160"]["arch"] == "aarch64" and shapes["BM.Standard.A1.160"]["max_ocpus"] == 160
     bm = shapes["BM.Standard.E5.192"]
     assert bm["kind"] == "BM" and not bm["is_flex"]
     assert (bm["min_ocpus"], bm["max_ocpus"], bm["min_memory_gb"], bm["max_memory_gb"]) == (192, 192, 2304, 2304)
@@ -1224,8 +1228,11 @@ def test_iso_job_validation(env):
     assert r.status_code == 422
     r = post(tgt=iso_target(availability_domain="Uocm:EU-FRANKFURT-1-AD-2"))
     assert r.status_code == 400 and "availability domain" in r.text
-    r = post(tgt=iso_target(shape="VM.Standard.A1.Flex"))
-    assert r.status_code == 400 and "Ampere" in r.text
+    # Ampere: UEFI only, no shielded instance
+    r = post(iso_spec(firmware="BIOS"), iso_target(shape="VM.Standard.A1.Flex"))
+    assert r.status_code == 400 and "Ampere" in r.text and "UEFI" in r.text
+    r = post(iso_spec(secure_boot=True), iso_target(shape="VM.Standard.A1.Flex"))
+    assert r.status_code == 400 and "Ampere" in r.text and "Secure Boot" in r.text
     r = post(tgt=iso_target(private_ip="10.0.1.1"))  # reserved by OCI
     assert r.status_code == 400 and "10.0.1.1" in r.text
     # Windows: a license is required; OCI does not license the client editions
@@ -1270,8 +1277,31 @@ def test_iso_job_bare_metal_shape(env):
     job = wait_phase(c, r.json()["id"], "INSTALLING", "FAILED")
     assert job["phase"] == "INSTALLING" and job["target"]["ocpus"] is None
     assert env.fake.compute.launch_details[-1].shape_config is None
-    # Ampere bare metal is refused like the Ampere VM shapes
-    r = c.post("/api/jobs/iso", json={"iso": iso_spec(), "target": target(display_name="x", shape="BM.Standard.A1.160")})
+
+
+def test_iso_job_ampere_shapes(env):
+    """Ampere (aarch64) VM and bare metal shapes are allowed for an ISO installation (UEFI, no Secure Boot);
+    the shape is added to the image's compatibility list and launched without a platform config.  The
+    VMware migration keeps refusing them (a vSphere guest is x86)."""
+    c, fake = env.client, env.fake
+    add_isos(env)
+    anonymous(c)
+    r = c.post("/api/jobs/iso", json={"iso": iso_spec(), "target": iso_target(display_name="arm-vm", shape="VM.Standard.A1.Flex")})
+    assert r.status_code == 202, r.text
+    job = wait_phase(c, r.json()["id"], "INSTALLING", "FAILED")
+    assert job["phase"] == "INSTALLING", job
+    d = fake.compute.launch_details[-1]
+    assert d.shape == "VM.Standard.A1.Flex" and d.shape_config.ocpus == 2 and d.platform_config is None
+    assert d.launch_options.firmware == "UEFI_64"
+    assert "VM.Standard.A1.Flex" in fake.compute.images[job["iso_image_id"]].compatible_shapes
+    r = c.post("/api/jobs/iso", json={"iso": iso_spec(), "target": target(display_name="arm-bm", shape="BM.Standard.A1.160")})
+    assert r.status_code == 202, r.text
+    job = wait_phase(c, r.json()["id"], "INSTALLING", "FAILED")
+    assert job["phase"] == "INSTALLING", job
+    assert fake.compute.launch_details[-1].shape_config is None
+    assert "BM.Standard.A1.160" in fake.compute.images[job["iso_image_id"]].compatible_shapes
+    login(c)
+    r = c.post("/api/jobs", json={"vm_moid": "vm-101", "target": target(shape="BM.Standard.A1.160")})
     assert r.status_code == 400 and "Ampere" in r.text
 
 

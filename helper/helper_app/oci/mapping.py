@@ -214,13 +214,13 @@ def platform_config_type(shape: str) -> Optional[str]:
     """Which ``LaunchInstancePlatformConfig`` subtype a shape takes, or None when the shape family has no
     platform config with Secure Boot (Ampere A1/A2 and other ARM shapes)."""
     s = (shape or "").upper()
+    if is_arm_shape(s):
+        return None  # Ampere (ARM), VM and BM alike; note VM.GPU.A10.* is an Intel host with NVIDIA A10 cards
     if s.startswith("BM."):
         return PLATFORM_GENERIC_BM
     if not s.startswith("VM."):
         return None
-    family = s[3:]  # e.g. STANDARD.E5.FLEX, STANDARD3.FLEX, STANDARD.A1.FLEX, DENSEIO2.8
-    if is_arm_shape(s):
-        return None  # Ampere (ARM); note VM.GPU.A10.* is an Intel host with NVIDIA A10 cards
+    family = s[3:]  # e.g. STANDARD.E5.FLEX, STANDARD3.FLEX, DENSEIO2.8
     if re.search(r"\.E\d", family):
         return PLATFORM_AMD_VM  # E2..E6 AMD EPYC
     return PLATFORM_INTEL_VM  # Standard2/3, Optimized3, DenseIO2, GPU shapes: Intel

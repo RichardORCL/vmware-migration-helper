@@ -825,27 +825,35 @@
     };
     sel("vcn_id").addEventListener("change", fillSubnets);
     fillNetworks(options);
-    // shapes: the API lists x86 flex VM shapes and x86 bare metal shapes (Ampere/ARM already dropped).
-    // The migration form only offers VM shapes; the ISO form has an instance_kind switch (VM / BM).
+    // shapes: the API lists flex VM shapes and bare metal shapes, x86 and Ampere (arch x86_64 / aarch64).
+    // The migration form only offers x86 VM shapes (a vSphere guest is x86); the ISO form has an
+    // instance_kind switch (VM / BM) and shows the Ampere shapes in their own group (aarch64 ISO needed).
     let shapes = options.shapes;
     let shapeOptions = options;
     const kindInput = () => form.elements.instance_kind;  // RadioNodeList, or undefined on the migration form
+    const isoForm = !!kindInput();
     const currentKind = () => (kindInput() && kindInput().value) || "VM";
+    const isArm = (s) => s && s.arch === "aarch64";
     const fillShapes = (o) => {
       shapeOptions = o;
       const kind = currentKind();
-      shapes = o.shapes.filter((s) => (s.kind || "VM") === kind);
+      shapes = o.shapes.filter((s) => (s.kind || "VM") === kind && (isoForm || !isArm(s)));
       const shapeSel = sel("shape"); const previous = shapeSel.value;
       shapeSel.innerHTML = "";
-      if (kind === "VM") shapeSel.append(el("option", { value: "" }, `${o.default_shape} (default)`));
-      for (const s of shapes) {
-        if (s.name === o.default_shape) continue;
-        const fixed = !s.is_flex && s.max_ocpus != null ? ` - ${s.max_ocpus} OCPU / ${s.max_memory_gb} GB` : "";
-        shapeSel.append(el("option", { value: s.name }, `${s.name}${fixed}`));
+      const label = (s) => `${s.name}${!s.is_flex && s.max_ocpus != null ? ` - ${s.max_ocpus} OCPU / ${s.max_memory_gb} GB` : ""}`;
+      const x86 = shapes.filter((s) => !isArm(s)), arm = shapes.filter(isArm);
+      const x86Group = isoForm && arm.length ? el("optgroup", { label: kind === "BM" ? "x86 bare metal" : "x86" }) : shapeSel;
+      if (kind === "VM") x86Group.append(el("option", { value: "" }, `${o.default_shape} (default)`));
+      for (const s of x86) if (s.name !== o.default_shape) x86Group.append(el("option", { value: s.name }, label(s)));
+      if (x86Group !== shapeSel) shapeSel.append(x86Group);
+      if (arm.length) {
+        const armGroup = el("optgroup", { label: kind === "BM" ? "Ampere Arm bare metal (aarch64 ISO)" : "Ampere Arm (aarch64 ISO)" });
+        for (const s of arm) armGroup.append(el("option", { value: s.name }, label(s)));
+        shapeSel.append(armGroup);
       }
       if ([...shapeSel.options].some((op) => op.value === previous)) shapeSel.value = previous;
       document.getElementById("shape-hint").textContent = "";
-      if (kind === "BM" && !shapes.length) document.getElementById("shape-hint").textContent = "No x86 bare metal shapes are available in this compartment and availability domain.";
+      if (kind === "BM" && !shapes.length) document.getElementById("shape-hint").textContent = "No bare metal shapes are available in this compartment and availability domain.";
       renderSizing();
     };
     // sizing mirrors mapping.map_shape: 2 vCPU = 1 OCPU, RAM rounded up to whole GB; both can be overridden.
@@ -862,8 +870,9 @@
         sizingRow.hidden = fixed;
         ocpusIn.required = memIn.required = !fixed && !sizing;
       }
+      const armNote = isArm(shape) ? ` ${shape.name} is an Ampere (Arm) shape: the ISO must be an aarch64 build, UEFI firmware, no Secure Boot.` : "";
       if (fixed) {
-        document.getElementById("sizing-hint").textContent = shape ? `Bare metal instance: ${shape.name} comes with ${shape.max_ocpus} OCPU / ${shape.max_memory_gb} GB, fixed.` : "";
+        document.getElementById("sizing-hint").textContent = shape ? `Bare metal instance: ${shape.name} comes with ${shape.max_ocpus} OCPU / ${shape.max_memory_gb} GB, fixed.${armNote}` : "";
         return;
       }
       if (sizing) { ocpusIn.placeholder = `${sizing.autoOcpus} (auto)`; memIn.placeholder = `${sizing.autoMemoryGb} (auto)`; }
@@ -876,7 +885,7 @@
       const range = shape && shape.is_flex && shape.max_ocpus != null
         ? ` ${shape.name} allows ${shape.min_ocpus ?? 1}-${shape.max_ocpus} OCPU and ${shape.min_memory_gb ?? 1}-${shape.max_memory_gb} GB.` : "";
       if (!sizing) {
-        document.getElementById("shape-hint").textContent = range.trim();
+        document.getElementById("shape-hint").textContent = (range + armNote).trim();
         document.getElementById("sizing-hint").textContent = `Instance will be launched with ${Number(ocpusIn.value) || "?"} OCPU / ${Number(memIn.value) || "?"} GB.`;
         return;
       }
@@ -944,7 +953,7 @@
 
     const isel = (name) => isoForm.elements[name];
     const firmwareText = () => `${isel("firmware").value}${isel("secure_boot").checked ? " + Secure Boot" : ""}`;
-    const { sel, renderSizing, renderPreview } = wireTargetForm(form, options, { formError, sizing: null, firmwareText });
+    const { sel, renderSizing, renderPreview, currentShape } = wireTargetForm(form, options, { formError, sizing: null, firmwareText });
     renderSizing();
 
     // bucket compartment -> bucket -> ISO objects; the compartment list is the one of the options call
@@ -1025,16 +1034,24 @@
     if (catalog.some((e) => e.operating_system === "Ubuntu")) osSel.value = "Ubuntu";
     renderOs();
 
-    // firmware / Secure Boot: Secure Boot only with UEFI; both feed the device model preview
+    // firmware / Secure Boot: Secure Boot only with UEFI; both feed the device model preview.  Ampere (Arm)
+    // shapes boot with UEFI only and have no shielded instances: BIOS and Secure Boot are locked out then.
     const secure = isel("secure_boot"), secureLabel = document.getElementById("secure-boot-label");
+    const firmwareRadios = [...isoForm.querySelectorAll('input[name="firmware"]')];
     const renderFirmware = () => {
+      const shape = currentShape();
+      const arm = !!(shape && shape.arch === "aarch64");
+      if (arm) for (const r of firmwareRadios) { r.checked = r.value === "UEFI_64"; }
+      for (const r of firmwareRadios) { r.disabled = arm && r.value !== "UEFI_64"; r.parentElement.classList.toggle("muted", r.disabled); }
       const uefi = isel("firmware").value === "UEFI_64";
-      secure.disabled = !uefi; if (!uefi) secure.checked = false;
-      secureLabel.classList.toggle("muted", !uefi);
+      secure.disabled = !uefi || arm; if (secure.disabled) secure.checked = false;
+      secureLabel.classList.toggle("muted", secure.disabled);
       renderPreview();
     };
-    for (const r of isoForm.querySelectorAll('input[name="firmware"]')) r.addEventListener("change", renderFirmware);
+    for (const r of firmwareRadios) r.addEventListener("change", renderFirmware);
     secure.addEventListener("change", renderPreview);
+    sel("shape").addEventListener("change", renderFirmware);
+    for (const r of form.querySelectorAll('input[name="instance_kind"]')) r.addEventListener("change", renderFirmware);
     renderFirmware();
 
     // instance name: proposed from the ISO file name until the user types one

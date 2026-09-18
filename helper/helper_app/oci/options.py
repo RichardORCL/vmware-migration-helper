@@ -149,14 +149,15 @@ def list_subnets(c: OciClients, compartment_id: str, vcns: list[OciVcn]) -> list
 
 
 def list_shapes(c: OciClients, compartment_id: str, availability_domain: str) -> list[OciShape]:
-    """x86 shapes the forms offer: flexible VM shapes (the VMware and the ISO form) and bare metal shapes
-    with their fixed cores and memory (ISO form only).  Ampere (aarch64) shapes are dropped: neither a
-    vSphere guest nor an x86 installer ISO boots on them."""
+    """Shapes the forms offer: flexible VM shapes (the VMware and the ISO form) and bare metal shapes with
+    their fixed cores and memory (ISO form only), each tagged with its architecture.  Ampere (aarch64)
+    shapes - VM.Standard.A1/A2/A4.Flex and the BM.Standard.A1/A2 servers - are listed for the ISO form
+    (an aarch64 installer ISO); the VMware form hides them since a vSphere guest is x86."""
     shapes = _all(c.compute.list_shapes, compartment_id=compartment_id, availability_domain=availability_domain)
     seen: dict[str, OciShape] = {}
     for s in shapes:
         kind = "BM" if s.shape.startswith("BM.") else "VM" if s.shape.startswith("VM.") else None
-        if kind is None or s.shape in seen or is_arm_shape(s.shape):
+        if kind is None or s.shape in seen:
             continue
         is_flex = bool(getattr(s, "is_flexible", False)) or s.shape.endswith(".Flex")
         if kind == "VM" and not is_flex:
@@ -166,13 +167,14 @@ def list_shapes(c: OciClients, compartment_id: str, availability_domain: str) ->
         seen[s.shape] = OciShape(
             name=s.shape,
             kind=kind,
+            arch="aarch64" if is_arm_shape(s.shape) else "x86_64",
             is_flex=is_flex,
             min_ocpus=getattr(oc, "min", None) if oc else s.ocpus,
             max_ocpus=getattr(oc, "max", None) if oc else s.ocpus,
             min_memory_gb=getattr(mem, "min_in_g_bs", None) if mem else s.memory_in_gbs,
             max_memory_gb=getattr(mem, "max_in_g_bs", None) if mem else s.memory_in_gbs,
         )
-    return sorted(seen.values(), key=lambda x: (x.kind, x.name))
+    return sorted(seen.values(), key=lambda x: (x.kind, x.arch, x.name))
 
 
 def object_storage_namespace(c: OciClients) -> str:

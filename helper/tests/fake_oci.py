@@ -226,13 +226,13 @@ class FakeCompute:
                ocpu_options=NS(min=1, max=94), memory_options=NS(min_in_g_bs=1, max_in_g_bs=1049)),
             NS(shape="VM.Standard2.1", is_flexible=False, ocpus=1, memory_in_gbs=15, ocpu_options=None,
                memory_options=None),
-            NS(shape="VM.Standard.A1.Flex", is_flexible=True, ocpus=1, memory_in_gbs=6,  # Ampere: filtered
+            NS(shape="VM.Standard.A1.Flex", is_flexible=True, ocpus=1, memory_in_gbs=6,  # Ampere (aarch64)
                ocpu_options=NS(min=1, max=80), memory_options=NS(min_in_g_bs=1, max_in_g_bs=512)),
             NS(shape="BM.Standard.E5.192", is_flexible=False, ocpus=192, memory_in_gbs=2304, ocpu_options=None,
                memory_options=None),
             NS(shape="BM.Standard3.64", is_flexible=False, ocpus=64, memory_in_gbs=1024, ocpu_options=None,
                memory_options=None),
-            NS(shape="BM.Standard.A1.160", is_flexible=False, ocpus=160, memory_in_gbs=1024,  # Ampere: filtered
+            NS(shape="BM.Standard.A1.160", is_flexible=False, ocpus=160, memory_in_gbs=1024,  # Ampere (aarch64)
                ocpu_options=None, memory_options=None),
         ])
 

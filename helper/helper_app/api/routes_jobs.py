@@ -53,14 +53,15 @@ def list_jobs(request: Request, vm_moid: Optional[str] = None):
     return request.app.state.store.list(vm_moid=vm_moid)
 
 
-async def _check_target(st, target) -> None:
-    """Validation shared by both job kinds: the helper's AD, an x86 shape, a usable fixed private IP."""
+async def _check_target(st, target, allow_arm: bool = False) -> None:
+    """Validation shared by both job kinds: the helper's AD, the shape's architecture (Ampere only for ISO
+    installations, a vSphere guest is x86), a usable fixed private IP."""
     helper_ad = st.clients.identity_info.availability_domain
     if target.availability_domain != helper_ad:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             f"the availability domain must be the migration tool VM's ({helper_ad})")
     shape = target.shape or st.settings.default_shape
-    if is_arm_shape(shape):
+    if is_arm_shape(shape) and not allow_arm:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             f"{shape} is an Ampere (ARM) shape; an x86 guest needs an x86 shape")
     if target.private_ip:
@@ -147,11 +148,22 @@ async def create_iso_job(body: CreateIsoJobRequest, request: Request,
     if choices and iso.operating_system_version not in choices:
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             f"select a {iso.operating_system} release OCI knows ({', '.join(choices)})")
-    if is_bare_metal_shape(target.shape or st.settings.default_shape):
+    shape = target.shape or st.settings.default_shape
+    if is_bare_metal_shape(shape):
         target.ocpus = target.memory_gb = None  # bare metal: cores and memory come with the shape
     elif not target.ocpus or not target.memory_gb:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "OCPUs and memory are required for a VM shape")
-    await _check_target(st, target)
+    if is_arm_shape(shape):
+        # Ampere: UEFI only, no shielded instances; the ISO has to be an aarch64 build (not checkable here)
+        if iso.firmware != "UEFI_64":
+            raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                                f"{shape} is an Ampere (Arm) shape and boots with UEFI only; select UEFI firmware "
+                                "(and an aarch64 installer ISO)")
+        if iso.secure_boot:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                                f"{shape} is an Ampere (Arm) shape; Secure Boot (shielded instance) is not "
+                                "available there")
+    await _check_target(st, target, allow_arm=True)
     now = utcnow()
     job = Job(
         id=uuid.uuid4().hex,

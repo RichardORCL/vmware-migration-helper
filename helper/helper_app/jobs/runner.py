@@ -25,6 +25,7 @@ from helper_app.jobs.progress import RateMeter
 from helper_app.jobs.store import JobStore, utcnow
 from helper_app.models import DiskState, DiskStatus, GuestFixup, Job, JobPhase
 from helper_app.oci.clients import describe_error
+from helper_app.oci.iso_install import IsoInstaller
 from helper_app.oci.provision import Provisioner
 from helper_app.runtime_settings import MAX_CONCURRENT_JOBS
 from helper_app.sessions import UserSession
@@ -53,10 +54,12 @@ class MigrationRunner:
         provisioner: Provisioner,
         export_factory: Optional[Callable[[object, str, bool], NfcExport]] = None,
         guest_fixer: Optional[GuestFixerFn] = None,
+        iso_installer: Optional[IsoInstaller] = None,
     ):
         self.s = settings
         self.store = store
         self.prov = provisioner
+        self.iso = iso_installer or IsoInstaller(provisioner.c, settings, store.put)
         self.export_factory = export_factory or self._default_export_factory
         self.guest_fixer: GuestFixerFn = guest_fixer or GuestFixer().fix
         # The pool only provides threads; how many migrations copy at the same time is gated by
@@ -89,6 +92,12 @@ class MigrationRunner:
             self._running.add(job_id)
         return self.pool.submit(self._run_safely, job_id)
 
+    def submit_iso(self, job_id: str) -> Future:
+        """Start an ISO job: no vCenter session and no copy slot (the helper moves no data for it)."""
+        with self._lock:
+            self._running.add(job_id)
+        return self.pool.submit(self._run_iso_safely, job_id)
+
     def cleanup(self, job_id: str) -> Future:
         """Tear down the OCI resources of a job that is not running (failed or restarted)."""
         with self._lock:
@@ -120,9 +129,12 @@ class MigrationRunner:
             return job_id in self._cancel_requested
 
     def fail_stale_jobs(self) -> list[str]:
-        """Jobs that were in flight when the helper stopped cannot resume (their vCenter session is gone)."""
+        """Jobs that were in flight when the helper stopped cannot resume (their vCenter session is gone).
+        ISO jobs in ``INSTALLING`` need nothing from the helper and stay as they are."""
         failed = []
         for job in self.store.active():
+            if job.phase == JobPhase.INSTALLING:
+                continue
             job.error = "migration tool restarted during the migration; cancel the job to clean up its OCI resources"
             job.phase = JobPhase.FAILED
             job.message = job.error
@@ -211,6 +223,31 @@ class MigrationRunner:
                 self._release_slot()
             self._finish(job_id)
 
+    def _run_iso_safely(self, job_id: str) -> None:
+        job = self.store.get(job_id)
+        if job is None:
+            self._finish(job_id)
+            return
+        try:
+            self._save(job, JobPhase.PROVISIONING, "Preparing the ISO image and the instance in OCI")
+            self.iso.run(job, check_cancel=lambda: self._check_cancel(job))
+        except JobCancelled:
+            self._save(job, message="Cancelled; cleaning up OCI resources")
+            try:
+                self.iso.cleanup(job)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("cleanup for %s failed: %s", job.id, describe_error(exc))
+                job.phase = JobPhase.CANCELLED
+                job.error = f"cleanup incomplete: {describe_error(exc)}"
+                self.store.put(job)
+        except Exception as exc:  # noqa: BLE001
+            log.exception("job %s failed at step %s", job_id, job.step)
+            detail = describe_error(exc)
+            job.error = f"step '{job.step}': {detail}" if job.step else detail
+            self._save(job, JobPhase.FAILED, f"Failed in step {job.step or '?'}: {detail}")
+        finally:
+            self._finish(job_id)
+
     def _finalize_safely(self, job_id: str) -> None:
         job = self.store.get(job_id)
         if job is None:
@@ -232,7 +269,9 @@ class MigrationRunner:
     def _cleanup_safely(self, job_id: str) -> None:
         job = self.store.get(job_id)
         try:
-            if job is not None:
+            if job is not None and job.kind == "iso":
+                self.iso.cleanup(job)
+            elif job is not None:
                 self.prov.cleanup(job)
         except Exception as exc:  # noqa: BLE001
             log.exception("cleanup of %s failed", job_id)

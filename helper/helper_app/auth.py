@@ -17,7 +17,16 @@ def session_from_websocket(ws: WebSocket) -> UserSession | None:
 
 
 async def require_session(request: Request) -> UserSession:
+    """Any UI session: a vCenter login or the anonymous session of the ISO flow."""
     session = request.app.state.sessions.get(session_token(request))
     if session is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "not logged in")
+    return session
+
+
+async def require_vcenter_session(request: Request) -> UserSession:
+    """A session with a vCenter connection behind it (VM inventory, VMware migrations, Setup page)."""
+    session = await require_session(request)
+    if session.vc is None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "this function needs a vCenter login")
     return session

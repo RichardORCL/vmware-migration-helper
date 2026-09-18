@@ -6,9 +6,18 @@ import logging
 from typing import Optional
 
 from helper_app.config import Settings
-from helper_app.models import OciCompartment, OciOptions, OciShape, OciSubnet, OciVcn
+from helper_app.models import (
+    OciBucket,
+    OciCompartment,
+    OciObject,
+    OciOptions,
+    OciShape,
+    OciSubnet,
+    OciVcn,
+    OsCatalogEntry,
+)
 from helper_app.oci.clients import OciClients
-from helper_app.oci.mapping import is_arm_shape
+from helper_app.oci.mapping import OS_VERSION_CHOICES, is_arm_shape
 
 log = logging.getLogger(__name__)
 
@@ -157,6 +166,50 @@ def list_flex_shapes(c: OciClients, compartment_id: str, availability_domain: st
         )
     flex = [x for x in seen.values() if x.is_flex]
     return sorted(flex, key=lambda x: x.name)
+
+
+def object_storage_namespace(c: OciClients) -> str:
+    return c.object_storage.get_namespace().data
+
+
+def list_buckets(c: OciClients, compartment_id: str) -> list[OciBucket]:
+    """Buckets of a compartment (the ISO picker's first step)."""
+    namespace = object_storage_namespace(c)
+    buckets = _all(c.object_storage.list_buckets, namespace_name=namespace, compartment_id=compartment_id)
+    return sorted(
+        (OciBucket(name=b.name, namespace=namespace, compartment_id=compartment_id,
+                   time_created=getattr(b, "time_created", None)) for b in buckets),
+        key=lambda b: b.name.lower(),
+    )
+
+
+def list_iso_objects(c: OciClients, bucket: str, prefix: Optional[str] = None) -> list[OciObject]:
+    """``.iso`` objects in a bucket with size, ETag and modification time (the fields the ISO job records)."""
+    namespace = object_storage_namespace(c)
+    kwargs = dict(namespace_name=namespace, bucket_name=bucket, fields="name,size,etag,timeModified")
+    if prefix:
+        kwargs["prefix"] = prefix
+    listed = _all(c.object_storage.list_objects, **kwargs)
+    # the SDK aggregates ListObjects pages into one ListObjects wrapper (``.objects``), not into a plain list
+    objects = getattr(listed, "objects", listed)
+    result = [
+        OciObject(name=o.name, size_bytes=int(getattr(o, "size", 0) or 0), etag=getattr(o, "etag", "") or "",
+                  time_modified=getattr(o, "time_modified", None))
+        for o in objects if o.name.lower().endswith(".iso")
+    ]
+    return sorted(result, key=lambda o: o.name.lower())
+
+
+def os_catalog() -> list[OsCatalogEntry]:
+    """Operating systems (and releases) selectable on the ISO form, from the same catalog as the VMware
+    flow, plus a *Custom Linux* fallback without releases."""
+    entries = [
+        OsCatalogEntry(operating_system=name, family="windows" if name == "Windows" else "linux", versions=versions)
+        for name, versions in OS_VERSION_CHOICES.items()
+    ]
+    entries.sort(key=lambda e: (e.family, e.operating_system.lower()))
+    entries.append(OsCatalogEntry(operating_system="Custom Linux", family="linux", versions=[]))
+    return entries
 
 
 def build_options(

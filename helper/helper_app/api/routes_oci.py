@@ -9,11 +9,46 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from helper_app.auth import require_session
-from helper_app.models import OciOptions, PrivateIpCheck
+from helper_app.models import OciBucket, OciObject, OciOptions, OsCatalogEntry, PrivateIpCheck
 from helper_app.oci.clients import describe_error
-from helper_app.oci.options import PrivateIpError, build_options, check_private_ip
+from helper_app.oci.options import (
+    PrivateIpError,
+    build_options,
+    check_private_ip,
+    list_buckets,
+    list_iso_objects,
+    os_catalog,
+)
 
 router = APIRouter(prefix="/api", tags=["oci"], dependencies=[Depends(require_session)])
+
+
+@router.get("/oci/buckets", response_model=list[OciBucket])
+async def oci_buckets(request: Request, compartment_id: Optional[str] = None):
+    """Object Storage buckets of a compartment (the migration tool VM's when omitted) for the ISO picker."""
+    st = request.app.state
+    comp = compartment_id or st.clients.identity_info.compartment_id
+    try:
+        return await asyncio.to_thread(list_buckets, st.clients, comp)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"cannot list buckets: {describe_error(exc)}")
+
+
+@router.get("/oci/objects", response_model=list[OciObject])
+async def oci_objects(request: Request, bucket: str, prefix: Optional[str] = None):
+    """``.iso`` objects in a bucket."""
+    st = request.app.state
+    try:
+        return await asyncio.to_thread(list_iso_objects, st.clients, bucket, prefix)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY,
+                            f"cannot list objects of bucket {bucket}: {describe_error(exc)}")
+
+
+@router.get("/oci/os-catalog", response_model=list[OsCatalogEntry])
+def oci_os_catalog():
+    """Operating systems and releases OCI accepts as custom image metadata (ISO form)."""
+    return os_catalog()
 
 
 @router.get("/oci/options", response_model=OciOptions)
@@ -59,4 +94,15 @@ async def delete_seed_images(request: Request):
         deleted = await asyncio.to_thread(seeds.cleanup)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"seed cleanup failed: {exc}")
+    return {"deleted": deleted}
+
+
+@router.delete("/iso-images")
+async def delete_iso_images(request: Request):
+    """Delete the custom images imported from ISOs (they are kept after a job for reuse)."""
+    installer = request.app.state.runner.iso
+    try:
+        deleted = await asyncio.to_thread(installer.cleanup_images)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"ISO image cleanup failed: {exc}")
     return {"deleted": deleted}

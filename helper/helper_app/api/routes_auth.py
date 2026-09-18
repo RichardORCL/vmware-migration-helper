@@ -46,6 +46,26 @@ async def login(body: LoginRequest, request: Request, response: Response):
     return session.info()
 
 
+@router.post("/anonymous", response_model=SessionInfo)
+def anonymous(request: Request, response: Response):
+    """Session for the ISO flow, which needs no vCenter.  A vCenter login already in this browser is kept
+    (it can do everything the anonymous session can); otherwise an anonymous session is created."""
+    st = request.app.state
+    existing = st.sessions.get(session_token(request))
+    if existing is not None:
+        return existing.info()
+    session = st.sessions.create(None)
+    response.set_cookie(
+        st.settings.session_cookie_name,
+        session.token,
+        httponly=True,
+        secure=st.settings.cookie_secure,
+        samesite="strict",
+        path="/",
+    )
+    return session.info()
+
+
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 def logout(request: Request, response: Response):
     st = request.app.state

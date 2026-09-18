@@ -157,6 +157,42 @@ def test_console_refused_before_completion(cenv):
     assert c.get("/api/jobs/nope/console").status_code == 404
 
 
+def test_console_available_while_iso_installation_runs(cenv):
+    """ISO jobs: the console is the way to run the installer, so it opens in INSTALLING (from the anonymous
+    session), stays after Installation finished, and is refused for an ISO job that never launched."""
+    c, fake = cenv.client, cenv.fake
+    fake.object_storage.add_object("isos", "ubuntu.iso", etag="e1")
+    assert c.post("/api/auth/anonymous").status_code == 200
+    body = {"iso": {"namespace": "testnamespace", "bucket": "isos", "object_name": "ubuntu.iso", "etag": "e1",
+                    "operating_system": "Ubuntu", "operating_system_version": "24.04"},
+            "target": target(display_name="ubuntu-iso", shape="VM.Standard.E5.Flex", ocpus=1, memory_gb=8)}
+    r = c.post("/api/jobs/iso", json=body)
+    assert r.status_code == 202, r.text
+    job = wait_phase(c, r.json()["id"], "INSTALLING", "FAILED")
+    assert job["phase"] == "INSTALLING", job
+    jid, iid = job["id"], job["instance_id"]
+
+    r = c.post(f"/api/jobs/{jid}/console")
+    assert r.status_code == 202, r.text
+    st = wait_console(c, jid, "ACTIVE", "FAILED")
+    assert st["state"] == "ACTIVE" and st["created_by"] == "anonymous"
+    conns = [x for x in fake.compute.console_connections.values() if x.instance_id == iid]
+    assert len(conns) == 1 and conns[0].freeform_tags["vc-oci-job"] == jid
+    with c.websocket_connect(f"/api/jobs/{jid}/console/vnc", subprotocols=["binary"]) as ws:
+        ws.send_bytes(b"RFB 003.008\n")
+        assert ws.receive_bytes() == b"echo:RFB 003.008\n"
+        assert FakeTunnel.opened[-1].endpoint.target_host == iid
+    # finishing the installation keeps the console usable (the instance now boots from its boot volume)
+    assert c.post(f"/api/jobs/{jid}/finish").json()["phase"] == "COMPLETED"
+    assert c.get(f"/api/jobs/{jid}/console").json()["state"] == "ACTIVE"
+    assert c.post(f"/api/jobs/{jid}/console").json()["connection_id"] == st["connection_id"]
+
+    # an ISO job without an instance (failed import) has nothing to connect to
+    failed = Job.model_validate({**job, "id": "iso-failed", "phase": JobPhase.FAILED.value, "instance_id": None})
+    cenv.store.put(failed)
+    assert c.post("/api/jobs/iso-failed/console").status_code == 409
+
+
 def test_console_requires_login(cenv):
     c = cenv.client
     job = completed_job(cenv)

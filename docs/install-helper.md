@@ -47,7 +47,7 @@ terraform output helper_ui_url
 - an Oracle Linux 9 flex instance with paravirtualized storage/network and consistent device naming (`/dev/oracleoci/oraclevd*`), tagged `vc-oci.role=helper`;
 - a network security group (in the network compartment, `network_compartment_ocid`) allowing TCP 8443 (web UI) and 22 (SSH) from `allowed_source_cidrs`, all egress;
 - the `vc-oci-seed-images` Object Storage bucket used while importing seed images;
-- (when `create_iam = true`) the `vc-oci` tag namespace, a dynamic group matching the tagged instance in the migration tool compartment, and a policy granting it `manage instance-family` / `manage volume-family` / `use virtual-network-family` in `policy_scope_compartment_ocid` (default: tenancy), plus `manage instance-images` / `compute-image-capability-schema` / volume attachments in its own compartment, object access to the seed bucket and `PAR_MANAGE` on that bucket (the image import service reads the placeholder through a pre-authenticated request it creates on the migration tool's behalf);
+- (when `create_iam = true`) the `vc-oci` tag namespace, a dynamic group matching the tagged instance in the migration tool compartment, and a policy granting it `manage instance-family` / `manage volume-family` / `use virtual-network-family` in `policy_scope_compartment_ocid` (default: tenancy), plus `manage instance-images` / `compute-image-capability-schema` / volume attachments in its own compartment, object access to the seed bucket and `PAR_MANAGE` on that bucket (the image import service reads the placeholder through a pre-authenticated request it creates on the migration tool's behalf); for *Create OCI instance based on ISO* additionally `read buckets` / `read objects` in the policy scope (the ISO picker) and `manage buckets ... where request.permission = 'PAR_MANAGE'` there (the ISO import reads the object through a PAR as well);
 - cloud-init that writes `/etc/vc-oci-helper/helper.env` (OCI settings, bucket, default shape, concurrency), installs the migration tool (git clone + `pip install` into `/opt/vc-oci/venv`), generates a self-signed certificate, opens 8443 in firewalld and runs the `vc-oci-helper` systemd unit.
 
 **Target instances can only be created in the migration tool's AD** because boot volumes are AD-local; deploy one stack per AD if you need more.
@@ -92,6 +92,8 @@ To replace the self-signed certificate, put your own into `/etc/vc-oci-helper/se
 | `HELPER_INSTANCE_ID`, `HELPER_COMPARTMENT_ID`, `HELPER_AVAILABILITY_DOMAIN`, `HELPER_REGION`, `HELPER_TENANCY_ID` | auto | Discovered from the instance metadata service when empty |
 | `HELPER_SEED_BUCKET` | `vc-oci-seed-images` | Bucket for seed image imports |
 | `HELPER_SEED_COMPARTMENT_ID` | migration tool compartment | Where seed images are kept |
+| `HELPER_ISO_IMAGE_COMPARTMENT_ID` | seed compartment | Where the custom images imported from installer ISOs (*Create OCI instance based on ISO*) are kept |
+| `HELPER_ISO_SOURCE_IMAGE_TYPE` | `ISO` | `sourceImageType` sent to `CreateImage` for an ISO. OCI accepts `ISO` although the public documentation only lists `QCOW2` and `VMDK`; change it only if OCI renames the type |
 | `HELPER_DEFAULT_SHAPE` | `VM.Standard.E5.Flex` | Flex shape for target instances |
 | `HELPER_MIN_VOLUME_GB` | `50` | Minimum OCI volume size |
 | `HELPER_DEVICE_PREFIX` | `/dev/oracleoci/oraclevd` | Consistent device path prefix |
@@ -122,6 +124,7 @@ The same thing by hand: `sudo /usr/local/sbin/vc-oci-helper-install && sudo syst
 ## Maintenance
 
 - Seed images accumulate one per firmware/OS combination. Delete them from the *Setup* tab, with `DELETE /api/seed-images` (logged in) or from the console (tag `vc-oci-seed=true`).
+- ISO images (custom images imported by *Create OCI instance based on ISO*) accumulate one per ISO object / firmware / device model and are kept for reuse. Delete them from the *Setup* tab, with `DELETE /api/iso-images` or from the console (tag `vc-oci-iso=true`); instances already launched keep running.
 - Jobs are stored in `HELPER_DB_PATH`. A failed job leaves its OCI resources in place for inspection; *Clean up OCI resources* in the job view (`POST /api/jobs/{id}/cancel`) terminates the instance and deletes the volumes.
 - After a restart of the service, jobs that were running are marked `FAILED` (their vCenter session is gone); clean them up and start again.
 - The job history can be trimmed from the *Setup* tab: *Delete failed jobs* removes `FAILED` and `CANCELLED` records, *Delete all jobs* every finished record (`DELETE /api/setup/jobs?scope=failed|all`). Running or queued jobs are never deleted, and only the records go - OCI resources of a failed job are not cleaned up by this.

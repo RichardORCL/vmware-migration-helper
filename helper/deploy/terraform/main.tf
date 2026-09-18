@@ -145,6 +145,12 @@ resource "oci_identity_policy" "helper" {
     # caller's behalf; without PAR_MANAGE on the bucket the import fails silently and the image is deleted
     "Allow dynamic-group ${local.dynamic_group} to manage buckets in compartment id ${var.compartment_ocid} where all {target.bucket.name = '${var.seed_bucket_name}', request.permission = 'PAR_MANAGE'}",
     "Allow dynamic-group ${local.dynamic_group} to read objectstorage-namespaces in tenancy",
+    # "Create OCI instance based on ISO": the ISO picker lists buckets and objects anywhere in the policy scope,
+    # and the image import reads the ISO the same way it reads the seed placeholder (through a PAR the
+    # import service creates as the migration tool VM), so PAR_MANAGE is needed on the ISO buckets as well
+    "Allow dynamic-group ${local.dynamic_group} to read buckets in ${local.policy_scope}",
+    "Allow dynamic-group ${local.dynamic_group} to read objects in ${local.policy_scope}",
+    "Allow dynamic-group ${local.dynamic_group} to manage buckets in ${local.policy_scope} where request.permission = 'PAR_MANAGE'",
   ]
   depends_on = [oci_identity_dynamic_group.helper]
 }

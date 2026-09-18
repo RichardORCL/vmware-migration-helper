@@ -365,19 +365,30 @@ class FakeCompute:
             raise service_error(400, "InvalidParameter",
                                 f"Invalid operatingSystemVersion: {os_version} (The operating system version is "
                                 "not supported.)", "create_image")
+        # the documented types plus ISO, which the service accepts (an instance launched from such an image
+        # boots the ISO as installation media and gets a blank boot volume)
+        if src.source_image_type not in ("QCOW2", "VMDK", "ISO"):
+            raise service_error(400, "InvalidParameter",
+                                f"Invalid sourceImageType: {src.source_image_type}", "create_image")
+        import_errors, outcome = list(self.f.import_errors), self.f.import_outcome
+        if src.source_image_type == "ISO" and not self.f.object_storage.has_object(src.bucket_name, src.object_name):
+            # like a real import of a missing object: accepted, then fails asynchronously
+            outcome = "DELETED"
+            import_errors.append(("InvalidParameter", f"Object {src.object_name} not found in bucket "
+                                                      f"{src.bucket_name}"))
         iid = oid("image")
         img = NS(id=iid, display_name=details.display_name, compartment_id=details.compartment_id,
                  lifecycle_state="IMPORTING", freeform_tags=dict(details.freeform_tags or {}),
                  launch_mode=details.launch_mode, operating_system=os_name,
                  operating_system_version=os_version, source_image_type=src.source_image_type,
-                 object_name=src.object_name)
+                 object_name=src.object_name, bucket_name=src.bucket_name, namespace_name=src.namespace_name)
         self.images[iid] = img
-        self.pending_transitions[iid] = self.f.import_outcome
+        self.pending_transitions[iid] = outcome
         # the import stays IMPORTING for `import_polls` get_image calls; the work request percent follows
         self.import_polls_left[iid] = self.f.import_polls
         total = max(1, self.f.import_polls)
         wr_id = self.f.work_requests.add(
-            "CreateImage", details.compartment_id, iid, self.f.import_errors, self.f.import_logs,
+            "CreateImage", details.compartment_id, iid, import_errors, self.f.import_logs,
             percent=lambda: 100.0 * (total - self.import_polls_left.get(iid, 0)) / total)
         return Resp(img, headers={"opc-work-request-id": wr_id})
 
@@ -452,13 +463,35 @@ class FakeBlockstorage:
 
 
 class FakeObjectStorage:
-    def __init__(self, bucket_exists=False):
+    NAMESPACE = "testnamespace"
+
+    def __init__(self, bucket_exists=False, compartment_id: str = "ocid1.compartment.oc1..helper"):
         self.buckets: set[str] = {"vc-oci-seed"} if bucket_exists else set()
-        self.objects: dict[str, bytes] = {}
+        self.bucket_compartments: dict[str, str] = {}  # bucket -> compartment (default: the helper's)
+        self.default_compartment = compartment_id
+        self.objects: dict[str, bytes] = {}  # seed placeholders (seed bucket): name -> body
+        self.iso_objects: dict[str, dict[str, NS]] = {}  # bucket -> name -> ObjectSummary-like
         self.deleted: list[str] = []
+        self.list_calls: list[dict] = []  # kwargs of every list_buckets / list_objects call
+
+    def add_bucket(self, name: str, compartment_id: Optional[str] = None) -> None:
+        self.buckets.add(name)
+        self.bucket_compartments[name] = compartment_id or self.default_compartment
+
+    def add_object(self, bucket: str, name: str, size: int = 4 * 1024**3, etag: str = "") -> NS:
+        """Put an object (an ISO, typically) into a bucket the way a user upload would."""
+        if bucket not in self.buckets:
+            self.add_bucket(bucket)
+        obj = NS(name=name, size=size, etag=etag or f"etag-{name}", time_modified=None, md5=None,
+                 time_created=None, storage_tier="Standard", archival_state=None)
+        self.iso_objects.setdefault(bucket, {})[name] = obj
+        return obj
+
+    def has_object(self, bucket: str, name: str) -> bool:
+        return name in self.iso_objects.get(bucket, {}) or (bucket in self.buckets and name in self.objects)
 
     def get_namespace(self, **kw):
-        return Resp("testnamespace")
+        return Resp(self.NAMESPACE)
 
     def get_bucket(self, namespace, bucket, **kw):
         if bucket not in self.buckets:
@@ -467,7 +500,42 @@ class FakeObjectStorage:
 
     def create_bucket(self, namespace, details, **kw):
         self.buckets.add(details.name)
+        self.bucket_compartments[details.name] = details.compartment_id
         return Resp(NS(name=details.name))
+
+    def list_buckets(self, namespace_name, compartment_id, **kw):
+        self.list_calls.append({"op": "list_buckets", "namespace_name": namespace_name,
+                                "compartment_id": compartment_id, **kw})
+        if namespace_name != self.NAMESPACE:
+            raise service_error(404, "NamespaceNotFound", f"namespace {namespace_name} not found", "ListBuckets")
+        return Resp([NS(name=b, namespace=namespace_name, compartment_id=compartment_id, time_created=None)
+                     for b in sorted(self.buckets)
+                     if self.bucket_compartments.get(b, self.default_compartment) == compartment_id])
+
+    def list_objects(self, namespace_name, bucket_name, prefix=None, fields=None, start=None, **kw):
+        """Like the SDK: a ``ListObjects`` wrapper (``objects`` + ``next_start_with``), which
+        ``oci.pagination`` aggregates into another ``ListObjects`` rather than a plain list."""
+        from oci.object_storage.models import ListObjects, ObjectSummary
+
+        self.list_calls.append({"op": "list_objects", "namespace_name": namespace_name, "bucket_name": bucket_name,
+                                "prefix": prefix, "fields": fields, "start": start, **kw})
+        if bucket_name not in self.buckets:
+            raise service_error(404, "BucketNotFound", f"bucket {bucket_name} not found", "ListObjects")
+        names = set(self.iso_objects.get(bucket_name, {}))
+        if bucket_name == "vc-oci-seed":
+            names |= set(self.objects)
+        summaries = []
+        for name in sorted(names):
+            if prefix and not name.startswith(prefix):
+                continue
+            src = self.iso_objects.get(bucket_name, {}).get(name)
+            s = ObjectSummary()
+            s.name = name
+            s.size = src.size if src else len(self.objects[name])
+            s.etag = src.etag if src else f"etag-{name}"
+            s.time_modified = src.time_modified if src else None
+            summaries.append(s)
+        return Resp(ListObjects(objects=summaries, prefixes=[], next_start_with=None))
 
     def put_object(self, namespace, bucket, name, body, **kw):
         assert bucket in self.buckets
@@ -614,7 +682,7 @@ class FakeOci:
         self.work_requests = FakeWorkRequests()
         self.blockstorage = FakeBlockstorage()
         self.compute = FakeCompute(self)
-        self.object_storage = FakeObjectStorage(bucket_exists)
+        self.object_storage = FakeObjectStorage(bucket_exists, compartment_id=self.identity.compartment_id)
         self.identity_client = FakeIdentity(self.identity.tenancy_id)
         self.network = FakeNetwork()
 

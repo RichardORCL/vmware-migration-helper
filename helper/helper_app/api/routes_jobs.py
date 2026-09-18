@@ -12,9 +12,10 @@ from fastapi.responses import PlainTextResponse
 
 from helper_app import diagnostics
 from helper_app.api.routes_vms import inspect
-from helper_app.auth import require_session
+from helper_app.auth import require_session, require_vcenter_session
 from helper_app.jobs.store import utcnow
 from helper_app.models import (
+    CreateIsoJobRequest,
     CreateJobRequest,
     DiskState,
     InstanceStatus,
@@ -24,6 +25,7 @@ from helper_app.models import (
 )
 from helper_app.oci.clients import describe_error
 from helper_app.oci.mapping import (
+    OS_VERSION_CHOICES,
     WINDOWS_CLIENT_VERSIONS,
     is_arm_shape,
     map_guest_os,
@@ -50,8 +52,30 @@ def list_jobs(request: Request, vm_moid: Optional[str] = None):
     return request.app.state.store.list(vm_moid=vm_moid)
 
 
+async def _check_target(st, target) -> None:
+    """Validation shared by both job kinds: the helper's AD, an x86 shape, a usable fixed private IP."""
+    helper_ad = st.clients.identity_info.availability_domain
+    if target.availability_domain != helper_ad:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            f"the availability domain must be the migration tool VM's ({helper_ad})")
+    shape = target.shape or st.settings.default_shape
+    if is_arm_shape(shape):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            f"{shape} is an Ampere (ARM) shape; an x86 guest needs an x86 shape")
+    if target.private_ip:
+        # fixed address: must fit the subnet and be free right now (OCI would otherwise fail the launch later)
+        try:
+            await asyncio.to_thread(check_private_ip, st.clients, target.subnet_id, target.private_ip)
+        except PrivateIpError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status.HTTP_502_BAD_GATEWAY,
+                                f"cannot verify private IP {target.private_ip}: {describe_error(exc)}")
+
+
 @router.post("", response_model=Job, status_code=status.HTTP_202_ACCEPTED)
-async def create_job(body: CreateJobRequest, request: Request, session: UserSession = Depends(require_session)):
+async def create_job(body: CreateJobRequest, request: Request,
+                     session: UserSession = Depends(require_vcenter_session)):
     st = request.app.state
     inspection = await asyncio.to_thread(inspect, session, body.vm_moid)
     if not inspection.can_export:
@@ -74,23 +98,7 @@ async def create_job(body: CreateJobRequest, request: Request, session: UserSess
             and body.target.windows_license_type == WindowsLicenseType.OCI_PROVIDED):
         raise HTTPException(status.HTTP_400_BAD_REQUEST,
                             "OCI does not provide licenses for Windows 10/11; select Bring your own license")
-    helper_ad = st.clients.identity_info.availability_domain
-    if body.target.availability_domain != helper_ad:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST,
-                            f"the availability domain must be the migration tool VM's ({helper_ad})")
-    shape = body.target.shape or st.settings.default_shape
-    if is_arm_shape(shape):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST,
-                            f"{shape} is an Ampere (ARM) shape; an x86 guest from vSphere needs an x86 shape")
-    if body.target.private_ip:
-        # fixed address: must fit the subnet and be free right now (OCI would otherwise fail the launch later)
-        try:
-            await asyncio.to_thread(check_private_ip, st.clients, body.target.subnet_id, body.target.private_ip)
-        except PrivateIpError as exc:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
-        except Exception as exc:  # noqa: BLE001
-            raise HTTPException(status.HTTP_502_BAD_GATEWAY,
-                                f"cannot verify private IP {body.target.private_ip}: {describe_error(exc)}")
+    await _check_target(st, body.target)
     active = st.store.active_for_vm(body.vm_moid)
     if active is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, f"job {active.id} for this VM is still {active.phase.value}")
@@ -113,6 +121,48 @@ async def create_job(body: CreateJobRequest, request: Request, session: UserSess
     )
     st.store.put(job)
     st.runner.submit(job.id, session)
+    return job
+
+
+@router.post("/iso", response_model=Job, status_code=status.HTTP_202_ACCEPTED)
+async def create_iso_job(body: CreateIsoJobRequest, request: Request,
+                         session: UserSession = Depends(require_session)):
+    """Create an instance that boots an installer ISO from Object Storage.  Works from an anonymous session
+    (no vCenter involved)."""
+    st = request.app.state
+    iso, target = body.iso, body.target
+    if not iso.object_name.lower().endswith(".iso"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"{iso.object_name} is not an .iso object")
+    if not (target.display_name or "").strip():
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "an instance name is required")
+    if iso.is_windows:
+        if target.windows_license_type is None:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "a Windows license type must be selected")
+        if (iso.operating_system_version in WINDOWS_CLIENT_VERSIONS
+                and target.windows_license_type == WindowsLicenseType.OCI_PROVIDED):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                                "OCI does not provide licenses for Windows 10/11; select Bring your own license")
+    choices = OS_VERSION_CHOICES.get(iso.operating_system)
+    if choices and iso.operating_system_version not in choices:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            f"select a {iso.operating_system} release OCI knows ({', '.join(choices)})")
+    if not target.ocpus or not target.memory_gb:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "OCPUs and memory are required for an ISO instance")
+    await _check_target(st, target)
+    now = utcnow()
+    job = Job(
+        id=uuid.uuid4().hex,
+        kind="iso",
+        iso=iso,
+        target=target,
+        phase=JobPhase.QUEUED,
+        message="Queued",
+        created_by=session.username,
+        created_at=now,
+        updated_at=now,
+    )
+    st.store.put(job)
+    st.runner.submit_iso(job.id)
     return job
 
 
@@ -172,6 +222,16 @@ def cancel_job(job_id: str, request: Request):
     st.store.put(job)
     st.runner.cleanup(job.id)
     return job
+
+
+@router.post("/{job_id}/finish", response_model=Job)
+def finish_installation(job_id: str, request: Request):
+    """ISO jobs: the user reports the installation as done; the job completes (the instance stays)."""
+    st = request.app.state
+    job = _get_job(request, job_id)
+    if job.kind != "iso" or job.phase != JobPhase.INSTALLING:
+        raise HTTPException(status.HTTP_409_CONFLICT, "only an ISO job in INSTALLING can be finished")
+    return st.runner.iso.finish(job)
 
 
 @router.post("/{job_id}/finalize", response_model=Job, status_code=status.HTTP_202_ACCEPTED)

@@ -28,9 +28,11 @@ READ_CHUNK = 64 * 1024
 
 def _console_job(request: Request, job_id: str):
     job = _get_job(request, job_id)
-    if job.phase != JobPhase.COMPLETED or not job.instance_id:
+    # completed migrations, and ISO installations while the installer runs (that is what the console is for)
+    if job.phase not in (JobPhase.COMPLETED, JobPhase.INSTALLING) or not job.instance_id:
         raise HTTPException(status.HTTP_409_CONFLICT,
-                            "the remote console is available for completed migrations with an OCI instance")
+                            "the remote console is available for completed migrations and running installations "
+                            "with an OCI instance")
     return job
 
 

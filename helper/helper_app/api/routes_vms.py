@@ -7,7 +7,7 @@ import time
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from helper_app.auth import require_session
+from helper_app.auth import require_vcenter_session
 from helper_app.models import GuestOsMapping, VmInspection, VmSummary
 from helper_app.oci.mapping import map_guest_os, os_version_choices
 from helper_app.sessions import UserSession
@@ -31,7 +31,7 @@ def _list_cached(session: UserSession, refresh: bool) -> list[VmSummary]:
 
 
 @router.get("", response_model=list[VmSummary])
-async def list_vms(refresh: bool = Query(default=False), session: UserSession = Depends(require_session)):
+async def list_vms(refresh: bool = Query(default=False), session: UserSession = Depends(require_vcenter_session)):
     try:
         return await asyncio.to_thread(_list_cached, session, refresh)
     except VCenterError as exc:
@@ -61,5 +61,5 @@ def inspect(session: UserSession, moid: str) -> VmInspection:
 
 
 @router.get("/{moid}", response_model=VmInspection)
-async def inspect_vm(moid: str, session: UserSession = Depends(require_session)):
+async def inspect_vm(moid: str, session: UserSession = Depends(require_vcenter_session)):
     return await asyncio.to_thread(inspect, session, moid)

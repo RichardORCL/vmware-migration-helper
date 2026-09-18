@@ -20,11 +20,17 @@ from helper_app.vsphere.session import VCenterSession
 log = logging.getLogger(__name__)
 
 
+ANONYMOUS_USER = "anonymous"
+
+
 class UserSession:
-    def __init__(self, token: str, vc: VCenterSession, ttl_s: float):
+    """A web UI session.  ``vc`` is the vCenter connection of a logged-in user, or ``None`` for an
+    *anonymous* session (the ISO flow needs no vSphere)."""
+
+    def __init__(self, token: str, vc: Optional[VCenterSession], ttl_s: float):
         self.token = token
         self.vc = vc
-        self.username = vc.username
+        self.username = vc.username if vc is not None else ANONYMOUS_USER
         self.created_at = datetime.now(timezone.utc)
         self.ttl_s = ttl_s
         self._last_used = time.monotonic()
@@ -54,7 +60,14 @@ class UserSession:
     def expires_at(self) -> datetime:
         return datetime.now(timezone.utc) + timedelta(seconds=max(0.0, self.ttl_s - self.idle_s))
 
+    @property
+    def anonymous(self) -> bool:
+        return self.vc is None
+
     def info(self) -> SessionInfo:
+        if self.vc is None:
+            return SessionInfo(username=self.username, anonymous=True, created_at=self.created_at,
+                               expires_at=self.expires_at)
         return SessionInfo(username=self.username, vcenter_host=self.vc.host,
                            vcenter_port=getattr(self.vc, "port", 443), vcenter_version=self.vc.version,
                            verify_ssl=bool(getattr(self.vc, "verify_ssl", False)),
@@ -69,7 +82,7 @@ class UserSession:
         with self._lock:
             self._pins.discard(job_id)
             close = self._dead and not self._pins
-        if close:
+        if close and self.vc is not None:
             self.vc.close()
 
     @property
@@ -82,7 +95,7 @@ class UserSession:
         with self._lock:
             self._dead = True
             close = not self._pins
-        if close:
+        if close and self.vc is not None:
             self.vc.close()
 
 
@@ -92,12 +105,13 @@ class SessionStore:
         self._sessions: dict[str, UserSession] = {}
         self._lock = threading.Lock()
 
-    def create(self, vc: VCenterSession) -> UserSession:
+    def create(self, vc: Optional[VCenterSession]) -> UserSession:
+        """New session for a vCenter login, or an anonymous one (``vc=None``) for the ISO flow."""
         token = secrets.token_urlsafe(32)
         session = UserSession(token, vc, self.ttl_s)
         with self._lock:
             self._sessions[token] = session
-        log.info("session created for %s", vc.username)
+        log.info("session created for %s", session.username)
         return session
 
     def set_ttl(self, ttl_s: float) -> None:
@@ -140,7 +154,8 @@ class SessionStore:
             sessions = list(self._sessions.values())
             self._sessions.clear()
         for s in sessions:
-            s.vc.close()
+            if s.vc is not None:
+                s.vc.close()
 
     def __len__(self) -> int:
         with self._lock:

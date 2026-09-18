@@ -215,6 +215,42 @@ class OciTarget(BaseModel):
             raise ValueError(f"private_ip must be an IPv4 address such as 10.0.1.25 (got {v!r})") from exc
 
 
+# --------------------------------------------------------------------------- #
+# ISO based instance creation (no vSphere involved)
+# --------------------------------------------------------------------------- #
+class IsoSpec(BaseModel):
+    """The installer ISO in Object Storage and how the instance booting it is built.  Everything about
+    *where* the instance goes (compartment, subnet, shape, ...) lives in the shared ``OciTarget``."""
+
+    namespace: str
+    bucket: str
+    object_name: str
+    size_bytes: int = 0
+    etag: str = ""  # identifies the exact object version; a re-uploaded ISO gets a new image
+    operating_system: str = Field(default="Custom Linux", max_length=64,
+                                  description="Recorded on the imported image (OCI catalog name, e.g. Ubuntu)")
+    operating_system_version: str = Field(default="unknown", max_length=64)
+    firmware: Literal["BIOS", "UEFI_64"] = "UEFI_64"
+    secure_boot: bool = False  # UEFI only: launch a shielded instance
+    boot_disk_gb: int = Field(default=50, ge=50, le=32768,
+                              description="Size of the blank boot volume the OS is installed onto")
+
+    @property
+    def key(self) -> str:
+        return f"{self.namespace}/{self.bucket}/{self.object_name}"
+
+    @property
+    def is_windows(self) -> bool:
+        return self.operating_system.lower().startswith("windows")
+
+    @field_validator("secure_boot")
+    @classmethod
+    def _secure_boot_needs_uefi(cls, v, info):
+        if v and info.data.get("firmware") == "BIOS":
+            raise ValueError("Secure Boot requires UEFI_64 firmware")
+        return v
+
+
 class LaunchOptionsSpec(BaseModel):
     """Resolved OCI LaunchOptions for the target instance."""
 
@@ -236,6 +272,7 @@ class JobPhase(str, Enum):
     PROVISIONING = "PROVISIONING"
     EXPORTING = "EXPORTING"
     FINALIZING = "FINALIZING"
+    INSTALLING = "INSTALLING"  # ISO jobs: the instance runs the installer; the user finishes the job
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
@@ -308,14 +345,20 @@ class GuestFixup(BaseModel):
     log: list[str] = Field(default_factory=list, description="Step-by-step notes for diagnostics")
 
 
+JobKind = Literal["vmware", "iso"]
+
+
 class Job(BaseModel):
     id: str
+    kind: JobKind = "vmware"  # vmware: VM migrated from vSphere; iso: instance installed from an ISO image
     phase: JobPhase = JobPhase.QUEUED
     step: str = ""
     step_percent: Optional[int] = None  # progress of the current step when OCI reports one (work requests)
     message: str = ""
     error: Optional[str] = None
-    vm: VmSpec
+    vm: Optional[VmSpec] = None  # the source VM (vmware jobs)
+    iso: Optional[IsoSpec] = None  # the installer ISO (iso jobs)
+    iso_image_id: Optional[str] = None  # custom image imported from the ISO (iso jobs)
     vcenter_host: str = ""  # vCenter the VM was inspected on ("host" or "host:port"); tagged onto the instance
     target: OciTarget
     power_off_source: bool = False  # VM was powered on when the job was created; shut it down before the export
@@ -338,6 +381,26 @@ class Job(BaseModel):
     @property
     def total_bytes(self) -> int:
         return sum(d.capacity_bytes for d in self.disks)
+
+    @property
+    def source_key(self) -> str:
+        """What the job was created from, as stored in the job table's source column (the VM's moid, or the
+        ISO object)."""
+        if self.vm is not None:
+            return self.vm.moid
+        return f"iso:{self.iso.key}" if self.iso is not None else ""
+
+    @property
+    def source_name(self) -> str:
+        if self.vm is not None:
+            return self.vm.name
+        return self.iso.object_name if self.iso is not None else ""
+
+    @property
+    def is_windows(self) -> bool:
+        if self.vm is not None:
+            return self.vm.is_windows
+        return bool(self.iso and self.iso.is_windows)
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -371,6 +434,13 @@ class CreateJobRequest(BaseModel):
     )
 
 
+class CreateIsoJobRequest(BaseModel):
+    """Create an instance that boots an installer ISO from Object Storage (no vSphere involved)."""
+
+    iso: IsoSpec
+    target: OciTarget
+
+
 class InstanceStatus(BaseModel):
     """Live state of the job's target instance as OCI reports it (GET /api/jobs/{id}/instance)."""
 
@@ -397,7 +467,8 @@ class LoginRequest(BaseModel):
 
 class SessionInfo(BaseModel):
     username: str
-    vcenter_host: str
+    anonymous: bool = False  # ISO flow: a UI session without a vCenter login
+    vcenter_host: str = ""
     vcenter_port: int = 443
     vcenter_version: str = ""
     verify_ssl: bool = False
@@ -446,6 +517,30 @@ class PrivateIpCheck(BaseModel):
     subnet_id: str
     available: bool
     message: str  # user facing explanation (why not, or confirmation)
+
+
+class OciBucket(BaseModel):
+    name: str
+    namespace: str
+    compartment_id: str
+    time_created: Optional[datetime] = None
+
+
+class OciObject(BaseModel):
+    """An object in a bucket (the ISO picker lists ``.iso`` objects)."""
+
+    name: str
+    size_bytes: int = 0
+    etag: str = ""
+    time_modified: Optional[datetime] = None
+
+
+class OsCatalogEntry(BaseModel):
+    """One operating system OCI knows for custom image metadata, with its selectable releases."""
+
+    operating_system: str
+    family: Literal["linux", "windows"]
+    versions: list[str]
 
 
 class OciOptions(BaseModel):

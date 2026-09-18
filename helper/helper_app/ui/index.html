@@ -10,9 +10,10 @@
   <header class="topbar">
     <div class="brand">OCI Ultimate Migration Tool</div>
     <nav id="nav" hidden>
-      <a href="#/vms" data-nav="vms">Source VMs</a>
+      <a href="#/vms" data-nav="vms" data-vcenter-only>Source VMs</a>
+      <a href="#/iso" data-nav="iso">New ISO instance</a>
       <a href="#/jobs" data-nav="jobs">Jobs</a>
-      <a href="#/setup" data-nav="setup">Setup</a>
+      <a href="#/setup" data-nav="setup" data-vcenter-only>Setup</a>
     </nav>
     <div id="user" class="user" hidden>
       <span data-username></span>
@@ -23,6 +24,171 @@
   <main id="app" class="app">
     <div class="loading">Loading...</div>
   </main>
+
+  <!-- ------------------------------------------------------------------ start: choose the kind of migration -->
+  <template id="tpl-start">
+    <section class="start">
+      <h2>What do you want to do?</h2>
+      <div class="start-choices">
+        <a class="card start-choice" href="#/login" id="start-vmware">
+          <h3>VMware vCenter or ESXi</h3>
+          <p>Migrate virtual machines from vSphere to OCI: log in to vCenter (or a standalone ESXi host), pick the VMs,
+            and the migration tool copies their disks into OCI instances.</p>
+          <span class="button primary">Log in to vCenter</span>
+        </a>
+        <a class="card start-choice" href="#/iso" id="start-iso">
+          <h3>Create OCI instance based on ISO</h3>
+          <p>Boot a new OCI instance from an installer ISO stored in an Object Storage bucket, choose shape, OS type, firmware
+            and boot disk size, and install the operating system through the remote console. No vCenter needed.</p>
+          <span class="button primary">Create instance from ISO</span>
+        </a>
+      </div>
+      <p class="muted" id="start-error"></p>
+    </section>
+  </template>
+
+  <!-- ------------------------------------------------------------------ ISO instance -->
+  <template id="tpl-iso">
+    <div class="export">
+      <section class="card" id="iso-card">
+        <div class="toolbar">
+          <h2>Installer ISO</h2>
+          <a href="#/start" class="muted">&larr; back to start</a>
+        </div>
+        <p class="muted">The ISO is imported as a custom image; the instance boots it as installation media and gets a blank
+          boot volume to install onto. The image is kept and reused for further instances from the same ISO.</p>
+        <form id="iso-form" class="form" autocomplete="off">
+          <label>Bucket compartment
+            <select name="bucket_compartment_id" required></select>
+            <small>Compartment holding the Object Storage bucket with the ISO.</small>
+          </label>
+          <label>Bucket
+            <select name="bucket" required></select>
+            <small id="bucket-hint"></small>
+          </label>
+          <label>ISO file
+            <span class="input-row">
+              <select name="object_name" required></select>
+              <button type="button" id="iso-refresh" class="button secondary" title="List the bucket again">Refresh</button>
+            </span>
+            <small id="iso-hint">Only objects ending in <code>.iso</code> are listed.</small>
+          </label>
+          <label>Operating system
+            <select name="operating_system" required></select>
+            <small>Recorded on the OCI image (OS-specific defaults in OCI); pick the closest match for the installer.</small>
+          </label>
+          <label id="iso-os-version-label">OS version
+            <select name="operating_system_version"></select>
+            <small id="iso-os-version-hint"></small>
+          </label>
+          <div id="iso-windows-note" class="callout important" hidden>
+            <strong>Windows installer.</strong> Windows Setup has no virtio drivers, so the form pre-selects
+            <em>Maximum compatibility</em> (IDE boot volume + E1000 NIC). Install the
+            <a href="https://docs.oracle.com/en/operating-systems/oracle-linux/kvm-virtio/" target="_blank" rel="noopener">Oracle VirtIO Drivers for Microsoft Windows</a>
+            after the installation and switch the device model in the OCI console if you want paravirtualized devices.
+          </div>
+          <fieldset>
+            <legend>Firmware</legend>
+            <label class="check"><input type="radio" name="firmware" value="UEFI_64" checked> UEFI</label>
+            <label class="check"><input type="radio" name="firmware" value="BIOS"> BIOS (legacy)</label>
+            <label class="check" id="secure-boot-label"><input type="checkbox" name="secure_boot"> Secure Boot (shielded instance; UEFI only, with Measured Boot + vTPM on VM shapes)</label>
+            <small>The installer must support the chosen firmware: modern Linux and Windows ISOs boot both ways; Secure Boot needs a signed boot loader.</small>
+          </fieldset>
+          <label>Boot disk size (GB)
+            <input name="boot_disk_gb" type="number" min="50" max="32768" step="1" value="50" required inputmode="numeric">
+            <small>Blank boot volume the OS is installed onto (at least 50 GB, the OCI minimum).</small>
+          </label>
+        </form>
+      </section>
+
+      <section class="card" id="target-card">
+        <h2>OCI instance</h2>
+        <form id="target-form" class="form" autocomplete="off">
+          <label>Compartment
+            <select name="compartment_id" required></select>
+            <small>Where the instance and its boot volume are created.</small>
+          </label>
+          <label>Availability domain
+            <input name="availability_domain" type="text" readonly tabindex="-1">
+            <small>Fixed to the migration tool VM's availability domain.</small>
+          </label>
+          <label>Network compartment
+            <select name="network_compartment_id" required></select>
+            <small>Compartment holding the VCN and subnet (may differ from the instance compartment).</small>
+          </label>
+          <label>VCN
+            <select name="vcn_id" required></select>
+          </label>
+          <label>Subnet
+            <select name="subnet_id" required></select>
+            <small id="subnet-hint"></small>
+          </label>
+          <label>Private IP address
+            <span class="input-row">
+              <input name="private_ip" type="text" inputmode="decimal" placeholder="automatic (DHCP)" maxlength="15"
+                     pattern="^\s*(\d{1,3}\.){3}\d{1,3}\s*$" title="IPv4 address inside the selected subnet, e.g. 10.0.1.25">
+              <button type="button" id="private-ip-check" class="button secondary" disabled title="Ask OCI whether this address is free in the selected subnet">Check</button>
+            </span>
+            <small id="private-ip-hint">Leave empty to let OCI pick a free address from the subnet. A fixed address must lie inside the subnet's CIDR and not be in use; it is checked with OCI as soon as you have typed it.</small>
+          </label>
+          <label class="check"><input type="checkbox" name="assign_public_ip"> Assign a public IP</label>
+          <label>Shape
+            <select name="shape"></select>
+            <small id="shape-hint"></small>
+          </label>
+          <div class="row2">
+            <label>OCPUs
+              <input name="ocpus" type="number" min="1" step="1" value="1" required inputmode="numeric">
+            </label>
+            <label>Memory (GB)
+              <input name="memory_gb" type="number" min="1" step="1" value="8" required inputmode="numeric">
+            </label>
+          </div>
+          <small id="sizing-hint" class="form-hint"></small>
+          <label>Instance name
+            <input name="display_name" type="text" maxlength="255" required>
+          </label>
+
+          <fieldset id="windows-fieldset" hidden>
+            <legend>Windows licensing</legend>
+            <label class="check"><input type="radio" name="windows_license_type" value="BRING_YOUR_OWN_LICENSE" checked> Bring your own license (BYOL)</label>
+            <label class="check"><input type="radio" name="windows_license_type" value="OCI_PROVIDED"> OCI provided license</label>
+            <small id="windows-license-hint">The instance is registered as Windows in OCI; the license type can be changed later in the OCI console.</small>
+          </fieldset>
+
+          <details>
+            <summary>Advanced: device model and volume performance</summary>
+            <div class="kv" id="launch-preview"></div>
+            <label class="check"><input type="checkbox" name="compatibility_mode"> Maximum compatibility (IDE boot volume + E1000 NIC) for installers without virtio drivers</label>
+            <label>Boot volume type override
+              <select name="boot_volume_type_override">
+                <option value="">(automatic)</option>
+                <option>PARAVIRTUALIZED</option><option>SCSI</option><option>IDE</option><option>ISCSI</option>
+              </select>
+            </label>
+            <label>Network type override
+              <select name="network_type_override">
+                <option value="">(automatic)</option>
+                <option>PARAVIRTUALIZED</option><option>E1000</option><option>VFIO</option>
+              </select>
+            </label>
+            <label>Volume performance (VPU/GB)
+              <select name="volume_vpus_per_gb">
+                <option value="10" selected>10 - Balanced (default)</option>
+                <option value="20">20 - Higher Performance</option>
+                <option value="30">30 - Ultra High Performance</option>
+              </select>
+            </label>
+          </details>
+
+          <div class="actions">
+            <span id="form-error" class="error"></span>
+            <button type="submit" id="submit-btn" class="primary">Create instance</button>
+          </div>
+        </form>
+      </section>
+    </div>
+  </template>
 
   <!-- ------------------------------------------------------------------ login -->
   <template id="tpl-login">
@@ -86,8 +252,8 @@
   <template id="tpl-jobs">
     <section class="card">
       <div class="toolbar">
-        <h2>Migration jobs</h2>
-        <input id="jobs-filter" type="search" placeholder="Search by source or target VM name">
+        <h2>Jobs</h2>
+        <input id="jobs-filter" type="search" placeholder="Search by source (VM or ISO) or instance name">
         <select id="jobs-phase" class="filter" title="Phase">
           <option value="">All phases</option>
           <option value="ACTIVE">Active (not finished)</option>
@@ -95,6 +261,7 @@
           <option value="PROVISIONING">Provisioning</option>
           <option value="EXPORTING">Exporting</option>
           <option value="FINALIZING">Finalizing</option>
+          <option value="INSTALLING">Installing (ISO)</option>
           <option value="COMPLETED">Completed</option>
           <option value="FAILED">Failed</option>
           <option value="CANCELLED">Cancelled</option>
@@ -333,6 +500,14 @@
           <button class="secondary" id="seed-cleanup">Delete seed images</button>
         </div>
         <hr class="sep">
+        <p class="muted">ISO images are the custom images imported from installer ISOs (<em>Create OCI instance based on ISO</em>).
+          They are kept for reuse; deleting them only means the next instance from the same ISO imports it again.
+          Instances already launched keep working.</p>
+        <div class="actions">
+          <span id="iso-images-result" class="muted"></span>
+          <button class="secondary" id="iso-images-cleanup">Delete ISO images</button>
+        </div>
+        <hr class="sep">
         <p class="muted">Job history: removes finished job records from the migration tool's database (the <em>Jobs</em> page).
           Running or queued jobs are kept. Only the records are deleted - OCI resources a failed job left behind
           (instance, volumes) are not touched; open the job and use <em>Clean up OCI resources</em> for that first.</p>
@@ -361,7 +536,12 @@
           </div>
         </section>
         <section class="job-section">
-          <h3>Migration</h3>
+          <h3 data-job-title>Migration</h3>
+          <div class="callout important" data-install-note hidden>
+            <strong>Installation in progress.</strong> The instance boots the installer from the ISO. Open the
+            <em>Remote console</em>, install the operating system onto the boot volume and reboot; the instance then
+            boots from the boot volume. When the installation is complete, click <em>Installation finished</em>.
+          </div>
           <div class="transfer muted" data-transfer hidden></div>
           <div class="disks" data-disks></div>
           <div class="kv" data-migration></div>
@@ -370,6 +550,7 @@
             <span class="muted" data-copy-state></span>
             <button class="secondary" data-copy title="Copy the job record, error and relevant migration tool log lines to the clipboard">Copy diagnostics</button>
             <button data-resume hidden title="All disks were copied; retry attaching the volumes and starting the instance">Retry finalize</button>
+            <button class="primary" data-finish hidden title="The OS is installed: complete the job (the instance stays)">Installation finished</button>
             <button class="secondary" data-cancel>Cancel</button>
           </div>
         </section>
@@ -393,7 +574,7 @@
         <button class="secondary small" id="console-close" title="Disconnect and delete the OCI console connection">Close console</button>
         <a id="console-back" class="muted" href="#/jobs">&larr; job</a>
       </div>
-      <p class="muted console-hint">The screen is the OCI instance console (VNC) of the migrated instance, tunnelled through the migration tool VM.
+      <p class="muted console-hint">The screen is the OCI instance console (VNC) of the instance, tunnelled through the migration tool VM.
         Click into the screen to type. The console connection is deleted when you close it or after it has been idle for a while.</p>
       <div id="console-error" class="error"></div>
       <div id="vnc-screen" class="vnc-screen"></div>

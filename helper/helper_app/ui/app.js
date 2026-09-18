@@ -25,7 +25,7 @@
     try { data = text ? JSON.parse(text) : null; } catch (_) { data = { detail: text }; }
     if (!resp.ok) {
       const detail = data && data.detail ? (typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail)) : resp.statusText;
-      if (resp.status === 401 && !path.startsWith("/auth/login")) { state.me = null; showLogin(); }
+      if (resp.status === 401 && !path.startsWith("/auth/")) { state.me = null; showStart(); }
       throw new ApiError(detail, resp.status, data && data.detail);
     }
     return data;
@@ -95,9 +95,13 @@
   const isWindowsClient = (vm) => /windows\s+(10|11)\b/i.test(vm.guest_full_name || "")
     || (!/server/i.test(vm.guest_full_name || "") && /^windows(9|1[12])_64/i.test(vm.guest_id || ""));
   const TERMINAL = ["COMPLETED", "FAILED", "CANCELLED"];
-  // remote console: completed migrations with an OCI instance (mirrors routes_console._console_job)
-  const hasConsole = (job) => job.phase === "COMPLETED" && !!job.instance_id;
-  const STEP_LABELS = { seed_image: "Seed image import", launch_instance: "Instance launch" };
+  // remote console: completed migrations and running ISO installations with an OCI instance (mirrors
+  // routes_console._console_job)
+  const hasConsole = (job) => (job.phase === "COMPLETED" || job.phase === "INSTALLING") && !!job.instance_id;
+  const isIso = (job) => job.kind === "iso";
+  // what the job was made from, for lists and titles: the VM's name, or the ISO's file name
+  const sourceName = (job) => job.vm ? job.vm.name : job.iso ? job.iso.object_name.split("/").pop() : "-";
+  const STEP_LABELS = { seed_image: "Seed image import", iso_image: "ISO image import", launch_instance: "Instance launch" };
   // OCI console deep link for an instance OCID; the region query parameter makes the console switch to
   // the helper's region instead of the user's last one
   const consoleUrl = (kind, ocid) => `https://cloud.oracle.com/compute/${kind}/${encodeURIComponent(ocid)}${state.region ? `?region=${encodeURIComponent(state.region)}` : ""}`;
@@ -106,11 +110,49 @@
     : "-";
 
   // -------------------------------------------------------------------- auth
+  // a vCenter login sees Source VMs / Jobs / Setup; the anonymous session of the ISO flow sees
+  // New ISO instance / Jobs and a "Back to start" instead of "Log out"
   function setUser(me) {
     state.me = me;
     nav.hidden = !me;
     userBox.hidden = !me;
-    if (me) userBox.querySelector("[data-username]").textContent = `${me.username} @ ${me.vcenter_host}${me.vcenter_port && me.vcenter_port !== 443 ? ":" + me.vcenter_port : ""}`;
+    if (!me) return;
+    const anonymous = !!me.anonymous;
+    for (const a of nav.querySelectorAll("a")) {
+      const vcenterOnly = a.hasAttribute("data-vcenter-only");
+      a.hidden = anonymous ? vcenterOnly : a.dataset.nav === "iso";
+    }
+    userBox.querySelector("[data-username]").textContent = anonymous ? "not logged in (ISO instance mode)"
+      : `${me.username} @ ${me.vcenter_host}${me.vcenter_port && me.vcenter_port !== 443 ? ":" + me.vcenter_port : ""}`;
+    document.getElementById("logout-btn").textContent = anonymous ? "Back to start" : "Log out";
+  }
+
+  // no session (or 401 from the API): the start page asks which kind of migration; the login form only
+  // when it was asked for explicitly
+  function showStart() {
+    stopPolling();
+    setUser(null);
+    if (location.hash === "#/login") return showLogin();
+    if (location.hash !== "#/start") { location.hash = "#/start"; return; }  // hashchange routes to startView
+    return startView();
+  }
+
+  // the two boxes; also reachable with a session (a logged-in user can switch to the ISO flow and back)
+  function startView() {
+    app.innerHTML = "";
+    app.append(tpl("tpl-start"));
+    const err = document.getElementById("start-error");
+    const vmware = document.getElementById("start-vmware");
+    if (state.me && !state.me.anonymous) vmware.href = "#/vms";  // already logged in to vCenter
+    // the ISO flow needs no vCenter: an anonymous session is created (a vCenter login is kept) and the form opens
+    document.getElementById("start-iso").addEventListener("click", async (ev) => {
+      ev.preventDefault();
+      const box = ev.currentTarget; box.classList.add("busy"); err.textContent = "";
+      try {
+        setUser(await api("POST", "/auth/anonymous"));
+        location.hash = "#/iso";
+      } catch (e) { err.textContent = e.message; box.classList.remove("busy"); }
+    });
   }
 
   async function showLogin() {
@@ -118,6 +160,7 @@
     setUser(null);
     app.innerHTML = "";
     app.append(tpl("tpl-login"));
+    app.querySelector(".login").prepend(el("p", {}, el("a", { href: "#/start", class: "muted" }, "\u2190 back to start")));
     const form = document.getElementById("login-form");
     const err = document.getElementById("login-error");
     const btn = document.getElementById("login-btn");
@@ -154,7 +197,8 @@
         rememberUsername(vcenter, username);
         rememberVerifySsl(vcenter, verifySsl);
         setUser(me);
-        route();
+        if (location.hash === "#/login" || location.hash === "#/start" || location.hash === "#/iso") location.hash = "#/vms";
+        else route();
       } catch (e) { err.textContent = e.message; }
       finally { btn.disabled = false; }
     });
@@ -199,8 +243,9 @@
 
   document.getElementById("logout-btn").addEventListener("click", async () => {
     try { await api("POST", "/auth/logout"); } catch (_) { /* ignore */ }
-    location.hash = "#/vms";
-    showLogin();
+    state.me = null;
+    location.hash = "#/start";
+    showStart();
   });
 
   // ------------------------------------------------------------- job rendering
@@ -248,24 +293,38 @@
     }
 
     const terminal = TERMINAL.includes(job.phase);
+    const iso = isIso(job);
     const sm = job.summary || {};
+    const name = sourceName(job);
     // left panel: the instance that is (being) created in OCI
-    kv(root.querySelector("[data-target]"), [
-      ["Name", job.instance_id ? el("strong", {}, job.instance_display_name || job.target.display_name || job.vm.name)
-        : `${job.target.display_name || job.vm.name} (not launched yet)`],
-      ["Instance", ocidLink("instances", job.instance_id)],
-      ["State in OCI", ociStateEl(root, job)],
+    const sourceRows = iso ? [
+      ["Source ISO", `${job.iso.bucket}/${job.iso.object_name}${job.iso.size_bytes ? ` (${fmtBytes(job.iso.size_bytes)})` : ""}`],
+      ["Operating system", `${job.iso.operating_system} ${job.iso.operating_system_version}`],
+      ["Boot volume", `${job.iso.boot_disk_gb} GB (blank; the OS is installed onto it), ${job.target.volume_vpus_per_gb} VPU/GB`],
+    ] : [
       ["Source VM", `${job.vm.name} (${job.vm.moid})${job.vcenter_host ? " on " + job.vcenter_host : ""} - ${job.vm.num_cpu} vCPU, ${fmtBytes(job.vm.memory_mb * 1024 * 1024)} RAM, ${job.vm.disks.length} disk(s)`],
       ["Guest OS", `${job.vm.guest_full_name || job.vm.guest_id}${job.target.operating_system_version ? ` - release ${job.target.operating_system_version} (selected)` : ""}`],
-      ["Shape", `${job.target.shape || "(migration tool default)"}${job.target.ocpus || job.target.memory_gb ? ` - ${job.target.ocpus ?? "auto"} OCPU / ${job.target.memory_gb ?? "auto"} GB (custom)` : " - sized from the source VM"}`],
+    ];
+    kv(root.querySelector("[data-target]"), [
+      ["Name", job.instance_id ? el("strong", {}, job.instance_display_name || job.target.display_name || name)
+        : `${job.target.display_name || name} (not launched yet)`],
+      ["Instance", ocidLink("instances", job.instance_id)],
+      ["State in OCI", ociStateEl(root, job)],
+      ...sourceRows,
+      ["Shape", `${job.target.shape || "(migration tool default)"}${job.target.ocpus || job.target.memory_gb ? ` - ${job.target.ocpus ?? "auto"} OCPU / ${job.target.memory_gb ?? "auto"} GB${iso ? "" : " (custom)"}` : " - sized from the source VM"}`],
       ["IP addresses", ociIpsEl(root, job)],
       ["Launch options", job.launch_options ? `${job.launch_options.firmware}${job.launch_options.secure_boot ? " + Secure Boot (shielded instance, with Measured Boot + vTPM on VM shapes)" : ""}, boot ${job.launch_options.boot_volume_type}, nic ${job.launch_options.network_type}` : "-"],
       ...(job.target.windows_license_type ? [["Windows license", job.target.windows_license_type === "OCI_PROVIDED"
         ? "OCI provided (change it in the OCI console if needed)" : "Bring your own license (change it in the OCI console if needed)"]] : []),
-      ["Seed image", job.seed_image_id || "-"],
+      iso ? ["ISO image", job.iso_image_id ? ocidLink("images", job.iso_image_id) : "-"] : ["Seed image", job.seed_image_id || "-"],
     ]);
-    // right panel: the migration job itself
-    const rows = [
+    // right panel: the job itself (ISO: the installation the user runs through the console)
+    root.querySelector("[data-job-title]").textContent = iso ? "Installation" : "Migration";
+    root.querySelector("[data-install-note]").hidden = !(iso && job.phase === "INSTALLING");
+    const rows = iso ? [
+      ["Step", job.step || "-"],
+      ["Started by", `${job.created_by || "-"} at ${new Date(job.created_at).toLocaleString()}`],
+    ] : [
       ["Step", job.step || "-"],
       ...(job.power_off_source ? [["Source power-off", { already_off: "was already powered off when the export started",
         guest_shutdown: "shut down cleanly through VMware Tools before the export",
@@ -281,7 +340,7 @@
     if (terminal) {
       rows.push(["Finished", job.finished_at ? new Date(job.finished_at).toLocaleString() : "-"]);
       rows.push(["Duration", fmtDuration(sm.duration_s) + (sm.transfer_duration_s ? ` (export ${fmtDuration(sm.transfer_duration_s)})` : "")]);
-      if (tr.started_at) {
+      if (tr.started_at && !iso) {
         rows.push(["Data transferred", `${fmtBytes(sm.bytes_received)} received from vCenter, ${fmtBytes(sm.bytes_written)} written to OCI volumes`]);
         rows.push(["Average bandwidth", sm.average_bps ? fmtRate(sm.average_bps) : "-"]);
       }
@@ -291,12 +350,23 @@
 
     const cancelBtn = root.querySelector("[data-cancel]");
     cancelBtn.hidden = job.phase === "COMPLETED" || job.phase === "CANCELLED";
-    cancelBtn.textContent = job.phase === "FAILED" ? "Clean up OCI resources" : "Cancel";
+    cancelBtn.textContent = job.phase === "FAILED" ? "Clean up OCI resources" : job.phase === "INSTALLING" ? "Cancel and terminate instance" : "Cancel";
     cancelBtn.onclick = async () => {
-      if (!confirm("Cancel this migration? The OCI instance and volumes created so far will be deleted.")) return;
+      const what = iso ? "Cancel this installation? The OCI instance and its boot volume will be terminated (the imported ISO image is kept)."
+        : "Cancel this migration? The OCI instance and volumes created so far will be deleted.";
+      if (!confirm(what)) return;
       cancelBtn.disabled = true;
       try { await api("POST", `/jobs/${job.id}/cancel`); } catch (e) { alert(e.message); }
       finally { cancelBtn.disabled = false; }
+    };
+    // ISO installation: the user says when the OS is installed; the job completes, the instance stays
+    const finishBtn = root.querySelector("[data-finish]");
+    finishBtn.hidden = !(iso && job.phase === "INSTALLING");
+    finishBtn.onclick = async () => {
+      if (!confirm("Mark the installation as finished? The job completes; the instance keeps running from its boot volume.")) return;
+      finishBtn.disabled = true;
+      try { renderJob(container, await api("POST", `/jobs/${job.id}/finish`), opts); } catch (e) { alert(e.message); }
+      finally { finishBtn.disabled = false; }
     };
     // a job that failed after all disks were copied (attach / start rejected by OCI) can resume finalizing
     const resumeBtn = root.querySelector("[data-resume]");
@@ -332,7 +402,9 @@
     const consoleBtn = root.querySelector("[data-console]");
     consoleBtn.hidden = !hasConsole(job);
     consoleBtn.href = `#/jobs/${job.id}/console`;
+    if (iso && job.phase === "INSTALLING") consoleBtn.classList.replace("secondary", "primary"); else consoleBtn.classList.replace("primary", "secondary");
     if (opts.onTerminal && terminal) opts.onTerminal(job);
+    // stop polling on the final states; INSTALLING keeps polling (slowly) so a cancel/finish from elsewhere shows up
     return job.phase === "COMPLETED" || job.phase === "CANCELLED";
   }
 
@@ -511,7 +583,7 @@
         const [list, jobs] = await Promise.all([api("GET", "/vms" + (refresh ? "?refresh=true" : "")), api("GET", "/jobs")]);
         vms = list;
         state.jobsByVm = {};
-        for (const j of jobs) if (!state.jobsByVm[j.vm.moid]) state.jobsByVm[j.vm.moid] = j; // jobs are newest first
+        for (const j of jobs) if (j.vm && !state.jobsByVm[j.vm.moid]) state.jobsByVm[j.vm.moid] = j; // jobs are newest first
         fillFilters();
         render();
       } catch (e) { if (e.status !== 401) err.textContent = e.message; count.textContent = ""; }
@@ -562,7 +634,112 @@
     for (const w of inspection.warnings) warnings.append(el("li", {}, w));
     document.getElementById("power-off-note").hidden = !inspection.needs_power_off;
 
-    // populate the target form
+    // populate the target form (compartments, networks, private IP check, shapes, device model preview)
+    const { sel, renderSizing } = wireTargetForm(form, options, {
+      formError,
+      sizing: { autoOcpus: Math.max(1, Math.ceil(vm.num_cpu / 2)), autoMemoryGb: Math.max(1, Math.ceil(vm.memory_mb / 1024)),
+        source: `Source VM: ${vm.num_cpu} vCPU / ${(vm.memory_mb / 1024).toFixed(vm.memory_mb % 1024 ? 1 : 0)} GB.` },
+      firmwareText: () => (vm.firmware === "efi" ? "UEFI_64" : "BIOS") + (vm.secure_boot ? " + Secure Boot" : ""),
+    });
+    sel("display_name").value = vm.name;
+    // guest OS release recorded on the OCI image: vSphere encodes it for most guests, but not for e.g.
+    // ubuntu64Guest ("Ubuntu Linux (64-bit)"), where the user has to pick it from OCI's list
+    const osInfo = inspection.os;
+    const osLabel = document.getElementById("os-version-label"), osSel = sel("operating_system_version");
+    if (osInfo && osInfo.version_choices.length) {
+      osLabel.hidden = false;
+      osSel.innerHTML = "";
+      if (!osInfo.version_detected) osSel.append(el("option", { value: "" }, `Select the ${osInfo.operating_system} release...`));
+      for (const v of osInfo.version_choices) osSel.append(el("option", { value: v }, `${osInfo.operating_system} ${v}`));
+      osSel.value = osInfo.version_detected ? osInfo.operating_system_version : "";
+      osSel.required = !osInfo.version_detected;
+      osLabel.classList.toggle("attention", !osInfo.version_detected);
+      osSel.addEventListener("change", () => osLabel.classList.toggle("attention", !osSel.value));
+      document.getElementById("os-version-hint").textContent = osInfo.version_detected
+        ? `Detected from vCenter (${vm.guest_full_name || vm.guest_id}); change it if the guest runs another release.`
+        : `vCenter only reports "${vm.guest_full_name || vm.guest_id}" without the release. Select the one installed in the guest; OCI records it on the image and uses it for OS-specific defaults.`;
+    } else {
+      osLabel.hidden = true; osSel.required = false;
+    }
+    const isWin = isWindows(vm);
+    document.getElementById("windows-fieldset").hidden = !isWin;
+    document.getElementById("windows-driver-note").hidden = !isWin;
+    // the initramfs fix-up is a Linux thing (Windows gets its VirtIO drivers installed inside the guest)
+    for (const id of ["rebuild-initramfs-label", "rebuild-initramfs-hint", "fix-network-label", "fix-network-hint"]) {
+      document.getElementById(id).hidden = isWin;  // Linux-only post-copy fix-ups
+    }
+    if (isWin && isWindowsClient(vm)) {
+      // OCI has no licenses for client editions; the API refuses OCI_PROVIDED for them
+      const ociLic = form.querySelector('input[name="windows_license_type"][value="OCI_PROVIDED"]');
+      ociLic.disabled = true; ociLic.checked = false;
+      form.querySelector('input[name="windows_license_type"][value="BRING_YOUR_OWN_LICENSE"]').checked = true;
+      document.getElementById("windows-license-hint").textContent = "Windows 10/11: OCI does not provide licenses for client editions, so the instance is registered as BYOL (check your Microsoft license terms for running the desktop OS in a cloud).";
+    }
+    document.getElementById("esxi-host-hint").textContent = vm.host_name ? `(${vm.host_name})` : "";
+    sel("nfc_direct_to_esxi").disabled = !vm.host_name;
+    renderSizing();
+
+    submit.disabled = !inspection.can_export;
+
+    // a migration of this VM is already running: nothing to configure here, show the job instead
+    try {
+      const jobs = await api("GET", `/jobs?vm_moid=${encodeURIComponent(moid)}`);
+      const active = jobs.find((j) => !TERMINAL.includes(j.phase));
+      if (active) { location.hash = `#/jobs/${active.id}`; return; }
+    } catch (_) { /* ignore */ }
+
+    form.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      formError.textContent = "";
+      const fd = new FormData(form);
+      const target = {
+        compartment_id: fd.get("compartment_id"),
+        availability_domain: options.helper_availability_domain,
+        subnet_id: fd.get("subnet_id"),
+        private_ip: (fd.get("private_ip") || "").trim() || null,
+        shape: fd.get("shape") || null,
+        ocpus: fd.get("ocpus") ? Number(fd.get("ocpus")) : null,
+        memory_gb: fd.get("memory_gb") ? Number(fd.get("memory_gb")) : null,
+        display_name: fd.get("display_name") || null,
+        operating_system_version: osLabel.hidden ? null : (fd.get("operating_system_version") || null),
+        assign_public_ip: fd.get("assign_public_ip") === "on",
+        start_after_migration: fd.get("start_after_migration") === "on",
+        windows_license_type: isWin ? fd.get("windows_license_type") : null,
+        compatibility_mode: fd.get("compatibility_mode") === "on",
+        boot_volume_type_override: fd.get("boot_volume_type_override") || null,
+        network_type_override: fd.get("network_type_override") || null,
+        nfc_direct_to_esxi: fd.get("nfc_direct_to_esxi") === "on",
+        pipelined_decode: fd.get("pipelined_decode") === "on",
+        rebuild_initramfs: !isWin && fd.get("rebuild_initramfs") === "on",
+        fix_network: !isWin && fd.get("fix_network") === "on",
+        volume_vpus_per_gb: Number(fd.get("volume_vpus_per_gb") || 10),
+      };
+      // a running VM is shut down by the migration: make the operator confirm it, naming the VM
+      if (inspection.needs_power_off) {
+        const how = inspection.tools_running
+          ? "It will be shut down through VMware Tools (guest OS shutdown); if it does not stop in time it is powered off hard."
+          : "VMware Tools is NOT running, so it will be POWERED OFF HARD (like pulling the plug).";
+        const ok = confirm(`WARNING: "${vm.name}" is powered on.\n\n` +
+          `Starting this migration will POWER OFF the VM "${vm.name}" right before the disk export ` +
+          `(after the OCI instance and volumes are prepared). ${how}\n\n` +
+          "The VM stays powered off in vSphere afterwards.\n\n" +
+          `Power off "${vm.name}" and migrate it?`);
+        if (!ok) return;
+      }
+      submit.disabled = true;
+      try {
+        const job = await api("POST", "/jobs", { vm_moid: moid, target, power_off_source: inspection.needs_power_off });
+        location.hash = `#/jobs/${job.id}`;  // follow the migration on its own page
+      } catch (e) { formError.textContent = e.message; submit.disabled = false; }
+    });
+  }
+
+  // The OCI target part shared by the migration form and the ISO form: compartment pickers (instance and
+  // network), VCN -> subnet, fixed private IP with the OCI check, x86 flex shapes with sizing bounds, and
+  // the device model preview.  ``cfg.sizing`` (auto values derived from a source VM) is optional: without
+  // it the OCPU / memory fields are plain required inputs.
+  function wireTargetForm(form, options, cfg) {
+    const formError = cfg.formError;
     const sel = (name) => form.elements[name];
     for (const c of options.compartments) {
       sel("compartment_id").append(el("option", { value: c.id }, c.path || c.name));
@@ -666,69 +843,38 @@
       if ([...shapeSel.options].some((op) => op.value === previous)) shapeSel.value = previous;
       renderSizing();
     };
-    // sizing mirrors mapping.map_shape: 2 vCPU = 1 OCPU, RAM rounded up to whole GB; both can be overridden
-    const autoOcpus = Math.max(1, Math.ceil(vm.num_cpu / 2));
-    const autoMemoryGb = Math.max(1, Math.ceil(vm.memory_mb / 1024));
+    // sizing mirrors mapping.map_shape: 2 vCPU = 1 OCPU, RAM rounded up to whole GB; both can be overridden.
+    // Without a source VM (ISO form) the fields are required and only the shape bounds are applied.
+    const sizing = cfg.sizing || null;
     const currentShape = () => shapes.find((s) => s.name === (sel("shape").value || options.default_shape));
     const renderSizing = () => {
       const shape = currentShape();
       const ocpusIn = sel("ocpus"), memIn = sel("memory_gb");
-      ocpusIn.placeholder = `${autoOcpus} (auto)`; memIn.placeholder = `${autoMemoryGb} (auto)`;
+      if (sizing) { ocpusIn.placeholder = `${sizing.autoOcpus} (auto)`; memIn.placeholder = `${sizing.autoMemoryGb} (auto)`; }
       if (shape && shape.is_flex) {
         if (shape.min_ocpus != null) ocpusIn.min = shape.min_ocpus;
         if (shape.max_ocpus != null) ocpusIn.max = shape.max_ocpus;
         if (shape.min_memory_gb != null) memIn.min = shape.min_memory_gb;
         if (shape.max_memory_gb != null) memIn.max = shape.max_memory_gb;
       } else { ocpusIn.removeAttribute("max"); memIn.removeAttribute("max"); }
-      const ocpus = Number(ocpusIn.value) || autoOcpus, mem = Number(memIn.value) || autoMemoryGb;
-      const overridden = ocpusIn.value !== "" || memIn.value !== "";
       const range = shape && shape.is_flex && shape.max_ocpus != null
         ? ` ${shape.name} allows ${shape.min_ocpus ?? 1}-${shape.max_ocpus} OCPU and ${shape.min_memory_gb ?? 1}-${shape.max_memory_gb} GB.` : "";
-      document.getElementById("shape-hint").textContent = `Source VM: ${vm.num_cpu} vCPU / ${(vm.memory_mb / 1024).toFixed(vm.memory_mb % 1024 ? 1 : 0)} GB.${range}`;
+      if (!sizing) {
+        document.getElementById("shape-hint").textContent = range.trim();
+        document.getElementById("sizing-hint").textContent = `Instance will be launched with ${Number(ocpusIn.value) || "?"} OCPU / ${Number(memIn.value) || "?"} GB.`;
+        return;
+      }
+      const ocpus = Number(ocpusIn.value) || sizing.autoOcpus, mem = Number(memIn.value) || sizing.autoMemoryGb;
+      const overridden = ocpusIn.value !== "" || memIn.value !== "";
+      document.getElementById("shape-hint").textContent = `${sizing.source}${range}`;
       document.getElementById("sizing-hint").textContent = overridden
         ? `Instance will be launched with ${ocpus} OCPU / ${mem} GB (custom). Leave both fields empty to size from the source VM.`
-        : `Instance will be launched with ${autoOcpus} OCPU / ${autoMemoryGb} GB, derived from the source VM. Enter values to override.`;
+        : `Instance will be launched with ${sizing.autoOcpus} OCPU / ${sizing.autoMemoryGb} GB, derived from the source VM. Enter values to override.`;
     };
     sel("shape").addEventListener("change", renderSizing);
     sel("ocpus").addEventListener("input", renderSizing);
     sel("memory_gb").addEventListener("input", renderSizing);
     fillShapes(options);
-    sel("display_name").value = vm.name;
-    // guest OS release recorded on the OCI image: vSphere encodes it for most guests, but not for e.g.
-    // ubuntu64Guest ("Ubuntu Linux (64-bit)"), where the user has to pick it from OCI's list
-    const osInfo = inspection.os;
-    const osLabel = document.getElementById("os-version-label"), osSel = sel("operating_system_version");
-    if (osInfo && osInfo.version_choices.length) {
-      osLabel.hidden = false;
-      osSel.innerHTML = "";
-      if (!osInfo.version_detected) osSel.append(el("option", { value: "" }, `Select the ${osInfo.operating_system} release...`));
-      for (const v of osInfo.version_choices) osSel.append(el("option", { value: v }, `${osInfo.operating_system} ${v}`));
-      osSel.value = osInfo.version_detected ? osInfo.operating_system_version : "";
-      osSel.required = !osInfo.version_detected;
-      osLabel.classList.toggle("attention", !osInfo.version_detected);
-      osSel.addEventListener("change", () => osLabel.classList.toggle("attention", !osSel.value));
-      document.getElementById("os-version-hint").textContent = osInfo.version_detected
-        ? `Detected from vCenter (${vm.guest_full_name || vm.guest_id}); change it if the guest runs another release.`
-        : `vCenter only reports "${vm.guest_full_name || vm.guest_id}" without the release. Select the one installed in the guest; OCI records it on the image and uses it for OS-specific defaults.`;
-    } else {
-      osLabel.hidden = true; osSel.required = false;
-    }
-    const isWin = isWindows(vm);
-    document.getElementById("windows-fieldset").hidden = !isWin;
-    document.getElementById("windows-driver-note").hidden = !isWin;
-    // the initramfs fix-up is a Linux thing (Windows gets its VirtIO drivers installed inside the guest)
-    for (const id of ["rebuild-initramfs-label", "rebuild-initramfs-hint", "fix-network-label", "fix-network-hint"]) {
-      document.getElementById(id).hidden = isWin;  // Linux-only post-copy fix-ups
-    }
-    if (isWin && isWindowsClient(vm)) {
-      // OCI has no licenses for client editions; the API refuses OCI_PROVIDED for them
-      const ociLic = form.querySelector('input[name="windows_license_type"][value="OCI_PROVIDED"]');
-      ociLic.disabled = true; ociLic.checked = false;
-      form.querySelector('input[name="windows_license_type"][value="BRING_YOUR_OWN_LICENSE"]').checked = true;
-      document.getElementById("windows-license-hint").textContent = "Windows 10/11: OCI does not provide licenses for client editions, so the instance is registered as BYOL (check your Microsoft license terms for running the desktop OS in a cloud).";
-    }
-    document.getElementById("esxi-host-hint").textContent = vm.host_name ? `(${vm.host_name})` : "";
-    sel("nfc_direct_to_esxi").disabled = !vm.host_name;
     // both compartment pickers start at the helper's compartment; the instance compartment drives the shape
     // list, the network compartment the VCN/subnet list
     for (const name of ["compartment_id", "network_compartment_id"]) {
@@ -751,7 +897,7 @@
       const compat = form.elements.compatibility_mode.checked;
       const bootOverride = form.elements.boot_volume_type_override.value, netOverride = form.elements.network_type_override.value;
       kv(document.getElementById("launch-preview"), [
-        ["Firmware", (vm.firmware === "efi" ? "UEFI_64" : "BIOS") + (vm.secure_boot ? " + Secure Boot" : "")],
+        ["Firmware", cfg.firmwareText()],
         ["Boot volume type", bootOverride || (compat ? "IDE" : "PARAVIRTUALIZED")],
         ["Network type", netOverride || (compat ? "E1000" : "PARAVIRTUALIZED")],
       ]);
@@ -760,58 +906,176 @@
     for (const name of ["compatibility_mode", "boot_volume_type_override", "network_type_override"]) {
       form.elements[name].addEventListener("change", renderPreview);
     }
+    return { sel, renderSizing, renderPreview, currentShape };
+  }
 
-    submit.disabled = !inspection.can_export;
+  // ----------------------------------------------------------- ISO instance view
+  // Create an OCI instance that boots an installer ISO from Object Storage: bucket + ISO, OS metadata,
+  // firmware and boot disk on the left; the usual OCI target form on the right.
+  async function isoView() {
+    app.innerHTML = "";
+    app.append(tpl("tpl-iso"));
+    const isoForm = document.getElementById("iso-form");
+    const form = document.getElementById("target-form");
+    const formError = document.getElementById("form-error");
+    const submit = document.getElementById("submit-btn");
 
-    // a migration of this VM is already running: nothing to configure here, show the job instead
+    let options, catalog;
     try {
-      const jobs = await api("GET", `/jobs?vm_moid=${encodeURIComponent(moid)}`);
-      const active = jobs.find((j) => !TERMINAL.includes(j.phase));
-      if (active) { location.hash = `#/jobs/${active.id}`; return; }
-    } catch (_) { /* ignore */ }
+      [options, catalog] = await Promise.all([api("GET", "/oci/options"), api("GET", "/oci/os-catalog")]);
+    } catch (e) { if (e.status !== 401) showError("Cannot load OCI information: " + e.message); return; }
 
+    const isel = (name) => isoForm.elements[name];
+    const firmwareText = () => `${isel("firmware").value}${isel("secure_boot").checked ? " + Secure Boot" : ""}`;
+    const { sel, renderSizing, renderPreview } = wireTargetForm(form, options, { formError, sizing: null, firmwareText });
+    renderSizing();
+
+    // bucket compartment -> bucket -> ISO objects; the compartment list is the one of the options call
+    const bucketHint = document.getElementById("bucket-hint"), isoHint = document.getElementById("iso-hint");
+    const isoHintDefault = isoHint.textContent;
+    let objects = []; let namespace = "";  // Object Storage namespace of the tenancy (comes with the bucket list)
+    for (const c of options.compartments) isel("bucket_compartment_id").append(el("option", { value: c.id }, c.path || c.name));
+    if (options.compartments.some((c) => c.id === options.helper_compartment_id)) isel("bucket_compartment_id").value = options.helper_compartment_id;
+    const loadObjects = async () => {
+      const bucket = isel("bucket").value; const objSel = isel("object_name");
+      objSel.innerHTML = ""; objects = [];
+      if (!bucket) { isoHint.textContent = "Select a bucket first."; return; }
+      isoHint.textContent = "Listing the bucket...";
+      try {
+        objects = await api("GET", `/oci/objects?bucket=${encodeURIComponent(bucket)}`);
+        for (const o of objects) objSel.append(el("option", { value: o.name }, `${o.name} (${fmtBytes(o.size_bytes)})`));
+        isoHint.textContent = objects.length ? isoHintDefault : `No .iso objects in bucket ${bucket}. Upload the installer ISO to this bucket (OCI console > Object Storage) and click Refresh.`;
+      } catch (e) { isoHint.textContent = e.message; }
+      suggestName();
+    };
+    const loadBuckets = async () => {
+      const comp = isel("bucket_compartment_id").value; const bSel = isel("bucket");
+      bSel.innerHTML = ""; isel("object_name").innerHTML = "";
+      bucketHint.textContent = "Listing buckets...";
+      try {
+        const buckets = await api("GET", `/oci/buckets?compartment_id=${encodeURIComponent(comp)}`);
+        for (const b of buckets) bSel.append(el("option", { value: b.name }, b.name));
+        if (buckets.length) namespace = buckets[0].namespace;
+        bucketHint.textContent = buckets.length ? "" : "No buckets in this compartment.";
+      } catch (e) { bucketHint.textContent = e.message; }
+      await loadObjects();
+    };
+    isel("bucket_compartment_id").addEventListener("change", loadBuckets);
+    isel("bucket").addEventListener("change", loadObjects);
+    document.getElementById("iso-refresh").addEventListener("click", loadObjects);
+
+    // OS family / version from the catalog; Windows shows the licensing fieldset and defaults to
+    // "Maximum compatibility" (Windows Setup has no virtio drivers)
+    const osSel = isel("operating_system"), verSel = isel("operating_system_version");
+    const verLabel = document.getElementById("iso-os-version-label"), verHint = document.getElementById("iso-os-version-hint");
+    for (const entry of catalog) osSel.append(el("option", { value: entry.operating_system }, entry.operating_system));
+    const currentOs = () => catalog.find((e) => e.operating_system === osSel.value) || catalog[0];
+    const isWin = () => currentOs().family === "windows";
+    let compatTouched = false;
+    const renderOs = () => {
+      const entry = currentOs();
+      verSel.innerHTML = "";
+      if (entry.versions.length) {
+        verLabel.hidden = false;
+        for (const v of entry.versions) verSel.append(el("option", { value: v }, `${entry.operating_system} ${v}`));
+        verSel.value = entry.versions[entry.versions.length - 1];
+        verSel.required = true;
+        verHint.textContent = "Release recorded on the OCI image; OCI uses it for OS-specific defaults.";
+      } else {
+        verLabel.hidden = true; verSel.required = false;
+        verHint.textContent = "";
+      }
+      const win = isWin();
+      document.getElementById("windows-fieldset").hidden = !win;
+      document.getElementById("iso-windows-note").hidden = !win;
+      if (!compatTouched) { form.elements.compatibility_mode.checked = win; renderPreview(); }
+      renderLicense();
+    };
+    const renderLicense = () => {
+      // OCI has no licenses for Windows 10/11; the API refuses OCI_PROVIDED for them
+      const client = isWin() && /^Windows1[01]$/.test(verSel.value);
+      const ociLic = form.querySelector('input[name="windows_license_type"][value="OCI_PROVIDED"]');
+      ociLic.disabled = client;
+      if (client) { ociLic.checked = false; form.querySelector('input[name="windows_license_type"][value="BRING_YOUR_OWN_LICENSE"]').checked = true; }
+      document.getElementById("windows-license-hint").textContent = client
+        ? "Windows 10/11: OCI does not provide licenses for client editions, so the instance is registered as BYOL."
+        : "The instance is registered as Windows in OCI; the license type can be changed later in the OCI console.";
+    };
+    osSel.addEventListener("change", renderOs);
+    verSel.addEventListener("change", renderLicense);
+    form.elements.compatibility_mode.addEventListener("change", () => { compatTouched = true; });
+    // Ubuntu is a sensible default for a Linux ISO
+    if (catalog.some((e) => e.operating_system === "Ubuntu")) osSel.value = "Ubuntu";
+    renderOs();
+
+    // firmware / Secure Boot: Secure Boot only with UEFI; both feed the device model preview
+    const secure = isel("secure_boot"), secureLabel = document.getElementById("secure-boot-label");
+    const renderFirmware = () => {
+      const uefi = isel("firmware").value === "UEFI_64";
+      secure.disabled = !uefi; if (!uefi) secure.checked = false;
+      secureLabel.classList.toggle("muted", !uefi);
+      renderPreview();
+    };
+    for (const r of isoForm.querySelectorAll('input[name="firmware"]')) r.addEventListener("change", renderFirmware);
+    secure.addEventListener("change", renderPreview);
+    renderFirmware();
+
+    // instance name: proposed from the ISO file name until the user types one
+    let nameTouched = false;
+    const suggestName = () => {
+      if (nameTouched) return;
+      const file = (isel("object_name").value || "").split("/").pop().replace(/\.iso$/i, "");
+      sel("display_name").value = file ? file.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) : "";
+    };
+    isel("object_name").addEventListener("change", suggestName);
+    sel("display_name").addEventListener("input", () => { nameTouched = sel("display_name").value !== ""; });
+    await loadBuckets();
+
+    // one submit for both forms: the ISO form is validated first (the submit button sits in the target form)
     form.addEventListener("submit", async (ev) => {
       ev.preventDefault();
       formError.textContent = "";
+      if (!isoForm.reportValidity()) return;
       const fd = new FormData(form);
-      const target = {
-        compartment_id: fd.get("compartment_id"),
-        availability_domain: options.helper_availability_domain,
-        subnet_id: fd.get("subnet_id"),
-        private_ip: (fd.get("private_ip") || "").trim() || null,
-        shape: fd.get("shape") || null,
-        ocpus: fd.get("ocpus") ? Number(fd.get("ocpus")) : null,
-        memory_gb: fd.get("memory_gb") ? Number(fd.get("memory_gb")) : null,
-        display_name: fd.get("display_name") || null,
-        operating_system_version: osLabel.hidden ? null : (fd.get("operating_system_version") || null),
-        assign_public_ip: fd.get("assign_public_ip") === "on",
-        start_after_migration: fd.get("start_after_migration") === "on",
-        windows_license_type: isWin ? fd.get("windows_license_type") : null,
-        compatibility_mode: fd.get("compatibility_mode") === "on",
-        boot_volume_type_override: fd.get("boot_volume_type_override") || null,
-        network_type_override: fd.get("network_type_override") || null,
-        nfc_direct_to_esxi: fd.get("nfc_direct_to_esxi") === "on",
-        pipelined_decode: fd.get("pipelined_decode") === "on",
-        rebuild_initramfs: !isWin && fd.get("rebuild_initramfs") === "on",
-        fix_network: !isWin && fd.get("fix_network") === "on",
-        volume_vpus_per_gb: Number(fd.get("volume_vpus_per_gb") || 10),
+      const obj = objects.find((o) => o.name === isel("object_name").value);
+      if (!obj) { formError.textContent = "Select the ISO file."; return; }
+      const bucket = isel("bucket").value;
+      const body = {
+        iso: {
+          namespace,
+          bucket,
+          object_name: obj.name,
+          size_bytes: obj.size_bytes || 0,
+          etag: obj.etag || "",
+          operating_system: osSel.value,
+          operating_system_version: verLabel.hidden ? "unknown" : verSel.value,
+          firmware: isel("firmware").value,
+          secure_boot: secure.checked,
+          boot_disk_gb: Number(isel("boot_disk_gb").value),
+        },
+        target: {
+          compartment_id: fd.get("compartment_id"),
+          availability_domain: options.helper_availability_domain,
+          subnet_id: fd.get("subnet_id"),
+          private_ip: (fd.get("private_ip") || "").trim() || null,
+          shape: fd.get("shape") || null,
+          ocpus: Number(fd.get("ocpus")),
+          memory_gb: Number(fd.get("memory_gb")),
+          display_name: (fd.get("display_name") || "").trim(),
+          assign_public_ip: fd.get("assign_public_ip") === "on",
+          windows_license_type: isWin() ? fd.get("windows_license_type") : null,
+          compatibility_mode: fd.get("compatibility_mode") === "on",
+          boot_volume_type_override: fd.get("boot_volume_type_override") || null,
+          network_type_override: fd.get("network_type_override") || null,
+          volume_vpus_per_gb: Number(fd.get("volume_vpus_per_gb") || 10),
+          rebuild_initramfs: false,
+          fix_network: false,
+        },
       };
-      // a running VM is shut down by the migration: make the operator confirm it, naming the VM
-      if (inspection.needs_power_off) {
-        const how = inspection.tools_running
-          ? "It will be shut down through VMware Tools (guest OS shutdown); if it does not stop in time it is powered off hard."
-          : "VMware Tools is NOT running, so it will be POWERED OFF HARD (like pulling the plug).";
-        const ok = confirm(`WARNING: "${vm.name}" is powered on.\n\n` +
-          `Starting this migration will POWER OFF the VM "${vm.name}" right before the disk export ` +
-          `(after the OCI instance and volumes are prepared). ${how}\n\n` +
-          "The VM stays powered off in vSphere afterwards.\n\n" +
-          `Power off "${vm.name}" and migrate it?`);
-        if (!ok) return;
-      }
       submit.disabled = true;
       try {
-        const job = await api("POST", "/jobs", { vm_moid: moid, target, power_off_source: inspection.needs_power_off });
-        location.hash = `#/jobs/${job.id}`;  // follow the migration on its own page
+        const job = await api("POST", "/jobs/iso", body);
+        location.hash = `#/jobs/${job.id}`;  // follow the image import and launch on the job page
       } catch (e) { formError.textContent = e.message; submit.disabled = false; }
     });
   }
@@ -836,15 +1100,17 @@
       if (p === "ACTIVE" ? TERMINAL.includes(j.phase) : p && j.phase !== p) return false;
       const q = search.value.trim().toLowerCase();
       const target = j.instance_display_name || j.target.display_name || "";
-      return !q || `${j.vm.name} ${target}`.toLowerCase().includes(q);
+      return !q || `${sourceName(j)} ${j.iso ? j.iso.bucket : ""} ${target}`.toLowerCase().includes(q);
     };
 
     // fixed layout (see style.css): the message column takes what the others leave
-    const columns = [["VM", "17%"], ["Phase", "112px"], ["Message", null], ["OCI instance", "14%"], ["Migration", "19%"], ["By", "11%", "by"], ["", "84px"]];
-    // source -> target name; the target is the launched instance's name, else what the form asked for
+    const columns = [["Source", "17%"], ["Phase", "112px"], ["Message", null], ["OCI instance", "14%"], ["Job", "19%"], ["By", "11%", "by"], ["", "84px"]];
+    // source -> target name; the target is the launched instance's name, else what the form asked for.
+    // ISO jobs show bucket/file.iso as the source
     const vmCell = (j) => {
-      const target = j.instance_display_name || j.target.display_name || j.vm.name;
-      return el("td", { class: "name" }, j.vm.name, el("span", { class: "muted arrow" }, " \u2192 "), el("span", { class: "muted" }, target));
+      const source = j.iso ? `${j.iso.bucket}/${j.iso.object_name}` : sourceName(j);
+      const target = j.instance_display_name || j.target.display_name || sourceName(j);
+      return el("td", { class: "name", title: source }, source, el("span", { class: "muted arrow" }, " \u2192 "), el("span", { class: "muted" }, target));
     };
     // start / end / duration / average transfer speed of the migration
     const migrationCell = (j) => {
@@ -876,7 +1142,9 @@
       state.jobsFilter = { q: search.value, phase: phaseSel.value, page };
       body.innerHTML = "";
       if (!jobs.length) {
-        body.append(el("div", { class: "muted" }, "No jobs yet. Pick a VM under Source VMs to start one."));
+        body.append(el("div", { class: "muted" }, state.me && state.me.anonymous
+          ? "No jobs yet. Use New ISO instance to start one."
+          : "No jobs yet. Pick a VM under Source VMs, or create an instance from an ISO, to start one."));
       } else {
         body.append(el("table", { class: "jobs" },
           el("colgroup", {}, ...columns.map(([, w, cls]) => el("col", { style: w ? `width:${w}` : null, class: cls || null }))),
@@ -933,8 +1201,8 @@
     let job;
     try { job = await api("GET", `/jobs/${encodeURIComponent(jobId)}`); }
     catch (e) { if (e.status !== 401) showError(e.message); return; }
-    document.getElementById("console-title").textContent = `- ${job.instance_display_name || job.vm.name}`;
-    if (!hasConsole(job)) { setStatus("", false); setError("The remote console is available for completed migrations with an OCI instance."); closeBtn.hidden = true; return; }
+    document.getElementById("console-title").textContent = `- ${job.instance_display_name || sourceName(job)}`;
+    if (!hasConsole(job)) { setStatus("", false); setError("The remote console is available for completed migrations and running ISO installations with an OCI instance."); closeBtn.hidden = true; return; }
 
     // 1. console connection on the OCI side (idempotent while one is active)
     const openConnection = async () => {
@@ -1147,6 +1415,14 @@
       catch (e) { out.textContent = e.message; } finally { ev.target.disabled = false; }
     });
 
+    document.getElementById("iso-images-cleanup").addEventListener("click", async (ev) => {
+      const out = document.getElementById("iso-images-result");
+      if (!confirm("Delete all custom images imported from ISOs? The next instance from the same ISO imports it again.")) return;
+      ev.target.disabled = true; out.textContent = "Deleting...";
+      try { const r = await api("DELETE", "/iso-images"); out.textContent = `Deleted ${r.deleted.length} image(s).`; }
+      catch (e) { out.textContent = e.message; } finally { ev.target.disabled = false; }
+    });
+
     // job history: delete the records of failed (FAILED + CANCELLED) or of all finished jobs
     const purgeBtns = ["jobs-purge-failed", "jobs-purge-all"].map((id) => document.getElementById(id));
     const purge = async (scope) => {
@@ -1277,19 +1553,25 @@
   // ------------------------------------------------------------------- routing
   async function route() {
     stopPolling();
+    const hash = location.hash || "#/start";
     if (!state.me) {
-      try { setUser(await api("GET", "/auth/me")); } catch (e) { return; /* api() showed the login view */ }
+      try { setUser(await api("GET", "/auth/me")); } catch (e) { return; /* api() showed the start / login view */ }
     }
     if (!state.region) {
       try { state.region = (await api("GET", "/health")).region || ""; } catch (_) { /* links work without it */ }
     }
-    const hash = location.hash || "#/vms";
     for (const a of nav.querySelectorAll("a")) a.classList.toggle("active", hash.startsWith(a.getAttribute("href")));
+    const anonymous = !!state.me.anonymous;
+    if (hash === "#/start") return startView();
+    if (hash === "#/login") { if (anonymous) return showLogin(); location.hash = "#/vms"; return; }
+    if (hash === "#/iso") return isoView();
     let m;
-    if ((m = /^#\/export\/(.+)$/.exec(hash))) return exportView(decodeURIComponent(m[1]));
     if ((m = /^#\/jobs\/([^/]+)\/console$/.exec(hash))) return consoleView(decodeURIComponent(m[1]));
     if ((m = /^#\/jobs\/(.+)$/.exec(hash))) return jobDetailView(decodeURIComponent(m[1]));
     if (hash === "#/jobs") return jobsView();
+    // everything below needs a vCenter login; the anonymous session is sent to its own entry points
+    if (anonymous) { location.hash = hash === "#/setup" || hash === "#/vms" ? "#/iso" : "#/start"; return; }
+    if ((m = /^#\/export\/(.+)$/.exec(hash))) return exportView(decodeURIComponent(m[1]));
     if (hash === "#/setup") return setupView();
     return vmsView();
   }

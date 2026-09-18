@@ -1051,6 +1051,246 @@ def test_seed_image_cleanup_endpoint(env):
     assert r.status_code == 200 and len(r.json()["deleted"]) == 1
 
 
+# --------------------------------------------------------------------------- ISO instances
+ISO_BUCKET = "isos"
+ISO_NAME = "images/ubuntu-24.04-live-server-amd64.iso"
+
+
+def add_isos(env):
+    os_ = env.fake.object_storage
+    os_.add_object(ISO_BUCKET, ISO_NAME, size=3 * 1024**3, etag="etag-ubuntu-1")
+    os_.add_object(ISO_BUCKET, "win/SERVER_EVAL_x64FRE_en-us.iso", size=5 * 1024**3, etag="etag-win-1")
+    os_.add_object(ISO_BUCKET, "notes/readme.txt", size=12)
+    os_.add_bucket("backups")  # no ISOs
+    os_.add_bucket("prod-isos", compartment_id="ocid1.compartment.oc1..prod")
+
+
+def anonymous(client):
+    r = client.post("/api/auth/anonymous")
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def iso_spec(**kw):
+    base = {"namespace": "testnamespace", "bucket": ISO_BUCKET, "object_name": ISO_NAME, "size_bytes": 3 * 1024**3,
+            "etag": "etag-ubuntu-1", "operating_system": "Ubuntu", "operating_system_version": "24.04",
+            "firmware": "UEFI_64", "boot_disk_gb": 80}
+    base.update(kw)
+    return base
+
+
+def iso_target(**kw):
+    return target(**{"display_name": "ubuntu-from-iso", "shape": "VM.Standard.E5.Flex", "ocpus": 2, "memory_gb": 16,
+                     **kw})
+
+
+def test_anonymous_session_covers_iso_flow_but_not_vcenter_functions(env):
+    c = env.client
+    add_isos(env)
+    me = anonymous(c)
+    assert me["anonymous"] is True and me["username"] == "anonymous" and me["vcenter_host"] == ""
+    assert c.get("/api/auth/me").json()["anonymous"] is True
+    # a second call reuses the session (same cookie, no new session object)
+    assert len(env.app.state.sessions._sessions) == 1
+    anonymous(c)
+    assert len(env.app.state.sessions._sessions) == 1
+    # what the ISO flow needs works without a vCenter login...
+    for path in ("/api/jobs", "/api/oci/options", "/api/oci/buckets", f"/api/oci/objects?bucket={ISO_BUCKET}",
+                 "/api/oci/os-catalog"):
+        assert c.get(path).status_code == 200, path
+    # ...the VMware side does not: inventory, VMware job creation and the Setup page need a vCenter session
+    assert c.get("/api/vms").status_code == 403
+    assert c.post("/api/jobs", json={"vm_moid": "vm-101", "target": target()}).status_code == 403
+    assert c.get("/api/setup/logging").status_code == 403
+    assert env.vcenter.sessions == []  # nothing was opened towards vCenter
+    # log out ends the anonymous session
+    assert c.post("/api/auth/logout").status_code == 204
+    assert c.get("/api/auth/me").status_code == 401
+    assert c.get("/api/oci/buckets").status_code == 401
+
+    # a vCenter login already in the browser is kept by the anonymous entry point (it can do everything)
+    login(c)
+    me = anonymous(c)
+    assert me["anonymous"] is False and me["username"] == USER["username"]
+    assert c.get("/api/vms").status_code == 200
+
+
+def test_bucket_object_and_os_catalog_listing(env):
+    c = env.client
+    add_isos(env)
+    anonymous(c)
+    # buckets of the helper's compartment by default, of another compartment on request
+    names = [b["name"] for b in c.get("/api/oci/buckets").json()]
+    assert names == ["backups", "isos"]
+    b = c.get("/api/oci/buckets").json()[1]
+    assert (b["namespace"], b["compartment_id"]) == ("testnamespace", env.fake.identity.compartment_id)
+    r = c.get("/api/oci/buckets", params={"compartment_id": "ocid1.compartment.oc1..prod"})
+    assert [x["name"] for x in r.json()] == ["prod-isos"]
+    # objects: only .iso, sorted, with the fields the job records; the SDK ListObjects wrapper is unwrapped
+    objs = c.get("/api/oci/objects", params={"bucket": ISO_BUCKET}).json()
+    assert [o["name"] for o in objs] == [ISO_NAME, "win/SERVER_EVAL_x64FRE_en-us.iso"]
+    assert objs[0]["size_bytes"] == 3 * 1024**3 and objs[0]["etag"] == "etag-ubuntu-1"
+    assert env.fake.object_storage.list_calls[-1]["fields"] == "name,size,etag,timeModified"
+    assert c.get("/api/oci/objects", params={"bucket": ISO_BUCKET, "prefix": "win/"}).json()[0]["name"].startswith(
+        "win/")
+    assert c.get("/api/oci/objects", params={"bucket": "backups"}).json() == []
+    r = c.get("/api/oci/objects", params={"bucket": "nope"})
+    assert r.status_code == 502 and "cannot list objects of bucket nope" in r.text
+    # the OS catalog: Linux families first, Windows with its releases, Custom Linux without any
+    cat = c.get("/api/oci/os-catalog").json()
+    by_name = {e["operating_system"]: e for e in cat}
+    assert by_name["Ubuntu"]["family"] == "linux" and "24.04" in by_name["Ubuntu"]["versions"]
+    assert by_name["Windows"]["family"] == "windows" and "Windows11" in by_name["Windows"]["versions"]
+    assert by_name["Windows"]["versions"][0].startswith("Server ")
+    assert cat[-1] == {"operating_system": "Custom Linux", "family": "linux", "versions": []}
+    assert [e["family"] for e in cat[:-1]] == sorted(e["family"] for e in cat[:-1])
+
+
+def test_iso_job_installs_via_console_and_is_finished_by_the_user(env):
+    c, fake = env.client, env.fake
+    add_isos(env)
+    anonymous(c)
+    r = c.post("/api/jobs/iso", json={"iso": iso_spec(), "target": iso_target()})
+    assert r.status_code == 202, r.text
+    job = r.json()
+    assert job["kind"] == "iso" and job["vm"] is None and job["created_by"] == "anonymous"
+    assert job["iso"]["object_name"] == ISO_NAME and job["disks"] == []
+    job = wait_phase(c, job["id"], "INSTALLING", "FAILED")
+    assert job["phase"] == "INSTALLING", job
+    assert job["step"] == "installing" and "remote console" in job["message"]
+    assert job["iso_image_id"] in fake.compute.images and job["instance_id"] in fake.compute.instances
+    img = fake.compute.images[job["iso_image_id"]]
+    assert img.source_image_type == "ISO" and img.object_name == ISO_NAME
+    d = fake.compute.launch_details[-1]
+    assert d.source_details.boot_volume_size_in_gbs == 80 and d.source_details.image_id == job["iso_image_id"]
+    # the job is listed under its ISO (source column) and the live instance state is available
+    assert [j["id"] for j in c.get("/api/jobs", params={"vm_moid": f"iso:testnamespace/{ISO_BUCKET}/{ISO_NAME}"})
+            .json()] == [job["id"]]
+    inst = c.get(f"/api/jobs/{job['id']}/instance").json()
+    assert inst["lifecycle_state"] == "RUNNING" and inst["display_name"] == "ubuntu-from-iso"
+    assert inst["private_ip"] is not None
+    # the diagnostics bundle describes the ISO source instead of a VM
+    diag = c.get(f"/api/jobs/{job['id']}/diagnostics").text
+    assert "phase=INSTALLING" in diag and ISO_NAME in diag and "kind=iso" in diag
+    # the installer is still running: neither finalize nor a second finish makes sense
+    assert c.post(f"/api/jobs/{job['id']}/finalize").status_code == 409
+    # the user reports the installation as done
+    r = c.post(f"/api/jobs/{job['id']}/finish")
+    assert r.status_code == 200, r.text
+    assert r.json()["phase"] == "COMPLETED" and r.json()["step"] == "done"
+    assert fake.compute.instances[job["instance_id"]].lifecycle_state == "RUNNING"  # the instance stays
+    assert c.post(f"/api/jobs/{job['id']}/finish").status_code == 409
+    assert c.post(f"/api/jobs/{job['id']}/cancel").status_code == 409
+    # a VMware job cannot be "finished"
+    login(c)
+    vm_job = c.post("/api/jobs", json={"vm_moid": "vm-101", "target": target()}).json()
+    vm_job = wait_phase(c, vm_job["id"], "COMPLETED", "FAILED")
+    assert c.post(f"/api/jobs/{vm_job['id']}/finish").status_code == 409
+    # the same ISO again: the image is reused, only a new instance is launched
+    r = c.post("/api/jobs/iso", json={"iso": iso_spec(), "target": iso_target(display_name="second")})
+    second = wait_phase(c, r.json()["id"], "INSTALLING", "FAILED")
+    assert second["iso_image_id"] == job["iso_image_id"] and second["instance_id"] != job["instance_id"]
+    # Setup: delete the ISO images (the seed image of the VMware job stays)
+    r = c.delete("/api/iso-images")
+    assert r.status_code == 200 and r.json()["deleted"] == [job["iso_image_id"]]
+    assert fake.compute.images[vm_job["seed_image_id"]].lifecycle_state == "AVAILABLE"
+
+
+def test_iso_job_validation(env):
+    c = env.client
+    add_isos(env)
+    anonymous(c)
+
+    def post(iso=None, tgt=None):
+        return c.post("/api/jobs/iso", json={"iso": iso or iso_spec(), "target": tgt or iso_target()})
+
+    r = post(iso_spec(object_name="notes/readme.txt"))
+    assert r.status_code == 400 and "not an .iso object" in r.text
+    r = post(tgt=iso_target(display_name=""))
+    assert r.status_code == 400 and "instance name" in r.text
+    r = post(tgt=target(display_name="x"))  # no sizing
+    assert r.status_code == 400 and "OCPUs and memory" in r.text
+    r = post(iso_spec(operating_system_version="99.99"))
+    assert r.status_code == 400 and "Ubuntu release" in r.text
+    r = post(iso_spec(firmware="BIOS", secure_boot=True))
+    assert r.status_code == 422 and "Secure Boot requires UEFI_64" in r.text
+    r = post(iso_spec(boot_disk_gb=20))
+    assert r.status_code == 422
+    r = post(tgt=iso_target(availability_domain="Uocm:EU-FRANKFURT-1-AD-2"))
+    assert r.status_code == 400 and "availability domain" in r.text
+    r = post(tgt=iso_target(shape="VM.Standard.A1.Flex"))
+    assert r.status_code == 400 and "Ampere" in r.text
+    r = post(tgt=iso_target(private_ip="10.0.1.1"))  # reserved by OCI
+    assert r.status_code == 400 and "10.0.1.1" in r.text
+    # Windows: a license is required; OCI does not license the client editions
+    win = iso_spec(object_name="win/SERVER_EVAL_x64FRE_en-us.iso", etag="etag-win-1", operating_system="Windows",
+                   operating_system_version="Server 2022 Standard")
+    r = post(win)
+    assert r.status_code == 400 and "license" in r.text
+    r = post({**win, "operating_system_version": "Windows11"}, iso_target(windows_license_type="OCI_PROVIDED"))
+    assert r.status_code == 400 and "Windows 10/11" in r.text
+    assert env.fake.compute.images == {} and env.fake.compute.launch_details == []
+
+    # a valid Windows request launches with the emulated device model and licensing
+    r = post(win, iso_target(windows_license_type="BRING_YOUR_OWN_LICENSE", compatibility_mode=True))
+    assert r.status_code == 202, r.text
+    job = wait_phase(c, r.json()["id"], "INSTALLING", "FAILED")
+    assert job["phase"] == "INSTALLING", job
+    d = env.fake.compute.launch_details[-1]
+    assert (d.launch_options.boot_volume_type, d.launch_options.network_type) == ("IDE", "E1000")
+    assert d.licensing_configs[0].license_type == "BRING_YOUR_OWN_LICENSE"
+    assert env.fake.compute.images[job["iso_image_id"]].launch_mode == "EMULATED"
+
+
+def test_iso_job_failure_and_cancel_clean_up(env):
+    c, fake = env.client, env.fake
+    add_isos(env)
+    anonymous(c)
+    # the ISO object vanished between the listing and the import: the job fails with OCI's reason
+    r = c.post("/api/jobs/iso", json={"iso": iso_spec(object_name="images/gone.iso"), "target": iso_target()})
+    assert r.status_code == 202, r.text
+    job = wait_phase(c, r.json()["id"], "FAILED", "INSTALLING")
+    assert job["phase"] == "FAILED" and "iso_image" in job["error"] and "gone.iso not found" in job["error"]
+    assert job["instance_id"] is None
+    # cancelling a failed ISO job: nothing to clean up (the image was deleted by OCI)
+    assert c.post(f"/api/jobs/{job['id']}/cancel").status_code == 202
+    job = wait_phase(c, job["id"], "CANCELLED")
+    assert "nothing to clean up" in job["message"]
+
+    # cancel while installing: the instance is terminated, the image stays for the next job
+    r = c.post("/api/jobs/iso", json={"iso": iso_spec(), "target": iso_target()})
+    job = wait_phase(c, r.json()["id"], "INSTALLING", "FAILED")
+    assert job["phase"] == "INSTALLING", job
+    assert c.post(f"/api/jobs/{job['id']}/cancel").status_code == 202
+    job = wait_phase(c, job["id"], "CANCELLED")
+    assert fake.compute.terminated == [job["instance_id"]]
+    assert fake.compute.images[job["iso_image_id"]].lifecycle_state == "AVAILABLE"
+
+
+def test_iso_job_in_installing_survives_a_restart(tmp_path, fast_retries):
+    """The helper does nothing for an installing ISO job, so a restart must not fail it (unlike a
+    VMware job mid-copy)."""
+    store = JobStore(str(tmp_path / "jobs.db"))
+    now = utcnow()
+    from helper_app.models import IsoSpec, OciTarget
+
+    installing = Job(id="iso-inst", kind="iso", phase=JobPhase.INSTALLING, iso=IsoSpec(**iso_spec()),
+                     target=OciTarget(**iso_target()), instance_id="ocid1.instance.oc1..x",
+                     iso_image_id="ocid1.image.oc1..x", created_at=now, updated_at=now)
+    importing = Job(id="iso-imp", kind="iso", phase=JobPhase.PROVISIONING, step="iso_image",
+                    iso=IsoSpec(**iso_spec()), target=OciTarget(**iso_target()), created_at=now, updated_at=now)
+    store.put(installing)
+    store.put(importing)
+    env = Env(tmp_path, store=store)
+    with TestClient(env.app) as c:
+        anonymous(c)
+        assert c.get("/api/jobs/iso-inst").json()["phase"] == "INSTALLING"
+        job = c.get("/api/jobs/iso-imp").json()
+        assert job["phase"] == "FAILED" and "restarted" in job["error"]
+        # the installing job can still be finished after the restart
+        assert c.post("/api/jobs/iso-inst/finish").json()["phase"] == "COMPLETED"
+
+
 def test_purge_job_records(tmp_path, fast_retries):
     """Setup page: delete failed (FAILED + CANCELLED) or all finished job records; active jobs stay."""
     gate = threading.Event()

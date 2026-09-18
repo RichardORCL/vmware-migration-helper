@@ -12,19 +12,24 @@ The seed's boot volume content is irrelevant: it is overwritten by the block cop
 from __future__ import annotations
 
 import logging
-import time
 import uuid
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 from helper_app.config import Settings
 from helper_app.disk.vmdk_stream import encode_empty_disk
 from helper_app.models import LaunchOptionsSpec
-from helper_app.oci.clients import OciClients, OciError, describe_error
+from helper_app.oci.clients import OciClients, OciError
+from helper_app.oci.image_import import (
+    ProgressCallback,
+    apply_capability_schema,
+    import_failure_detail,
+    import_launch_mode,
+    wait_import,
+)
 from helper_app.oci.mapping import (
     SEED_TAG_DEFAULTS,
     WINDOWS_CLIENT_VERSIONS,
     OsMetadata,
-    is_emulated,
     seed_image_tags,
 )
 
@@ -32,17 +37,7 @@ log = logging.getLogger(__name__)
 
 SEED_TAG = "vc-oci-seed"
 
-# called while an import runs: (percent complete 0-100, human readable status)
-ProgressCallback = Callable[[int, str], None]
-
-
-def import_launch_mode(lo: LaunchOptionsSpec) -> str:
-    """Launch mode for the image import.  ``CUSTOM`` cannot be requested through the public API (it is
-    what OCI reports after launch options were edited), so pick the closest supported mode; the
-    capability schema and the per-job ``LaunchOptions`` take care of the details."""
-    if is_emulated(lo.boot_volume_type, lo.network_type):
-        return "EMULATED"
-    return "PARAVIRTUALIZED"
+__all__ = ["SEED_TAG", "ProgressCallback", "SeedImageService", "import_launch_mode"]
 
 
 class SeedImageService:
@@ -136,10 +131,10 @@ class SeedImageService:
             if on_progress:
                 on_progress(0, f"Importing seed image {display}")
             try:
-                self._wait_import(image.id, work_request_id, display, on_progress)
+                wait_import(self.c, self.s, image.id, work_request_id, display, on_progress, what="seed image")
             except OciError as exc:
                 # OCI deletes an image whose import failed; the reason only exists on the work request
-                raise OciError(f"{exc}; {self._import_failure_detail(work_request_id)}") from exc
+                raise OciError(f"{exc}; {import_failure_detail(self.c, work_request_id, self.s.seed_bucket)}") from exc
             if on_progress:
                 on_progress(100, f"Seed image {display} imported; applying capability schema")
             if client_edition:
@@ -148,8 +143,8 @@ class SeedImageService:
                 self.c.compute.update_image(image.id, M.UpdateImageDetails(
                     operating_system=os_meta.operating_system,
                     operating_system_version=os_meta.operating_system_version))
-            self._apply_capability_schema(image.id, firmware, launch_options, display, tags, launch_mode,
-                                          consistent_naming=not os_meta.is_windows)
+            apply_capability_schema(self.c, self.seed_compartment, image.id, firmware, launch_options, display, tags,
+                                    launch_mode, consistent_naming=not os_meta.is_windows)
             return image.id
         finally:
             try:
@@ -172,66 +167,6 @@ class SeedImageService:
         return deleted
 
     # ----------------------------------------------------------------- private
-    def _wait_import(self, image_id: str, work_request_id: str, display: str,
-                     on_progress: Optional[ProgressCallback]) -> None:
-        """Poll the image until AVAILABLE; in between, read ``percentComplete`` of the CreateImage work
-        request so the job can show how far the import is.  The image state stays authoritative: OCI deletes
-        an image whose import failed, and the work request may be unreadable (no ``read work-requests``)."""
-        deadline = time.monotonic() + self.s.image_import_timeout_s
-        last_percent = -1
-        wr_readable = bool(work_request_id) and self.c.work_requests is not None
-        while True:
-            state = self.c.compute.get_image(image_id).data.lifecycle_state
-            if state == "AVAILABLE":
-                return
-            if state in ("DELETED", "DISABLED"):
-                raise OciError(f"seed image {display} entered state {state} while waiting for ['AVAILABLE']")
-            if wr_readable and on_progress:
-                try:
-                    wr = self.c.work_requests.get_work_request(work_request_id).data
-                except Exception as exc:  # noqa: BLE001 - progress is best effort
-                    log.info("cannot read work request %s for import progress: %s", work_request_id,
-                             describe_error(exc))
-                    wr_readable = False
-                else:
-                    percent = int(getattr(wr, "percent_complete", None) or 0)
-                    status = str(getattr(wr, "status", "") or "IN_PROGRESS")
-                    if percent != last_percent:
-                        last_percent = percent
-                        on_progress(max(0, min(99, percent)),
-                                    f"Importing seed image {display}: {percent}% ({status.lower().replace('_', ' ')})")
-            if time.monotonic() >= deadline:
-                raise OciError(f"timed out after {self.s.image_import_timeout_s:.0f}s waiting for seed image "
-                               f"{display} to reach ['AVAILABLE'] (last={state})")
-            time.sleep(self.c.poll_interval_s)
-
-    def _import_failure_detail(self, work_request_id: str) -> str:
-        """Errors and log of the CreateImage work request, or the usual cause when OCI recorded nothing."""
-        if not work_request_id:
-            return "OCI returned no work request id for the import"
-        parts = [f"import work request {work_request_id}"]
-        if self.c.work_requests is None:
-            parts.append("(work request client not configured)")
-            return "; ".join(parts)
-        try:
-            errors = list(self.c.work_requests.list_work_request_errors(work_request_id).data or [])
-            logs = list(self.c.work_requests.list_work_request_logs(work_request_id).data or [])
-        except Exception as exc:  # noqa: BLE001 - diagnostics must not mask the real failure
-            parts.append(f"(could not read it: {describe_error(exc)}; check it in the OCI console)")
-            return "; ".join(parts)
-        parts += [f"OCI error {e.code}: {e.message}" for e in errors]
-        if logs:
-            parts.append("import log: " + " / ".join(entry.message for entry in logs))
-        if not errors and not logs:
-            parts.append(
-                "OCI recorded no import log or error, which usually means the image import service could not "
-                f"read the placeholder from bucket '{self.s.seed_bucket}': it fetches the object through a "
-                "pre-authenticated request created as the migration tool VM, so its policy needs "
-                f"\"manage buckets ... where all {{target.bucket.name = '{self.s.seed_bucket}', "
-                "request.permission = 'PAR_MANAGE'}\" (see docs/limitations.md)"
-            )
-        return "; ".join(parts)
-
     def _ensure_bucket(self, namespace: str, create_bucket_details_cls) -> None:
         import oci
 
@@ -247,51 +182,3 @@ class SeedImageService:
                                       public_access_type="NoPublicAccess"),
         )
 
-    def _global_schema_version_name(self) -> str:
-        schemas = self.c.compute.list_compute_global_image_capability_schemas().data
-        if not schemas:
-            raise OciError("no global image capability schema available in this region")
-        schema = schemas[0]
-        name = getattr(schema, "current_version_name", None)
-        if name:
-            return name
-        versions = self.c.compute.list_compute_global_image_capability_schema_versions(schema.id).data
-        if not versions:
-            raise OciError("global image capability schema has no versions")
-        return versions[0].name
-
-    def _apply_capability_schema(
-        self, image_id: str, firmware: str, lo: LaunchOptionsSpec, display: str, tags: dict[str, str],
-        launch_mode: str = "PARAVIRTUALIZED", consistent_naming: bool = True,
-    ) -> None:
-        """Pin the firmware and allow every device model, so that the explicit ``LaunchOptions`` of each job
-        (which may differ from the import defaults) are accepted at launch.  ``consistent_naming`` (Linux-only
-        /dev/oracleoci paths) cannot be overridden at launch, so it is decided here per seed image."""
-        import oci.core.models as M
-
-        def enum(values: list[str], default: str):
-            return M.EnumStringImageCapabilitySchemaDescriptor(source="IMAGE", values=values, default_value=default)
-
-        def boolean(default: bool):
-            return M.BooleanImageCapabilitySchemaDescriptor(source="IMAGE", default_value=default)
-
-        schema_data = {
-            "Compute.Firmware": enum([firmware], firmware),
-            "Compute.LaunchMode": enum(["PARAVIRTUALIZED", "EMULATED", "NATIVE", "CUSTOM"], launch_mode),
-            "Storage.BootVolumeType": enum(["PARAVIRTUALIZED", "ISCSI", "SCSI", "IDE"], lo.boot_volume_type.value),
-            "Storage.RemoteDataVolumeType": enum(["PARAVIRTUALIZED", "ISCSI"], "PARAVIRTUALIZED"),
-            "Network.AttachmentType": enum(["PARAVIRTUALIZED", "E1000", "VFIO"], lo.network_type.value),
-            "Storage.ConsistentVolumeNaming": boolean(consistent_naming),
-            # a shielded (Secure Boot) launch is only accepted from an image whose schema declares support
-            "Compute.SecureBoot": boolean(lo.secure_boot),
-        }
-        details = M.CreateComputeImageCapabilitySchemaDetails(
-            compartment_id=self.seed_compartment,
-            compute_global_image_capability_schema_version_name=self._global_schema_version_name(),
-            image_id=image_id,
-            display_name=f"{display}-capabilities",
-            freeform_tags=tags,
-            schema_data=schema_data,
-        )
-        self.c.compute.create_compute_image_capability_schema(details)
-        log.info("capability schema applied to %s: firmware=%s secure_boot=%s", image_id, firmware, lo.secure_boot)

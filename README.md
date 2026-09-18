@@ -24,6 +24,10 @@ firmware mode (BIOS/UEFI, Secure Boot), CPU/memory sizing and Windows licensing 
   a copy of the diagnostics are available per job.
 - **First boot debugging**: a *Remote console* button on a completed job opens the instance's VNC console
   in the browser (OCI console connection created on the fly, tunnelled through the migration tool VM).
+- **Create OCI instance based on ISO** (no vCenter needed): pick an installer ISO from an Object Storage
+  bucket, choose shape, OS type, firmware (BIOS/UEFI, Secure Boot) and boot disk size; the migration tool
+  imports the ISO as a custom image, launches the instance booting it with a blank boot volume and hands
+  you the remote console to run the installer.
 
 Not in scope: live migration of running VMs (no CBT/delta sync: the VM is off during the copy), VMware Workstation/Fusion, Hyper-V or KVM sources, and
 guest-side reconfiguration (IP addresses, drivers - see the notes on VirtIO drivers for Windows in
@@ -43,8 +47,9 @@ preloaded. Manual deployment with Terraform and all settings are described in
    `helper/deploy/terraform` locally; see [docs/install-helper.md](docs/install-helper.md)). You
    provide the subnet (must route to vCenter/ESXi over your VPN/FastConnect) and the CIDRs of the
    administrators' browsers; nothing about vCenter is configured in the stack.
-2. **Open the web UI** at `https://<migration-tool-vm-ip>:8443/`, accept the self-signed certificate,
-   enter the vCenter Server or ESXi host (with *Verify the server certificate* ticked only for a
+2. **Open the web UI** at `https://<migration-tool-vm-ip>:8443/`, accept the self-signed certificate and
+   choose *VMware vCenter or ESXi* on the start page (the other box, *Create OCI instance based on ISO*,
+   needs no login). Enter the vCenter Server or ESXi host (with *Verify the server certificate* ticked only for a
    CA-signed certificate) and log in with an account that can read the inventory and export the VMs
    (`VirtualMachine.Provisioning.ExportOVF` / *Allow disk access*). The server is chosen per login, so
    one migration tool VM can migrate from several vCenters or ESXi hosts; the browser remembers the

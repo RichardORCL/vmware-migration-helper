@@ -63,6 +63,28 @@ def _fixup_lines(job: Job) -> str:
     return "\n".join(blocks)
 
 
+def _source_lines(job: Job, settings: Settings) -> list[str]:
+    if job.vm is not None:
+        return [
+            f"  source VM: {job.vm.name} ({job.vm.moid}) guest={job.vm.guest_id} firmware={job.vm.firmware} "
+            f"cpu={job.vm.num_cpu} mem_mb={job.vm.memory_mb} disks={len(job.vm.disks)} "
+            f"vcenter={job.vcenter_host or '-'} esxi_host={job.vm.host_name or '-'} "
+            f"power_off_source={job.power_off_source} power_off_result={job.power_off_result or '-'}",
+            f"  nfc download: host={job.nfc_host or '-'} direct_to_esxi={job.target.nfc_direct_to_esxi} "
+            f"pipelined_decode={job.target.pipelined_decode} chunk_bytes={settings.nfc_chunk_bytes} "
+            f"pipeline_depth={settings.nfc_pipeline_depth}",
+            _fixup_lines(job),
+        ]
+    iso = job.iso
+    if iso is None:
+        return ["  source: -"]
+    return [
+        f"  source ISO: {iso.key} size={iso.size_bytes} etag={iso.etag or '-'} os={iso.operating_system} "
+        f"{iso.operating_system_version} firmware={iso.firmware} secure_boot={iso.secure_boot} "
+        f"boot_disk_gb={iso.boot_disk_gb} image_type={settings.iso_source_image_type}",
+    ]
+
+
 def collect(job: Job, settings: Settings, ident: HelperIdentity, commit: str,
             run: Runner = _default_runner, now: Callable[[], datetime] = lambda: datetime.now(timezone.utc)) -> str:
     """The text block copied to the clipboard."""
@@ -84,20 +106,13 @@ def collect(job: Job, settings: Settings, ident: HelperIdentity, commit: str,
         f"seed_compartment={settings.seed_compartment_id or '(migration tool VM)'} "
         f"max_concurrent_jobs={settings.max_concurrent_jobs} disk_retry_attempts={settings.disk_retry_attempts}",
         "",
-        f"job {job.id}: phase={job.phase.value} step={job.step or '-'}"
+        f"job {job.id}: phase={job.phase.value} kind={job.kind} step={job.step or '-'}"
         + (f" step_percent={job.step_percent}" if job.step_percent is not None else ""),
         f"  created {job.created_at.isoformat(timespec='seconds')} by {job.created_by or '-'}; "
         f"updated {job.updated_at.isoformat(timespec='seconds')}",
         f"  message: {job.message or '-'}",
         f"  error: {job.error or '-'}",
-        f"  source VM: {job.vm.name} ({job.vm.moid}) guest={job.vm.guest_id} firmware={job.vm.firmware} "
-        f"cpu={job.vm.num_cpu} mem_mb={job.vm.memory_mb} disks={len(job.vm.disks)} "
-        f"vcenter={job.vcenter_host or '-'} esxi_host={job.vm.host_name or '-'} "
-        f"power_off_source={job.power_off_source} power_off_result={job.power_off_result or '-'}",
-        f"  nfc download: host={job.nfc_host or '-'} direct_to_esxi={job.target.nfc_direct_to_esxi} "
-        f"pipelined_decode={job.target.pipelined_decode} chunk_bytes={settings.nfc_chunk_bytes} "
-        f"pipeline_depth={settings.nfc_pipeline_depth}",
-        _fixup_lines(job),
+        *_source_lines(job, settings),
         f"  target: compartment={job.target.compartment_id} AD={job.target.availability_domain} "
         f"subnet={job.target.subnet_id} shape={job.target.shape or '(default)'} "
         f"ocpus={job.target.ocpus or 'auto'} memory_gb={job.target.memory_gb or 'auto'} "
@@ -109,7 +124,7 @@ def collect(job: Job, settings: Settings, ident: HelperIdentity, commit: str,
         f"secure_boot={lo.secure_boot}" if lo
         else "  launch options: -",
         f"  instance={job.instance_id or '-'} seed_image={job.seed_image_id or '-'} "
-        f"boot_volume={job.boot_volume_id or '-'}",
+        f"iso_image={job.iso_image_id or '-'} boot_volume={job.boot_volume_id or '-'}",
         f"  transfer: percent={job.transfer.percent} received={job.transfer.bytes_received} "
         f"written={job.transfer.bytes_written} "
         f"duration_s={_num(job.transfer.duration_s)} average_bps={_num(job.transfer.average_bps)} "

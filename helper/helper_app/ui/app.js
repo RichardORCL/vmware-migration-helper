@@ -1555,7 +1555,9 @@
     stopPolling();
     const hash = location.hash || "#/start";
     if (!state.me) {
-      try { setUser(await api("GET", "/auth/me")); } catch (e) { return; /* api() showed the start / login view */ }
+      // api() leaves /auth/* 401s alone (a failed login must not navigate), so the "no session" case is handled here
+      try { setUser(await api("GET", "/auth/me")); }
+      catch (e) { if (e.status === 401) showStart(); else showError(e.message); return; }
     }
     if (!state.region) {
       try { state.region = (await api("GET", "/health")).region || ""; } catch (_) { /* links work without it */ }

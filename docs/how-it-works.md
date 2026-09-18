@@ -1,7 +1,7 @@
 # How the OCI Ultimate Migration Tool works
 
-Technical overview of the OCI Ultimate Migration Tool: the copy mechanism, the supported source endpoints, the
-network flows, the repository layout and how to develop on it. For the step-by-step internals see
+Technical overview of the OCI Ultimate Migration Tool: the copy mechanism for VMware and Azure sources, the
+supported source endpoints, the network flows, the repository layout and how to develop on it. For the step-by-step internals see
 [architecture.md](architecture.md); for the guest OS / launch option / shape tables see
 [os-mapping.md](os-mapping.md); for known limitations and troubleshooting see
 [limitations.md](limitations.md); for deployment and configuration see [install-helper.md](install-helper.md).
@@ -50,7 +50,67 @@ sequenceDiagram
     B->>H: poll job progress
 ```
 
+### Azure source
+
+The same pipeline migrates VMs from **Microsoft Azure**: steps 1, 2, 4 and 5 are unchanged (the OCI side only
+sees a `VmSpec`), step 3 is replaced by an Azure disk export. You log in with a *service principal*
+(tenant ID, application/client ID, client secret - held in memory per session like vCenter credentials;
+`POST /api/auth/azure/login`), the migration tool lists the VMs of every subscription the principal can read
+(`GET /api/azure/vms`) and maps each VM to a `VmSpec` (`azure/inventory.py`): Hyper-V generation V1 -> BIOS,
+V2 -> UEFI, Trusted Launch Secure Boot / vTPM, vCPU and RAM from the VM size, the OS disk first and the data
+disks in LUN order, the guest OS from the image reference (publisher/offer/SKU) and the instance view so that
+`oci/mapping.py` recognises Ubuntu, RHEL, Oracle Linux, SUSE and Windows as it does for vSphere.
+
+Azure managed disks are exported through a **read SAS** on the disk (`beginGetAccess`), which Azure only grants
+while the disk is not attached to a running VM. Per job you choose how the disks are captured:
+
+- **Deallocate the VM** and export its disks: consistent copy; the VM is deallocated right before the export
+  (after the OCI instance and volumes are prepared; confirmed by name when the job is started) and stays
+  deallocated afterwards.
+- **Snapshot the disks** while the VM keeps running: the migration tool creates a snapshot of every disk,
+  exports the snapshots and deletes them when the job ends. Crash-consistent (like a power loss); changes
+  made after the snapshot are not migrated.
+
+The SAS points at a fixed-VHD **page blob**. The migration tool asks the blob for its allocated ranges
+(`GET ?comp=pagelist`), downloads only those with `HELPER_AZURE_RANGE_WORKERS` parallel range requests of
+`HELPER_AZURE_RANGE_CHUNK_BYTES` (`disk/vhd_range_copy.py`) and `pwrite()`s them at the same offsets on the
+attached OCI volume - the trailing 512-byte VHD footer is left out, unallocated regions are never read (fresh
+OCI volumes read as zero). Progress is exact (`stream_bytes` = allocated bytes). The SAS is revoked
+(`endGetAccess`) and the snapshots deleted when the copy finishes, fails or is cancelled; an expired SAS
+(`HELPER_AZURE_SAS_DURATION_S`, default 24 h) is renewed mid-copy.
+
+```mermaid
+sequenceDiagram
+    participant B as Browser
+    participant H as Migration Tool VM (OCI)
+    participant AAD as Entra ID
+    participant ARM as Azure Resource Manager
+    participant Blob as Azure page blob (SAS)
+    participant OCI as OCI APIs
+    B->>H: tenant, client ID, client secret
+    H->>AAD: OAuth2 client credentials -> token
+    H->>ARM: list subscriptions, VMs, disks, VM sizes
+    B->>H: start migration (deallocate | snapshot)
+    H->>OCI: seed image, LaunchInstance, stop, detach boot volume, create + attach volumes
+    alt deallocate
+        H->>ARM: deallocate VM (LRO)
+    else snapshot
+        H->>ARM: create snapshot per disk (LRO)
+    end
+    H->>ARM: beginGetAccess (read SAS) per disk / snapshot
+    loop each disk
+        H->>Blob: Get Page Ranges
+        H->>Blob: Range GET x N workers
+        H->>H: pwrite(/dev/oracleoci/oraclevdX)
+    end
+    H->>ARM: endGetAccess, delete snapshots
+    H->>H: Linux guest fix-ups (initramfs, DHCP)
+    H->>OCI: detach from migration tool, attach to target, start
+```
+
 ## Supported source environments
+
+### VMware
 
 The migration tool talks plain vSphere API (pyVmomi `SmartConnect`) and NFC over HTTPS, so it works with either
 management endpoint. The server address is entered on the login page, so one migration tool can serve several
@@ -67,6 +127,17 @@ migration tool must reach the endpoint on 443 (or the port given at login), the 
 copy (the migration tool shuts it down otherwise), and vSphere Hosted (Workstation/Fusion) or Hyper-V/KVM sources are **not** supported -
 see [limitations.md](limitations.md).
 
+### Microsoft Azure
+
+| Source | Log in as | Notes |
+| --- | --- | --- |
+| **Azure (public cloud)** - VMs with managed disks in any subscription of one Entra ID tenant | a *service principal*: tenant ID, application (client) ID, client secret | The principal needs **Reader** on the subscriptions plus `Microsoft.Compute/virtualMachines/deallocate/action`, `Microsoft.Compute/disks/beginGetAccess/action`, `disks/endGetAccess/action`, `snapshots/write`, `snapshots/delete`, `snapshots/beginGetAccess/action`, `snapshots/endGetAccess/action` on the resource groups holding the VMs (the built-in *Virtual Machine Contributor* + *Disk Snapshot Contributor* roles cover them; the login page shows a custom-role snippet). Unmanaged (storage account) disks, ephemeral OS disks, Azure Disk Encryption, Confidential VMs and disks with `networkAccessPolicy = DenyAll` are refused before anything is created in OCI; disks restricted to a private endpoint (`AllowPrivate`) need that endpoint reachable from the migration tool VM. Azure Government / China clouds and Azure Stack are not supported. |
+
+Requirements: the migration tool VM must reach `login.microsoftonline.com`, `management.azure.com` and the
+blob endpoints of the export SAS (`*.blob.core.windows.net` or `*.blob.storage.azure.net`) on 443 (NAT
+gateway or internet route; there is no OCI service gateway for Azure). Azure charges internet egress for the
+data leaving the region.
+
 ## Networking
 
 | Flow | Port | Notes |
@@ -74,6 +145,8 @@ see [limitations.md](limitations.md).
 | Browser -> migration tool | TCP 8443 | web UI + API, TLS (self-signed by default), restricted by `allowed_source_cidrs` |
 | Migration tool -> vCenter | TCP 443 | SOAP API and the NFC disk download (vCenter proxies ESXi by default) |
 | Migration tool -> ESXi hosts | TCP 443 | Only with *Download the disks directly from the ESXi host* (per migration) or `HELPER_NFC_HOST_OVERRIDE`; bypasses the vCenter proxy, usually several times faster |
+| Migration tool -> `login.microsoftonline.com`, `management.azure.com` | TCP 443 | Azure source only: Entra ID token, Azure Resource Manager (VM inventory, deallocate, snapshots, export SAS). Needs a NAT gateway or other internet route |
+| Migration tool -> `*.blob.core.windows.net` / `*.blob.storage.azure.net` | TCP 443 | Azure source only: the page-blob download behind the export SAS (`Get Page Ranges` + range `GET`s). Same route as above |
 | Migration tool -> OCI | TCP 443 | Compute, Block Storage, Object Storage APIs (service gateway or NAT) |
 | Migration tool -> `instance-console.<region>.oci.oraclecloud.com` | TCP 443 | *Remote console* of a migrated instance: SSH to the OCI console connection service (Service Gateway with *All Services in Oracle Services Network*, or NAT gateway; the migration tool has no public IP). The VNC stream is bridged to the browser over the existing 8443 connection (WebSocket). |
 
@@ -110,25 +183,30 @@ keep self-updating; wherever you read "helper" in an identifier it means the OCI
 helper/
   helper_app/
     main.py            FastAPI app: web UI at /ui, REST API at /api
-    config.py          HELPER_* settings (vCenter, NFC, sessions, OCI, job execution)
-    models.py          VmSpec / OciTarget / Job / API payloads
-    sessions.py        web sessions bound to per-user vCenter connections (pinned by running jobs)
+    config.py          HELPER_* settings (vCenter, NFC, Azure, sessions, OCI, job execution)
+    models.py          VmSpec / OciTarget / Job / AzureSourceInfo / API payloads
+    sessions.py        web sessions bound to a per-user vCenter or Azure connection (pinned by running jobs)
     auth.py            cookie-based session dependency
     runtime_settings.py  Setup page overrides (logging, concurrency, session timeout) persisted to JSON
     sysstat.py         migration tool VM resource usage for the Setup page (CPU, memory, disk, network from /proc,
                        sampled every 2 s with a 10-minute history for the live chart)
-    api/               routes_auth, routes_vms, routes_jobs, routes_console, routes_instances, routes_oci, routes_setup
+    api/               routes_auth, routes_vms, routes_azure_vms, routes_jobs, routes_console, routes_instances,
+                       routes_oci, routes_setup
     vsphere/           session (pyVmomi login), inventory (VM list, VmSpec, preflight), export (NFC lease)
-    disk/              stream-optimized VMDK decoder/encoder, positional block-device writer
+    azure/             client (httpx: OAuth2 client credentials, ARM GET/POST, long-running operations), session
+                       (service principal login), inventory (VM list, VmSpec), preflight, export (deallocate or
+                       snapshot, beginGetAccess/endGetAccess, SAS renewal, cleanup)
+    disk/              stream-optimized VMDK decoder/encoder, VHD page-range copier (Azure), positional
+                       block-device writer
     guest/             post-copy fix-ups on the target boot volume: fixup.py runs the steps in one mount
                        session; initramfs.py (virtio drivers via dracut), network.py (DHCP on the renamed NIC)
     oci/               mapping (guest OS / launch options / shape), seed images, provisioning
     jobs/              SQLite job store, MigrationRunner
     console/           remote console: OCI console connection, asyncssh VNC tunnel, per-job session manager
-    ui/                vanilla JS single-page UI (login, Source VMs, export dialog, jobs, remote console, setup)
-                       + ui/vendor/novnc (noVNC RFB client, MPL-2.0)
+    ui/                vanilla JS single-page UI (vCenter and Azure login, Source VMs, Azure VMs, export dialog,
+                       jobs, remote console, setup) + ui/vendor/novnc (noVNC RFB client, MPL-2.0)
   deploy/terraform/    Resource Manager stack / Terraform for the migration tool VM (+ cloud-init: git clone + pip)
-  tests/               fakes for OCI, vCenter and NFC; end-to-end tests
+  tests/               fakes for OCI, vCenter, NFC and Azure (ARM + page blobs); end-to-end tests
 docs/
 ```
 
@@ -149,9 +227,10 @@ HELPER_VCENTER_HOST=vcenter.example.com HELPER_COOKIE_SECURE=false HELPER_DB_PAT
 vc-oci-helper
 ```
 
-The test-suite exercises the complete pipeline against in-memory fakes of the OCI SDK, vCenter and
-the NFC download, including a simulated mid-stream failure with retry, cancellation and a logout
-during a running export.
+The test-suite exercises the complete pipeline against in-memory fakes of the OCI SDK, vCenter, the NFC
+download and Azure (Entra ID token endpoint, ARM compute/disk APIs, page blobs served through an
+`httpx.MockTransport`), including a simulated mid-stream failure with retry, cancellation, a logout during
+a running export, both Azure capture modes and the cleanup of export SAS / snapshots after a failure.
 
 Rebuild the Resource Manager stack zip after changing anything under `helper/deploy/terraform` with
 `helper/deploy/package_stack.sh` (or `package_stack.ps1`).

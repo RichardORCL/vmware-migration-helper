@@ -14,6 +14,17 @@ variables keep their original "helper" names; see [how-it-works.md](how-it-works
 - The migration tool VM is designed for a **private subnet without a public IP**. Its subnet needs a route to the Oracle Services Network through a Service Gateway (*All <region> Services in Oracle Services Network*: OCI APIs, Object Storage, the instance console connection service used by *Remote console*, Oracle yum) and a NAT gateway for GitHub/PyPI. See the networking table in the [README](../README.md#networking-requirements).
 - A vCenter account for each operator with read access to the inventory and the
   `VirtualMachine.Provisioning.ExportOVF` privilege (*Allow disk access*) on the VMs to migrate.
+- For **Azure sources**: the migration tool VM must reach `login.microsoftonline.com`,
+  `management.azure.com` and the Azure blob endpoints (`*.blob.core.windows.net`, `*.blob.storage.azure.net`)
+  on 443 - these are on the internet, so the subnet needs the NAT gateway (the stack's NSG allows all
+  egress; nothing else to configure). Each operator needs an Entra ID **app registration with a client
+  secret** (service principal) that has the *Reader* role on the subscriptions holding the VMs and a role
+  with `Microsoft.Compute/virtualMachines/deallocate/action`, `Microsoft.Compute/disks/beginGetAccess/action`,
+  `Microsoft.Compute/disks/endGetAccess/action`, `Microsoft.Compute/snapshots/write`,
+  `Microsoft.Compute/snapshots/delete`, `Microsoft.Compute/snapshots/beginGetAccess/action` and
+  `Microsoft.Compute/snapshots/endGetAccess/action` on the resource groups (custom role, or the built-in
+  *Virtual Machine Contributor* + *Disk Snapshot Contributor*). Nothing about Azure is configured in the
+  stack; the credentials are typed on the Azure login page and kept in memory for the session.
 
 The Terraform in `helper/deploy/terraform` is a self-contained [Resource Manager](https://docs.oracle.com/en-us/iaas/Content/ResourceManager/home.htm) stack (it ships a `schema.yaml` for the console form) and also works with a local `terraform apply`.
 
@@ -70,6 +81,12 @@ from a CA the VM trusts (add your CA with `update-ca-trust` if necessary). The c
 vSphere API connection and the NFC disk download of that session. The VM list should show the
 inventory the account is allowed to see.
 
+For an Azure source choose *Microsoft Azure* on the start page instead and enter the tenant ID, the
+application (client) ID and the client secret of the service principal; *Azure VMs* then lists the VMs of
+every subscription the principal can read. From the migration tool VM,
+`curl -sI https://login.microsoftonline.com | head -1` and `curl -sI https://management.azure.com | head -1`
+confirm the internet path (any HTTP status means the host was reached).
+
 To replace the self-signed certificate, put your own into `/etc/vc-oci-helper/server.crt` /
 `server.key` and restart the unit.
 
@@ -85,6 +102,11 @@ To replace the self-signed certificate, put your own into `/etc/vc-oci-helper/se
 | `HELPER_LEASE_PROGRESS_INTERVAL_S` / `HELPER_LEASE_READY_TIMEOUT_S` | 60 / 300 | Lease keep-alive interval / time to wait for the lease |
 | `HELPER_DISK_RETRY_ATTEMPTS` | `3` | Attempts per disk (each restarts from the beginning) |
 | `HELPER_GUEST_SHUTDOWN_TIMEOUT_S` | `300` | Powered-on source VMs: how long to wait for the guest OS shutdown (via VMware Tools) before powering the VM off hard |
+| `HELPER_AZURE_SAS_DURATION_S` | `86400` | Azure source: validity requested for the export SAS (`beginGetAccess`); renewed automatically when a copy outlives it |
+| `HELPER_AZURE_RANGE_WORKERS` | `4` | Azure source: parallel range downloads per disk |
+| `HELPER_AZURE_RANGE_CHUNK_BYTES` | `8388608` | Azure source: size of one range request (memory per disk copy: workers x chunk size) |
+| `HELPER_AZURE_DEALLOCATE_TIMEOUT_S` | `900` | Azure source, deallocate mode: how long to wait for the VM to deallocate before the job fails |
+| `HELPER_AZURE_SNAPSHOT_TIMEOUT_S` | `900` | Azure source, snapshot mode: how long to wait for each snapshot to be created |
 | `HELPER_SESSION_TTL_S` | `28800` | Idle timeout of web sessions (5 min - 7 days); changeable on the *Setup* page |
 | `HELPER_COOKIE_SECURE` | `true` | Set `false` only for plain-HTTP development |
 | `HELPER_MAX_CONCURRENT_JOBS` | `2` | Migrations copying disks at the same time (1-16, further jobs queue); changeable on the *Setup* page |
@@ -126,6 +148,6 @@ The same thing by hand: `sudo /usr/local/sbin/vc-oci-helper-install && sudo syst
 - Seed images accumulate one per firmware/OS combination. Delete them from the *Setup* tab, with `DELETE /api/seed-images` (logged in) or from the console (tag `vc-oci-seed=true`).
 - ISO images (custom images imported by *Create OCI instance based on ISO*) accumulate one per ISO object / firmware / device model and are kept for reuse. Delete them from the *Setup* tab, with `DELETE /api/iso-images` or from the console (tag `vc-oci-iso=true`); instances already launched keep running.
 - Jobs are stored in `HELPER_DB_PATH`. A failed job leaves its OCI resources in place for inspection; *Clean up OCI resources* in the job view (`POST /api/jobs/{id}/cancel`) terminates the instance and deletes the volumes.
-- After a restart of the service, jobs that were running are marked `FAILED` (their vCenter session is gone); clean them up and start again.
+- After a restart of the service, jobs that were running are marked `FAILED` (their vCenter or Azure session is gone); clean them up and start again. For Azure jobs, cancel them from a browser that is logged in to Azure so that the export SAS is revoked and the job's snapshots (`vcoci-<job>-<n>-<disk>`) are deleted; otherwise the job message lists what to release by hand.
 - The job history can be trimmed from the *Setup* tab: *Delete failed jobs* removes `FAILED` and `CANCELLED` records, *Delete all jobs* every finished record (`DELETE /api/setup/jobs?scope=failed|all`). Running or queued jobs are never deleted, and only the records go - OCI resources of a failed job are not cleaned up by this.
 - The migration tool supports up to 32 attached volumes at once, which bounds `HELPER_MAX_CONCURRENT_JOBS`.

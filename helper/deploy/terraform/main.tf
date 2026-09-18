@@ -82,7 +82,7 @@ resource "oci_core_network_security_group_security_rule" "egress_all" {
   protocol                  = "all"
   destination               = "0.0.0.0/0"
   destination_type          = "CIDR_BLOCK"
-  description               = "vCenter (SOAP + NFC on 443), OCI APIs, Object Storage, package repositories"
+  description               = "vCenter (SOAP + NFC on 443), Azure (Entra ID, ARM, blob endpoints on 443), OCI APIs, Object Storage, package repositories"
 }
 
 # ---------------------------------------------------------------------------- object storage

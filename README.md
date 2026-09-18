@@ -1,21 +1,27 @@
 # OCI Ultimate Migration Tool
 
 The **OCI Ultimate Migration Tool** moves **virtual machines from VMware vSphere (vCenter or a
-standalone ESXi host) to Oracle Cloud Infrastructure compute instances** - disk for disk, straight into
-OCI block volumes, with no VDDK, no OVA export and no intermediate storage. The copy is taken from a
-powered-off VM: either you power it off beforehand, or the migration tool shuts it down for you right
-before the disk export (after confirmation).
+standalone ESXi host) and from Microsoft Azure to Oracle Cloud Infrastructure compute instances** - disk
+for disk, straight into OCI block volumes, with no VDDK, no OVA/VHD download to disk and no intermediate
+storage. From vSphere the copy is taken from a powered-off VM: either you power it off beforehand, or the
+migration tool shuts it down for you right before the disk export (after confirmation). From Azure you
+choose per VM between deallocating it for a consistent copy and snapshotting its disks while it keeps running.
 
 The tool runs on a single VM you deploy in your OCI tenancy, the **OCI Migration Tool VM**. It offers a
-web UI where you log in with your vCenter (or ESXi) credentials, pick the VMs to move, choose where they
-should land in OCI and watch the copy progress. Each migration produces a ready-to-run OCI instance with the original disks,
-firmware mode (BIOS/UEFI, Secure Boot), CPU/memory sizing and Windows licensing settings.
+web UI where you log in with your vCenter (or ESXi) credentials or an Azure service principal, pick the VMs
+to move, choose where they should land in OCI and watch the copy progress. Each migration produces a
+ready-to-run OCI instance with the original disks, firmware mode (BIOS/UEFI, Secure Boot), CPU/memory
+sizing and Windows licensing settings.
 
 ## What you can use it for
 
 - **Lift-and-shift of VMware VMs** to OCI compute: Linux and Windows guests, single or multi-disk,
   BIOS or UEFI, from any vCenter or ESXi host the migration tool VM can reach over your VPN/FastConnect.
 - **Migrating from several sources** with one migration tool VM: the vCenter/ESXi address is entered at login.
+- **Azure to OCI**: log in with a service principal (tenant, client ID, secret - kept in memory only),
+  see the VMs of every subscription it can read, and migrate them with their managed disks. Per VM,
+  either the VM is deallocated right before the export (consistent copy) or its disks are snapshotted
+  while it runs (crash-consistent, no downtime). Only the allocated parts of each disk cross the wire.
 - **Controlled cut-overs**: the source VM's disks stay untouched; a running VM is shut down by the
   migration tool only once the OCI side is prepared, right before the copy (guest shutdown through VMware
   Tools, hard power-off as fallback), which keeps the downtime short. The target is created, sized
@@ -34,7 +40,7 @@ firmware mode (BIOS/UEFI, Secure Boot), CPU/memory sizing and Windows licensing 
   with the OCI instance console connection service. Pick a compartment to list its instances, or search
   instances by name across compartments (OCI Resource Search), and open the VNC console in the browser.
 
-Not in scope: live migration of running VMs (no CBT/delta sync: the VM is off during the copy), VMware Workstation/Fusion, Hyper-V or KVM sources, and
+Not in scope: live migration with delta sync (no CBT: a vSphere VM is off during the copy, an Azure snapshot copy does not include later changes), VMware Workstation/Fusion, Hyper-V or KVM sources, Azure VMs with Azure Disk Encryption, ephemeral OS disks or Confidential VMs, and
 guest-side reconfiguration (IP addresses, drivers - see the notes on VirtIO drivers for Windows in
 [docs/limitations.md](docs/limitations.md)).
 
@@ -53,8 +59,9 @@ preloaded. Manual deployment with Terraform and all settings are described in
    provide the subnet (must route to vCenter/ESXi over your VPN/FastConnect) and the CIDRs of the
    administrators' browsers; nothing about vCenter is configured in the stack.
 2. **Open the web UI** at `https://<migration-tool-vm-ip>:8443/`, accept the self-signed certificate and
-   choose *VMware vCenter or ESXi* on the start page (the other boxes, *Create OCI instance based on ISO*
-   and *OCI Remote Console*, need no login). Enter the vCenter Server or ESXi host (with *Verify the server certificate* ticked only for a
+   choose *VMware vCenter or ESXi* on the start page (*Microsoft Azure* takes a service principal instead
+   and leads to the *Azure VMs* list; the other boxes, *Create OCI instance based on ISO* and *OCI Remote
+   Console*, need no login). Enter the vCenter Server or ESXi host (with *Verify the server certificate* ticked only for a
    CA-signed certificate) and log in with an account that can read the inventory and export the VMs
    (`VirtualMachine.Provisioning.ExportOVF` / *Allow disk access*). The server is chosen per login, so
    one migration tool VM can migrate from several vCenters or ESXi hosts; the browser remembers the
@@ -76,6 +83,7 @@ Gateway (*All <region> Services in Oracle Services Network*) and/or a NAT gatewa
 | --- | --- | --- | --- |
 | **Migration Tool VM** | **vCenter Server** (or a standalone **ESXi** host given at login) | 443 | vSphere SOAP API and the NFC disk download (vCenter proxies the ESXi hosts by default). Over your VPN / FastConnect; the migration tool VM's subnet must route to it. |
 | **Migration Tool VM** | **ESXi hosts** | 443 | Only with *Download the disks directly from the ESXi host* (per migration): the migration tool VM must resolve and reach the host the VM runs on. Several times faster than the vCenter proxy. |
+| **Migration Tool VM** | **Azure**: `login.microsoftonline.com`, `management.azure.com`, `*.blob.core.windows.net` / `*.blob.storage.azure.net` | 443 | Azure source only: Entra ID token, Azure Resource Manager (inventory, deallocate, snapshots, export SAS) and the page-blob download of the exported disks. Internet endpoints: NAT gateway. |
 | **User's web browser** | **Migration Tool VM** | 8443 | Web UI and API over HTTPS (self-signed certificate by default); the *Remote console* runs over the same port as a WebSocket. Restricted by the stack to `allowed_source_cidrs`. |
 | **Administrator** | **Migration Tool VM** | 22 | Optional SSH administration, same source CIDRs. |
 | **Migration Tool VM** | **OCI APIs** (`iaas`, `objectstorage`, `identity` in the region) | 443 | Compute, Block Storage, Object Storage; Service Gateway or NAT gateway. |

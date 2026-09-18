@@ -36,7 +36,6 @@ h2 { font-size: 15px; margin: 0 0 8px; font-weight: 600; }
 .start-choice h3 { margin: 0; font-size: 16px; color: var(--primary); }
 .start-choice p { margin: 0; color: var(--muted); flex: 1; }
 .start-choice .button { align-self: flex-start; margin-top: 6px; }
-.start-choice.busy { opacity: .6; pointer-events: none; }
 .toolbar { display: flex; gap: 12px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
 .toolbar h2 { margin: 0; flex: 0 0 auto; }
 .toolbar input[type=search] { flex: 1; min-width: 200px; padding: 5px 8px; border: 1px solid var(--border); border-radius: 3px; font: inherit; }

@@ -127,32 +127,22 @@
     document.getElementById("logout-btn").textContent = anonymous ? "Back to start" : "Log out";
   }
 
-  // no session (or 401 from the API): the start page asks which kind of migration; the login form only
-  // when it was asked for explicitly
+  // the session is gone (401 from the API: expired, or the service restarted): back to the start page, where
+  // route() obtains a fresh anonymous session; the login form only when it was asked for explicitly
   function showStart() {
     stopPolling();
     setUser(null);
     if (location.hash === "#/login") return showLogin();
-    if (location.hash !== "#/start") { location.hash = "#/start"; return; }  // hashchange routes to startView
-    return startView();
+    if (location.hash !== "#/start") { location.hash = "#/start"; return; }  // hashchange routes
+    return route().catch((e) => showError(e.message));
   }
 
-  // the two boxes; also reachable with a session (a logged-in user can switch to the ISO flow and back)
+  // the two boxes: VMware goes to the vCenter login (or straight to the VM list when logged in already); the
+  // ISO flow is a plain link, route() has made sure a session exists
   function startView() {
     app.innerHTML = "";
     app.append(tpl("tpl-start"));
-    const err = document.getElementById("start-error");
-    const vmware = document.getElementById("start-vmware");
-    if (state.me && !state.me.anonymous) vmware.href = "#/vms";  // already logged in to vCenter
-    // the ISO flow needs no vCenter: an anonymous session is created (a vCenter login is kept) and the form opens
-    document.getElementById("start-iso").addEventListener("click", async (ev) => {
-      ev.preventDefault();
-      const box = ev.currentTarget; box.classList.add("busy"); err.textContent = "";
-      try {
-        setUser(await api("POST", "/auth/anonymous"));
-        location.hash = "#/iso";
-      } catch (e) { err.textContent = e.message; box.classList.remove("busy"); }
-    });
+    if (state.me && !state.me.anonymous) document.getElementById("start-vmware").href = "#/vms";
   }
 
   async function showLogin() {
@@ -241,11 +231,14 @@
     try { localStorage.setItem("vcoci.verifySsl", JSON.stringify(map)); } catch (_) { /* private mode */ }
   }
 
+  // vCenter session: log out (the browser continues with an anonymous session); anonymous: back to the start page
   document.getElementById("logout-btn").addEventListener("click", async () => {
-    try { await api("POST", "/auth/logout"); } catch (_) { /* ignore */ }
-    state.me = null;
-    location.hash = "#/start";
-    showStart();
+    if (state.me && !state.me.anonymous) {
+      try { await api("POST", "/auth/logout"); } catch (_) { /* ignore */ }
+      state.me = null;
+    }
+    if (location.hash === "#/start") route().catch((e) => showError(e.message));
+    else location.hash = "#/start";
   });
 
   // ------------------------------------------------------------- job rendering
@@ -1555,9 +1548,16 @@
     stopPolling();
     const hash = location.hash || "#/start";
     if (!state.me) {
-      // api() leaves /auth/* 401s alone (a failed login must not navigate), so the "no session" case is handled here
+      // api() leaves /auth/* 401s alone (a failed login must not navigate), so the "no session" case is handled
+      // here: everything but the VMware inventory works without vCenter, so an anonymous session is started
+      // right away (after a restart or an expired session the page simply comes back)
       try { setUser(await api("GET", "/auth/me")); }
-      catch (e) { if (e.status === 401) showStart(); else showError(e.message); return; }
+      catch (e) {
+        if (e.status !== 401) { showError(e.message); return; }
+        if (hash === "#/login") return showLogin();
+        try { setUser(await api("POST", "/auth/anonymous")); }
+        catch (e2) { showError(e2.message); return; }
+      }
     }
     if (!state.region) {
       try { state.region = (await api("GET", "/health")).region || ""; } catch (_) { /* links work without it */ }
@@ -1572,8 +1572,8 @@
     if ((m = /^#\/jobs\/(.+)$/.exec(hash))) return jobDetailView(decodeURIComponent(m[1]));
     if (hash === "#/jobs") return jobsView();
     if (hash === "#/setup") return setupView();
-    // everything below needs a vCenter login; the anonymous session is sent to its own entry points
-    if (anonymous) { location.hash = hash === "#/vms" ? "#/iso" : "#/start"; return; }
+    // only the VM inventory and the export form need a vCenter login
+    if (anonymous) { location.hash = "#/login"; return; }
     if ((m = /^#\/export\/(.+)$/.exec(hash))) return exportView(decodeURIComponent(m[1]));
     return vmsView();
   }

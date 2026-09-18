@@ -11,6 +11,7 @@
     <div class="brand">OCI Ultimate Migration Tool</div>
     <nav id="nav" hidden>
       <a href="#/vms" data-nav="vms" data-vcenter-only>Source VMs</a>
+      <a href="#/azure/vms" data-nav="azure-vms" data-azure-only>Azure VMs</a>
       <a href="#/iso" data-nav="iso">New ISO instance</a>
       <a href="#/instances" data-nav="instances">Remote console</a>
       <a href="#/jobs" data-nav="jobs">Jobs</a>
@@ -36,6 +37,13 @@
           <p>Migrate virtual machines from vSphere to OCI: log in to vCenter (or a standalone ESXi host), pick the VMs,
             and the migration tool copies their disks into OCI instances.</p>
           <span class="button primary">Log in to vCenter</span>
+        </a>
+        <a class="card start-choice" href="#/azure/login" id="start-azure">
+          <h3>Microsoft Azure</h3>
+          <p>Migrate virtual machines from Azure to OCI: log in with a service principal, pick the VMs, and the migration
+            tool exports their managed disks (after deallocating the VM, or from snapshots while it runs) straight onto
+            OCI volumes.</p>
+          <span class="button primary">Log in to Azure</span>
         </a>
         <a class="card start-choice" href="#/iso" id="start-iso">
           <h3>Create OCI instance based on ISO</h3>
@@ -257,6 +265,72 @@
     </section>
   </template>
 
+  <!-- ------------------------------------------------------------------ Azure login -->
+  <template id="tpl-azure-login">
+    <section class="card login">
+      <h2>Log in to Microsoft Azure</h2>
+      <p class="muted">Use a <em>service principal</em> (an Entra ID app registration with a client secret). The
+        credentials are kept in memory for this browser session only. The principal needs the <em>Reader</em> role on
+        the subscriptions holding the VMs, plus the disk export actions - see the note below the form.</p>
+      <form id="azure-login-form" class="form" autocomplete="on">
+        <label>Tenant ID
+          <input name="tenant_id" type="text" required autocapitalize="off" spellcheck="false"
+                 placeholder="00000000-0000-0000-0000-000000000000 or contoso.onmicrosoft.com">
+          <small>Directory (tenant) ID of the Entra ID tenant, or its verified domain name.</small>
+        </label>
+        <label>Client ID
+          <input name="client_id" type="text" required autocapitalize="off" spellcheck="false"
+                 placeholder="00000000-0000-0000-0000-000000000000">
+          <small>Application (client) ID of the app registration.</small>
+        </label>
+        <label>Client secret
+          <input name="client_secret" type="password" required autocomplete="current-password">
+        </label>
+        <div class="actions">
+          <span id="azure-login-error" class="error"></span>
+          <button type="submit" class="primary" id="azure-login-btn">Log in</button>
+        </div>
+      </form>
+      <details class="rbac">
+        <summary>Required Azure permissions</summary>
+        <p class="muted">Assign the built-in <strong>Reader</strong> role on the subscription (lists VMs, disks and
+          sizes) and a custom role with these actions on the resource groups (or the subscription) holding the VMs:</p>
+        <pre class="log">Microsoft.Compute/virtualMachines/deallocate/action
+Microsoft.Compute/disks/beginGetAccess/action
+Microsoft.Compute/disks/endGetAccess/action
+Microsoft.Compute/snapshots/write
+Microsoft.Compute/snapshots/delete
+Microsoft.Compute/snapshots/beginGetAccess/action
+Microsoft.Compute/snapshots/endGetAccess/action</pre>
+        <p class="muted">The <em>Virtual Machine Contributor</em> and <em>Disk Snapshot Contributor</em> built-in roles
+          cover them as well. The migration tool VM must reach <code>login.microsoftonline.com</code>,
+          <code>management.azure.com</code> and the Azure blob endpoints (<code>*.blob.core.windows.net</code>,
+          <code>*.blob.storage.azure.net</code>) on TCP 443.</p>
+      </details>
+    </section>
+  </template>
+
+  <!-- ------------------------------------------------------------------ Azure VM list -->
+  <template id="tpl-azure-vms">
+    <section class="card">
+      <div class="toolbar">
+        <h2>Azure VMs</h2>
+        <input id="azvm-filter" type="search" placeholder="Filter by name, resource group or OS">
+        <select id="azvm-group" class="filter" title="Subscription / resource group"><option value="">All resource groups</option></select>
+        <select id="azvm-os" class="filter" title="Guest OS"><option value="">All guest OSes</option></select>
+        <button class="secondary small" id="azvm-refresh">Refresh</button>
+        <span id="azvm-count" class="muted"></span>
+      </div>
+      <div id="azvm-error" class="error"></div>
+      <table class="vms">
+        <thead>
+          <tr><th>Name</th><th>Subscription / resource group</th><th>Power</th><th>Guest OS</th><th>Size</th><th>Location</th><th>Disks</th><th>Last job</th><th></th></tr>
+        </thead>
+        <tbody id="azvm-rows"></tbody>
+      </table>
+    </section>
+  </template>
+
   <!-- ------------------------------------------------------------------ VM list -->
   <template id="tpl-vms">
     <section class="card">
@@ -292,7 +366,7 @@
     <section class="card">
       <div class="toolbar">
         <h2>Jobs</h2>
-        <input id="jobs-filter" type="search" placeholder="Search by source (VM or ISO) or instance name">
+        <input id="jobs-filter" type="search" placeholder="Search by source (VM, Azure VM or ISO) or instance name">
         <select id="jobs-phase" class="filter" title="Phase">
           <option value="">All phases</option>
           <option value="ACTIVE">Active (not finished)</option>
@@ -332,6 +406,16 @@
           or a hard power-off if Tools is not running or the guest does not stop in time. The VM is not powered on
           again afterwards. You will be asked to confirm.
         </div>
+        <fieldset id="azure-capture" hidden>
+          <legend>How to capture the disks</legend>
+          <label class="check"><input type="radio" name="capture_mode" value="deallocate" checked>
+            <strong>Deallocate the VM</strong> and export its disks - consistent copy; the VM is stopped (deallocated)
+            right before the export and stays that way</label>
+          <label class="check"><input type="radio" name="capture_mode" value="snapshot">
+            <strong>Snapshot the disks</strong> while the VM keeps running - crash-consistent copy (like a power loss);
+            changes made after the snapshot are not migrated; the snapshots are deleted when the job ends</label>
+          <small id="azure-capture-hint"></small>
+        </fieldset>
         <div id="windows-driver-note" class="callout important" hidden>
           <strong>Important: Windows guest.</strong> Install the
           <a href="https://docs.oracle.com/en/operating-systems/oracle-linux/kvm-virtio/" target="_blank" rel="noopener">Oracle VirtIO Drivers for Microsoft Windows</a>
@@ -407,10 +491,13 @@
 
           <details>
             <summary>Advanced: disk transfer</summary>
-            <label class="check"><input type="checkbox" name="nfc_direct_to_esxi"> Download the disks directly from the ESXi host <span id="esxi-host-hint"></span> instead of through vCenter</label>
-            <small>Usually much faster than the vCenter proxy, but the migration tool VM must reach that ESXi host on TCP 443 (same as <code>HELPER_NFC_HOST_OVERRIDE</code>, resolved per VM).</small>
-            <label class="check"><input type="checkbox" name="pipelined_decode"> Decode and write on a separate thread (keep downloading while grains are inflated and written)</label>
-            <small>Overlaps the network read with decompression and the volume write instead of doing them one after another. Buffers a few chunks in memory (<code>HELPER_NFC_PIPELINE_DEPTH</code>).</small>
+            <div id="nfc-options">
+              <label class="check"><input type="checkbox" name="nfc_direct_to_esxi"> Download the disks directly from the ESXi host <span id="esxi-host-hint"></span> instead of through vCenter</label>
+              <small>Usually much faster than the vCenter proxy, but the migration tool VM must reach that ESXi host on TCP 443 (same as <code>HELPER_NFC_HOST_OVERRIDE</code>, resolved per VM).</small>
+              <label class="check"><input type="checkbox" name="pipelined_decode"> Decode and write on a separate thread (keep downloading while grains are inflated and written)</label>
+              <small>Overlaps the network read with decompression and the volume write instead of doing them one after another. Buffers a few chunks in memory (<code>HELPER_NFC_PIPELINE_DEPTH</code>).</small>
+            </div>
+            <small id="azure-transfer-note" hidden>Azure: only the allocated pages of each managed disk are downloaded (<em>Get Page Ranges</em>), with <code>HELPER_AZURE_RANGE_WORKERS</code> parallel range requests per disk, straight onto the OCI volume. Azure charges egress for the data leaving the region.</small>
             <label>Volume performance (VPU/GB)
               <select name="volume_vpus_per_gb">
                 <option value="10" selected>10 - Balanced (default)</option>

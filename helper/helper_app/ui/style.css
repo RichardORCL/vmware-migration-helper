@@ -26,7 +26,10 @@ h2 { font-size: 15px; margin: 0 0 8px; font-weight: 600; }
 .loading { color: var(--muted); }
 .card { background: var(--card); border: 1px solid var(--border); border-radius: 4px; padding: 14px; margin-bottom: 14px; }
 .login { max-width: 420px; margin: 60px auto; }
-/* start page: two boxes to choose the kind of migration */
+.login .rbac { margin-top: 14px; }
+.login .rbac summary { cursor: pointer; color: var(--primary); }
+.login .rbac pre.log { max-height: none; margin: 8px 0; }
+/* start page: four boxes (two sources, ISO, console) to choose the kind of work */
 .start { max-width: 900px; margin: 50px auto; }
 .start h2 { text-align: center; font-size: 18px; margin-bottom: 18px; }
 .start-choices { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
@@ -102,6 +105,13 @@ dialog.help li { margin: 6px 0; }
 dialog.help .actions { justify-content: flex-end; margin-top: 12px; }
 .form small { display: block; color: var(--muted); }
 .check { display: flex; gap: 6px; align-items: center; }
+/* Azure capture choice (in the source card, not the form): same look as the form's fieldsets; the radios
+   carry two lines of explanation, so the button aligns with the first line */
+#azure-capture { border: 1px solid var(--border); border-radius: 3px; margin: 10px 0 4px; padding: 6px 10px; }
+#azure-capture legend { color: var(--muted); padding: 0 4px; }
+#azure-capture .check { align-items: flex-start; margin: 6px 0; }
+#azure-capture .check input { margin-top: 3px; }
+#azure-capture small { display: block; color: var(--muted); margin-top: 4px; }
 .form fieldset { border: 1px solid var(--border); border-radius: 3px; margin: 8px 0; padding: 6px 10px; }
 .form details { margin: 8px 0; }
 .form summary { cursor: pointer; color: var(--primary); }
@@ -147,6 +157,9 @@ td.ocid { font-family: Consolas, monospace; font-size: 11px; word-break: break-a
 .power.poweredOn { background: #e3f5e6; color: var(--ok); }
 .power.poweredOff { background: #eef1f3; color: var(--fg); }
 .power.suspended { background: #fff4d6; color: var(--warn); }
+/* Azure: stopped = stopped but still allocated; the transitional states cannot be exported yet */
+.power.stopped { background: #eef1f3; color: var(--fg); }
+.power.starting, .power.stopping, .power.deallocating { background: #fff4d6; color: var(--warn); }
 
 .job-head { display: flex; gap: 10px; align-items: baseline; margin-bottom: 10px; }
 /* two stacked panels: what was created in OCI, then how the migration itself is doing */

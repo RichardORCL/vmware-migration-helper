@@ -1213,6 +1213,9 @@
     const screen = document.getElementById("vnc-screen");
     const cadBtn = document.getElementById("console-cad"), reconnectBtn = document.getElementById("console-reconnect");
     const closeBtn = document.getElementById("console-close"), back = document.getElementById("console-back");
+    const fkeySel = document.getElementById("console-fkey");
+    // F1..F12: X11 keysyms XK_F1 (0xFFBE) .. XK_F12 (0xFFC9), with the matching DOM key codes
+    for (let n = 1; n <= 12; n++) fkeySel.append(el("option", { value: String(0xFFBD + n), "data-code": `F${n}` }, `F${n}`));
     const isJob = target.kind === "job";
     const base = `/${isJob ? "jobs" : "instances"}/${encodeURIComponent(target.id)}`;
     const backHash = isJob ? `#/jobs/${target.id}` : "#/instances";
@@ -1263,9 +1266,9 @@
       rfb.scaleViewport = true;
       rfb.resizeSession = false;
       rfb.background = "#000";
-      rfb.addEventListener("connect", () => { setStatus("Connected", true); setError(""); cadBtn.disabled = false; reconnectBtn.disabled = true; rfb.focus(); });
+      rfb.addEventListener("connect", () => { setStatus("Connected", true); setError(""); cadBtn.disabled = fkeySel.disabled = false; reconnectBtn.disabled = true; rfb.focus(); });
       rfb.addEventListener("disconnect", (ev) => {
-        cadBtn.disabled = true; reconnectBtn.disabled = stopped;
+        cadBtn.disabled = fkeySel.disabled = true; reconnectBtn.disabled = stopped;
         if (closing) return;
         setStatus(ev.detail.clean ? "Disconnected" : "Connection lost", false);
         if (!ev.detail.clean) setError("The console connection dropped (the migration tool logs the reason; the instance may be rebooting or the tunnel was refused). Use Reconnect to try again.");
@@ -1280,6 +1283,13 @@
       catch (e) { if (e.status === 401) return; setStatus("Not connected", false); setError(e.message); reconnectBtn.disabled = false; }
     };
     cadBtn.onclick = () => { if (rfb) rfb.sendCtrlAltDel(); };
+    // press + release of the chosen function key, then back to the placeholder and focus to the screen
+    fkeySel.onchange = () => {
+      const opt = fkeySel.selectedOptions[0];
+      if (rfb && opt && opt.value) rfb.sendKey(Number(opt.value), opt.dataset.code);
+      fkeySel.value = "";
+      if (rfb) rfb.focus();
+    };
     reconnectBtn.onclick = () => { if (rfb) { try { rfb.disconnect(); } catch (_) { /* already gone */ } rfb = null; } start(); };
     closeBtn.onclick = async () => {
       if (!confirm("Close the remote console and delete the OCI console connection?")) return;

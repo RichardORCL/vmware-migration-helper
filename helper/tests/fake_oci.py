@@ -91,6 +91,14 @@ class FakeCompute:
         lo = details.launch_options
         classes = {lo.boot_volume_type == "PARAVIRTUALIZED", lo.remote_data_volume_type == "PARAVIRTUALIZED",
                    image.launch_mode == "PARAVIRTUALIZED"}
+        # ... and OCI resolves the data volume defaults from the image's capability schema too: an emulated
+        # boot with a schema pinning Storage.RemoteDataVolumeType to PARAVIRTUALIZED is refused the same way
+        schemas = [s for s in self.capability_schemas if s.image_id == image.id]
+        if schemas:
+            for key in ("Storage.RemoteDataVolumeType", "Storage.LocalDataVolumeType"):
+                d = schemas[-1].schema_data.get(key)
+                if d is not None:
+                    classes.add(d.default_value == "PARAVIRTUALIZED")
         if len(classes) > 1:
             raise service_error(400, "InvalidParameter",
                                 "Mixing paravirtualized and emulated volumes in the same VM is not supported",
@@ -475,8 +483,30 @@ class FakeCompute:
 
     def create_compute_image_capability_schema(self, details):
         check_tags(details, "create_compute_image_capability_schema")
+        details.id = oid("capschema")
         self.capability_schemas.append(details)
-        return Resp(NS(id=oid("capschema"), image_id=details.image_id, schema_data=details.schema_data))
+        return Resp(NS(id=details.id, image_id=details.image_id, schema_data=details.schema_data))
+
+    def list_compute_image_capability_schemas(self, compartment_id=None, image_id=None, **kw):
+        found = [s for s in self.capability_schemas
+                 if (image_id is None or s.image_id == image_id)
+                 and (compartment_id is None or s.compartment_id == compartment_id)]
+        return Resp([NS(id=s.id, image_id=s.image_id) for s in found])
+
+    def get_compute_image_capability_schema(self, schema_id):
+        for s in self.capability_schemas:
+            if s.id == schema_id:
+                return Resp(NS(id=s.id, image_id=s.image_id, schema_data=dict(s.schema_data)))
+        raise service_error(404, "NotAuthorizedOrNotFound", f"schema {schema_id} not found",
+                            "get_compute_image_capability_schema")
+
+    def update_compute_image_capability_schema(self, schema_id, details):
+        for s in self.capability_schemas:
+            if s.id == schema_id:
+                s.schema_data = dict(details.schema_data)
+                return Resp(NS(id=s.id, image_id=s.image_id, schema_data=s.schema_data))
+        raise service_error(404, "NotAuthorizedOrNotFound", f"schema {schema_id} not found",
+                            "update_compute_image_capability_schema")
 
 
 class FakeBlockstorage:

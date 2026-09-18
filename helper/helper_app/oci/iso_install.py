@@ -33,6 +33,7 @@ from helper_app.oci.clients import OciClients, OciError
 from helper_app.oci.image_import import (
     ProgressCallback,
     apply_capability_schema,
+    ensure_data_volume_types,
     ensure_shape_compatible,
     import_failure_detail,
     import_launch_mode,
@@ -259,6 +260,7 @@ class IsoInstaller:
         existing = self.find_image(tags)
         if existing:
             log.info("reusing ISO image %s for %s", existing, iso.key)
+            ensure_data_volume_types(self.c, self.image_compartment, existing, lo)
             return existing
         return self.create_image(iso, lo, tags, on_progress)
 

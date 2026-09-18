@@ -235,6 +235,33 @@ def test_run_reuses_an_image_with_matching_tags_and_skips_the_import(env):
     assert again.iso_image_id != first.iso_image_id and len(fake.compute.images) == before + 1
 
 
+def test_run_repairs_the_data_volume_defaults_of_a_reused_emulated_image(env):
+    """Images imported by earlier versions pinned Storage.RemoteDataVolumeType to PARAVIRTUALIZED whatever the
+    boot volume; an emulated launch from them failed with "Mixing paravirtualized and emulated volumes".
+    Reusing such an image fixes its schema first."""
+    import oci.core.models as M
+
+    settings, fake, store, installer = env
+    first = make_job(make_iso(firmware="BIOS"), make_target(display_name="first", compatibility_mode=True))
+    installer.run(first)
+    assert first.phase == JobPhase.INSTALLING, first.error
+    schema = [s for s in fake.compute.capability_schemas if s.image_id == first.iso_image_id][-1]
+    # make the image look like an old import: paravirtualized data volume defaults, SCSI not even allowed
+    old = M.EnumStringImageCapabilitySchemaDescriptor(source="IMAGE", values=["PARAVIRTUALIZED", "ISCSI"],
+                                                      default_value="PARAVIRTUALIZED")
+    schema.schema_data["Storage.RemoteDataVolumeType"] = old
+    schema.schema_data.pop("Storage.LocalDataVolumeType")
+
+    second = make_job(make_iso(firmware="BIOS"), make_target(display_name="second", compatibility_mode=True),
+                      job_id="iso0002")
+    installer.run(second)
+    assert second.phase == JobPhase.INSTALLING, second.error
+    assert second.iso_image_id == first.iso_image_id and len(fake.compute.images) == 1
+    for key in ("Storage.RemoteDataVolumeType", "Storage.LocalDataVolumeType"):
+        assert schema.schema_data[key].default_value == "SCSI"
+    assert fake.compute.launch_details[-1].launch_options.remote_data_volume_type == "SCSI"
+
+
 def test_run_windows_iso_defaults_to_emulated_devices_licensing_and_client_edition_update(env):
     settings, fake, store, installer = env
     iso = make_iso(bucket="isos", object_name="win/SERVER_EVAL_x64FRE_en-us.iso", etag="etag-win-1",
@@ -253,8 +280,15 @@ def test_run_windows_iso_defaults_to_emulated_devices_licensing_and_client_editi
     assert schema.schema_data["Compute.SecureBoot"].default_value is True
     assert schema.schema_data["Storage.ConsistentVolumeNaming"].default_value is False
 
+    # emulated boot -> the data volume defaults of the schema are emulated too (OCI resolves them from the
+    # schema and refuses "Mixing paravirtualized and emulated volumes" when they stay PARAVIRTUALIZED)
+    for key in ("Storage.RemoteDataVolumeType", "Storage.LocalDataVolumeType"):
+        assert schema.schema_data[key].default_value == "SCSI" and "SCSI" in schema.schema_data[key].values
+    assert schema.schema_data["Storage.BootVolumeType"].default_value == "IDE"
+
     d = fake.compute.launch_details[0]
     assert (d.launch_options.boot_volume_type, d.launch_options.network_type) == ("IDE", "E1000")
+    assert d.launch_options.remote_data_volume_type == "SCSI"
     assert d.launch_options.firmware == "UEFI_64"
     assert d.source_details.boot_volume_size_in_gbs == 120 and d.source_details.boot_volume_vpus_per_gb == 20
     assert d.licensing_configs[0].license_type == "BRING_YOUR_OWN_LICENSE"

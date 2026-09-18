@@ -181,6 +181,10 @@ def test_prepare_windows_bios_licensing_and_seed_reuse(env):
     assert img.operating_system == "Windows" and img.operating_system_version == "Server 2022 Standard"
     assert img.launch_mode == "EMULATED"  # IDE + E1000 requested
     assert img.display_name.endswith("-emulated") and img.freeform_tags["vc-oci-launch-mode"] == "EMULATED"
+    # the schema's data volume defaults follow the emulated boot volume (OCI resolves them from the schema)
+    schema = [s for s in fake.compute.capability_schemas if s.image_id == job.seed_image_id][-1]
+    assert schema.schema_data["Storage.RemoteDataVolumeType"].default_value == "SCSI"
+    assert schema.schema_data["Storage.LocalDataVolumeType"].default_value == "SCSI"
 
     # a second Windows/BIOS job reuses the seed image
     job2 = make_job(make_vm(windows=True, firmware=Firmware.BIOS, disks=1), target)

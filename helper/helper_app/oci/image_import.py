@@ -21,6 +21,9 @@ log = logging.getLogger(__name__)
 # called while an import runs: (percent complete 0-100, human readable status)
 ProgressCallback = Callable[[int, str], None]
 
+# device models a volume may take (global capability schema, minus NVME which no imported image needs)
+VOLUME_TYPES = ["PARAVIRTUALIZED", "ISCSI", "SCSI", "IDE"]
+
 
 def import_launch_mode(lo: LaunchOptionsSpec) -> str:
     """Launch mode for the image import.  ``CUSTOM`` cannot be requested through the public API (it is
@@ -134,8 +137,12 @@ def apply_capability_schema(
     schema_data = {
         "Compute.Firmware": enum([firmware], firmware),
         "Compute.LaunchMode": enum(["PARAVIRTUALIZED", "EMULATED", "NATIVE", "CUSTOM"], launch_mode),
-        "Storage.BootVolumeType": enum(["PARAVIRTUALIZED", "ISCSI", "SCSI", "IDE"], lo.boot_volume_type.value),
-        "Storage.RemoteDataVolumeType": enum(["PARAVIRTUALIZED", "ISCSI"], "PARAVIRTUALIZED"),
+        "Storage.BootVolumeType": enum(VOLUME_TYPES, lo.boot_volume_type.value),
+        # the data volume defaults must follow the boot volume's device class: OCI resolves them from the
+        # schema and refuses "Mixing paravirtualized and emulated volumes in the same VM" otherwise, whatever
+        # the LaunchOptions of the launch say (an emulated IDE boot with a paravirtualized data default fails)
+        "Storage.RemoteDataVolumeType": enum(VOLUME_TYPES, lo.remote_data_volume_type),
+        "Storage.LocalDataVolumeType": enum(VOLUME_TYPES, lo.remote_data_volume_type),
         "Network.AttachmentType": enum(["PARAVIRTUALIZED", "E1000", "VFIO"], lo.network_type.value),
         "Storage.ConsistentVolumeNaming": boolean(consistent_naming),
         # a shielded (Secure Boot) launch is only accepted from an image whose schema declares support
@@ -151,6 +158,34 @@ def apply_capability_schema(
     )
     c.compute.create_compute_image_capability_schema(details)
     log.info("capability schema applied to %s: firmware=%s secure_boot=%s", image_id, firmware, lo.secure_boot)
+
+
+def ensure_data_volume_types(c: OciClients, compartment_id: str, image_id: str, lo: LaunchOptionsSpec) -> bool:
+    """Repair the capability schema of a reused image whose data volume defaults do not match the boot
+    volume's device class (images imported before the schema followed the launch options pinned the data
+    volumes to PARAVIRTUALIZED; an emulated launch from them fails with "Mixing paravirtualized and
+    emulated volumes").  Returns True when the schema was updated."""
+    import oci.core.models as M
+
+    schemas = c.compute.list_compute_image_capability_schemas(compartment_id=compartment_id, image_id=image_id).data
+    if not schemas:
+        return False
+    schema = c.compute.get_compute_image_capability_schema(schemas[-1].id).data
+    data = dict(schema.schema_data or {})
+    wanted = lo.remote_data_volume_type
+    stale = False
+    for key in ("Storage.RemoteDataVolumeType", "Storage.LocalDataVolumeType"):
+        d = data.get(key)
+        if d is None or getattr(d, "default_value", None) != wanted or wanted not in (getattr(d, "values", None) or []):
+            data[key] = M.EnumStringImageCapabilitySchemaDescriptor(source="IMAGE", values=VOLUME_TYPES,
+                                                                    default_value=wanted)
+            stale = True
+    if not stale:
+        return False
+    c.compute.update_compute_image_capability_schema(
+        schema.id, M.UpdateComputeImageCapabilitySchemaDetails(schema_data=data))
+    log.info("capability schema of %s: data volume defaults set to %s (was pinned otherwise)", image_id, wanted)
+    return True
 
 
 def ensure_shape_compatible(c: OciClients, image_id: str, shape: str) -> bool:

@@ -22,6 +22,7 @@ from helper_app.oci.clients import OciClients, OciError
 from helper_app.oci.image_import import (
     ProgressCallback,
     apply_capability_schema,
+    ensure_data_volume_types,
     import_failure_detail,
     import_launch_mode,
     wait_import,
@@ -58,6 +59,7 @@ class SeedImageService:
         existing = self.find(tags, launch_mode)
         if existing is not None:
             log.info("reusing seed image %s (%s, launch mode %s)", existing.id, existing.display_name, launch_mode)
+            ensure_data_volume_types(self.c, self.seed_compartment, existing.id, launch_options)
             return existing.id
         return self.create(os_meta, firmware, launch_options, tags, on_progress)
 

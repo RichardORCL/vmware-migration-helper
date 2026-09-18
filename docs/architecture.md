@@ -145,8 +145,12 @@ those knobs, so the migration tool imports a placeholder VMDK as a custom image 
 IDE/E1000 compatibility preset; `CUSTOM` cannot be requested through the import API, and OCI rejects a
 paravirtualized launch from an EMULATED image as "mixing paravirtualized and emulated volumes", so reuse
 also matches on the image's `launchMode`), applies a `ComputeImageCapabilitySchema` that fixes
-`Compute.Firmware`, sets `Compute.SecureBoot` to whether the source used Secure Boot, and allows every
-`Storage.BootVolumeType` / `Network.AttachmentType`, and launches from it with the job's explicit
+`Compute.Firmware`, sets `Compute.SecureBoot` to whether the source used Secure Boot, allows every
+`Storage.BootVolumeType` / `Network.AttachmentType`, and defaults `Storage.RemoteDataVolumeType` /
+`Storage.LocalDataVolumeType` to the boot volume's device class (OCI resolves the data volume model from
+the schema, not from the launch request: an IDE boot with a schema still defaulting the data volumes to
+PARAVIRTUALIZED is refused as "mixing paravirtualized and emulated volumes"; a reused image with such a
+stale schema is repaired before the launch), and launches from it with the job's explicit
 `launchOptions`. A source with `efiSecureBootEnabled` is launched with a `platformConfig`
 (`AMD_VM`, `INTEL_VM` or `GENERIC_BM` depending on the shape family) that has `isSecureBootEnabled`,
 i.e. as a shielded instance. On VM shapes (and for Windows on bare metal) `isMeasuredBootEnabled` and

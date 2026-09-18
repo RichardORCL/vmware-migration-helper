@@ -79,10 +79,15 @@ class FakeCompute:
         if details.shape in fixed and getattr(details, "shape_config", None) is not None:
             raise service_error(400, "InvalidParameter",
                                 f"Shape {details.shape} does not support shapeConfig", "launch_instance")
+        image = self.images[details.source_details.image_id]
+        # OCI: the image's shape compatibility list decides which shapes may launch it; an imported image
+        # starts with the VM shapes only (see create_image)
+        if details.shape not in image.compatible_shapes:
+            raise service_error(400, "InvalidParameter",
+                                f"Shape {details.shape} is not valid for image {image.id}.", "launch_instance")
         # OCI: one device class per instance.  The boot volume, the data volumes and the image's import
         # launch mode must all be paravirtualized or all emulated.
         lo = details.launch_options
-        image = self.images[details.source_details.image_id]
         classes = {lo.boot_volume_type == "PARAVIRTUALIZED", lo.remote_data_volume_type == "PARAVIRTUALIZED",
                    image.launch_mode == "PARAVIRTUALIZED"}
         if len(classes) > 1:
@@ -391,7 +396,10 @@ class FakeCompute:
                  lifecycle_state="IMPORTING", freeform_tags=dict(details.freeform_tags or {}),
                  launch_mode=details.launch_mode, operating_system=os_name,
                  operating_system_version=os_version, source_image_type=src.source_image_type,
-                 object_name=src.object_name, bucket_name=src.bucket_name, namespace_name=src.namespace_name)
+                 object_name=src.object_name, bucket_name=src.bucket_name, namespace_name=src.namespace_name,
+                 # default compatibility list of an imported image: the VM shapes, no bare metal
+                 compatible_shapes={s.shape for s in self.list_shapes(details.compartment_id).data
+                                    if s.shape.startswith("VM.")})
         self.images[iid] = img
         self.pending_transitions[iid] = outcome
         # the import stays IMPORTING for `import_polls` get_image calls; the work request percent follows
@@ -430,6 +438,18 @@ class FakeCompute:
     def delete_image(self, iid):
         self.images[iid].lifecycle_state = "DELETED"
         return Resp(None)
+
+    def list_image_shape_compatibility_entries(self, iid, **kw):
+        img = self.images[iid]
+        return Resp([NS(image_id=iid, shape=s) for s in sorted(img.compatible_shapes)])
+
+    def add_image_shape_compatibility_entry(self, iid, shape_name, details=None, **kw):
+        img = self.images[iid]
+        if img.lifecycle_state != "AVAILABLE":
+            raise service_error(409, "IncorrectState", f"Image {iid} is in {img.lifecycle_state} state",
+                                "add_image_shape_compatibility_entry")
+        img.compatible_shapes.add(shape_name)
+        return Resp(NS(image_id=iid, shape=shape_name))
 
     def list_compute_global_image_capability_schemas(self, **kw):
         return Resp([NS(id=oid("globalschema"), current_version_name="v1.0")])

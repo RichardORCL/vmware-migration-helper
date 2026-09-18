@@ -185,6 +185,9 @@ def test_run_bare_metal_shape_launches_without_shape_config(env):
     assert job.phase == JobPhase.INSTALLING, job.error
     d = fake.compute.launch_details[-1]
     assert d.shape == "BM.Standard.E5.192" and d.shape_config is None
+    # the imported image only listed VM shapes as compatible: the BM shape was added before the launch
+    assert "BM.Standard.E5.192" in fake.compute.images[job.iso_image_id].compatible_shapes
+    assert any("Checking that image allows shape BM.Standard.E5.192" in m for m in messages)
     assert d.platform_config.is_secure_boot_enabled
     assert not d.platform_config.is_measured_boot_enabled and not d.platform_config.is_trusted_platform_module_enabled
     # the step text tells the fixed size rather than OCPU / GB numbers
@@ -192,11 +195,15 @@ def test_run_bare_metal_shape_launches_without_shape_config(env):
     assert not any("OCPU" in m for m in messages)
 
     # sizing that slipped through with a BM shape is ignored (the API drops it anyway)
-    job2 = make_job(make_iso(), make_target(shape="BM.Standard3.64", ocpus=4, memory_gb=32))
+    job2 = make_job(make_iso(secure_boot=True), make_target(shape="BM.Standard3.64", ocpus=4, memory_gb=32),
+                    job_id="iso0002")
     store.put(job2)
     installer.run(job2)
     assert job2.phase == JobPhase.INSTALLING, job2.error
     assert fake.compute.launch_details[-1].shape_config is None
+    # a reused image gets the missing shape added as well
+    assert job2.iso_image_id == job.iso_image_id
+    assert fake.compute.images[job.iso_image_id].compatible_shapes >= {"BM.Standard.E5.192", "BM.Standard3.64"}
 
 
 def test_run_reuses_an_image_with_matching_tags_and_skips_the_import(env):

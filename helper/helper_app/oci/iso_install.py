@@ -33,6 +33,7 @@ from helper_app.oci.clients import OciClients, OciError
 from helper_app.oci.image_import import (
     ProgressCallback,
     apply_capability_schema,
+    ensure_shape_compatible,
     import_failure_detail,
     import_launch_mode,
     wait_import,
@@ -170,6 +171,11 @@ class IsoInstaller:
         # 2. launch the instance: the ISO image as boot media, a blank boot volume of the requested size
         if not job.instance_id:
             display = target.display_name or iso.object_name.rsplit("/", 1)[-1]
+            # the image (new or reused) must list the shape as compatible, or OCI refuses the launch with
+            # "Shape X is not valid for image Y"; the default list of an imported image has no BM shapes
+            self._step(job, STEP_LAUNCH, f"Checking that image allows shape {shape}", check_cancel)
+            if ensure_shape_compatible(self.c, job.iso_image_id, shape):
+                log.info("job %s: shape %s added to image %s", job.id, shape, job.iso_image_id)
             shielded = ""
             if platform_config is not None:
                 shielded = ", shielded: Secure Boot"

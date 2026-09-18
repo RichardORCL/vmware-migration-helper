@@ -23,6 +23,7 @@ from helper_app.config import Settings
 from helper_app.disk.devices import DeviceScanner, scan_block_devices, wait_for_new_device
 from helper_app.models import DiskState, DiskStatus, Job, JobPhase, WindowsLicenseType
 from helper_app.oci.clients import OciClients, OciError
+from helper_app.oci.image_import import ensure_shape_compatible
 from helper_app.oci.launch import free_hostname_label, secure_boot_platform_config
 from helper_app.oci.mapping import (
     map_guest_os,
@@ -134,6 +135,9 @@ class Provisioner:
                 shielded = ", shielded: Secure Boot"
                 if platform_config.is_measured_boot_enabled:
                     shielded += " + Measured Boot + TPM"
+            # the seed image must list the shape as compatible (imported images start with a default list)
+            step("launch_instance", f"Checking that seed image allows shape {shape.shape}")
+            ensure_shape_compatible(self.c, job.seed_image_id, shape.shape)
             step("launch_instance", f"Launching {display} ({shape.shape}, {shape.ocpus:g} OCPU, "
                                                f"{shape.memory_gb:g} GB, firmware {firmware}{shielded})")
             details = M.LaunchInstanceDetails(

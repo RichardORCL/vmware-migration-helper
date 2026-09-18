@@ -151,3 +151,22 @@ def apply_capability_schema(
     )
     c.compute.create_compute_image_capability_schema(details)
     log.info("capability schema applied to %s: firmware=%s secure_boot=%s", image_id, firmware, lo.secure_boot)
+
+
+def ensure_shape_compatible(c: OciClients, image_id: str, shape: str) -> bool:
+    """Make sure ``shape`` is on the image's shape compatibility list; returns True when an entry was added.
+
+    Every custom image carries the list of shapes it may launch on.  An imported image gets a default list
+    that holds the common VM shapes but usually no bare metal (and not every VM) shape; a launch with a
+    shape missing from the list fails with ``Shape X is not valid for image Y``.  Adding an entry is a
+    plain image update (``add_image_shape_compatibility_entry``), so the list is completed on demand,
+    also for a reused image."""
+    import oci.core.models as M
+    import oci.pagination
+
+    listed = oci.pagination.list_call_get_all_results(c.compute.list_image_shape_compatibility_entries, image_id).data
+    if any(e.shape == shape for e in listed):
+        return False
+    c.compute.add_image_shape_compatibility_entry(image_id, shape, M.AddImageShapeCompatibilityEntryDetails())
+    log.info("shape %s added to the compatibility list of image %s", shape, image_id)
+    return True

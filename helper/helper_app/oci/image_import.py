@@ -167,6 +167,8 @@ def ensure_shape_compatible(c: OciClients, image_id: str, shape: str) -> bool:
     listed = oci.pagination.list_call_get_all_results(c.compute.list_image_shape_compatibility_entries, image_id).data
     if any(e.shape == shape for e in listed):
         return False
-    c.compute.add_image_shape_compatibility_entry(image_id, shape, M.AddImageShapeCompatibilityEntryDetails())
+    # the SDK takes the (optional) body as a keyword argument, not positionally
+    c.compute.add_image_shape_compatibility_entry(
+        image_id, shape, add_image_shape_compatibility_entry_details=M.AddImageShapeCompatibilityEntryDetails())
     log.info("shape %s added to the compatibility list of image %s", shape, image_id)
     return True

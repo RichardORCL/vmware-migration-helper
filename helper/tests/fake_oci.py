@@ -458,7 +458,8 @@ class FakeCompute:
         img = self.images[iid]
         return Resp([NS(image_id=iid, shape=s) for s in sorted(img.compatible_shapes)])
 
-    def add_image_shape_compatibility_entry(self, iid, shape_name, details=None, **kw):
+    def add_image_shape_compatibility_entry(self, iid, shape_name, **kw):
+        # same signature as the SDK: the body only as add_image_shape_compatibility_entry_details=...
         img = self.images[iid]
         if img.lifecycle_state != "AVAILABLE":
             raise service_error(409, "IncorrectState", f"Image {iid} is in {img.lifecycle_state} state",

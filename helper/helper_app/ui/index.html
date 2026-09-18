@@ -12,6 +12,7 @@
     <nav id="nav" hidden>
       <a href="#/vms" data-nav="vms" data-vcenter-only>Source VMs</a>
       <a href="#/iso" data-nav="iso">New ISO instance</a>
+      <a href="#/instances" data-nav="instances">Remote console</a>
       <a href="#/jobs" data-nav="jobs">Jobs</a>
       <a href="#/setup" data-nav="setup">Setup</a>
     </nav>
@@ -42,7 +43,40 @@
             and boot disk size, and install the operating system through the remote console. No vCenter needed.</p>
           <span class="button primary">Create instance from ISO</span>
         </a>
+        <a class="card start-choice" href="#/instances" id="start-instances">
+          <h3>OCI Remote Console</h3>
+          <p>OCI Compute instance debugging, using the OCI remote console session service: pick a compartment or search
+            an instance by name, and open its VNC console in the browser to watch it boot or fix it. No vCenter needed.</p>
+          <span class="button primary">Open remote console</span>
+        </a>
       </div>
+    </section>
+  </template>
+
+  <!-- ------------------------------------------------------------------ OCI Remote Console: instance picker -->
+  <template id="tpl-instances">
+    <section class="instances">
+      <div class="toolbar">
+        <a href="#/start" class="muted">&larr; start</a>
+        <h2>OCI Remote Console</h2>
+      </div>
+      <p class="muted">Compute instances of a compartment, or found by name across all compartments the migration
+        tool may see (OCI Resource Search). <em>Console</em> creates an instance console connection and opens the VNC
+        console of the instance in the browser; the connection is deleted when the console is closed or idle.</p>
+      <form id="instances-form" class="toolbar" autocomplete="off">
+        <select id="inst-compartment" class="filter" title="Compartment"></select>
+        <input id="inst-search" type="search" placeholder="Search instances by name (all compartments)" maxlength="200">
+        <button type="submit" class="primary small" id="inst-search-btn">Search</button>
+        <button type="button" class="secondary small" id="inst-refresh" title="List the instances of the selected compartment again">Refresh</button>
+      </form>
+      <div id="inst-status" class="muted"></div>
+      <div id="inst-error" class="error"></div>
+      <table class="jobs instances" id="inst-table">
+        <thead>
+          <tr><th>Name</th><th>State</th><th>Shape</th><th>Compartment</th><th>Availability domain</th><th></th></tr>
+        </thead>
+        <tbody id="inst-rows"></tbody>
+      </table>
     </section>
   </template>
 

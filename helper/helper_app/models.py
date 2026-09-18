@@ -527,6 +527,20 @@ class OciBucket(BaseModel):
     time_created: Optional[datetime] = None
 
 
+class OciInstance(BaseModel):
+    """A compute instance as listed for the OCI Remote Console page (compartment listing or name search)."""
+
+    id: str
+    name: str
+    compartment_id: str
+    compartment_path: str = ""
+    lifecycle_state: str
+    shape: Optional[str] = None  # Resource Search summaries carry no shape
+    availability_domain: Optional[str] = None
+    time_created: Optional[datetime] = None
+    job_id: Optional[str] = None  # the migration tool job that created the instance, if any
+
+
 class OciObject(BaseModel):
     """An object in a bucket (the ISO picker lists ``.iso`` objects)."""
 

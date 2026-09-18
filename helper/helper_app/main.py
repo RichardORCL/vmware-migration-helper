@@ -15,7 +15,15 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from helper_app import __version__, logging_config, runtime_settings
-from helper_app.api import routes_auth, routes_console, routes_jobs, routes_oci, routes_setup, routes_vms
+from helper_app.api import (
+    routes_auth,
+    routes_console,
+    routes_instances,
+    routes_jobs,
+    routes_oci,
+    routes_setup,
+    routes_vms,
+)
 from helper_app.config import Settings, get_settings
 from helper_app.console.manager import ConsoleManager
 from helper_app.console.tunnel import TunnelFactory, open_vnc_stream
@@ -92,13 +100,14 @@ def create_app(
     app.include_router(routes_console.router)
     app.include_router(routes_oci.router)
     app.include_router(routes_setup.router)
+    app.include_router(routes_instances.router)
 
     @app.get("/api/health")
     def health():
         ident = app.state.clients.identity_info
         return {"status": "ok", "version": __version__, "commit": app.state.commit, "instance_id": ident.instance_id,
                 "availability_domain": ident.availability_domain, "region": ident.region,
-                "vcenter_host": settings.vcenter_host}
+                "compartment_id": ident.compartment_id, "vcenter_host": settings.vcenter_host}
 
     @app.get("/")
     def root():

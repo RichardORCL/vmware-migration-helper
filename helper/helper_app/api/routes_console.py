@@ -45,12 +45,7 @@ async def open_console(job_id: str, request: Request, replace: bool = False,
     try:
         return await request.app.state.consoles.open(job, session.username, replace=replace)
     except ConsoleConflict as exc:
-        raise HTTPException(status.HTTP_409_CONFLICT, {
-            "code": "foreign_connection",
-            "connection_id": exc.connection_id,
-            "message": "An instance console connection that was not created by the migration tool exists for this "
-                       "instance (OCI allows one per instance). Replace it, or delete it in the OCI console first.",
-        })
+        raise foreign_connection_error(exc)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, describe_error(exc))
 
@@ -81,24 +76,44 @@ def _same_origin(ws: WebSocket) -> bool:
 @router.websocket("/{job_id}/console/vnc")
 async def console_vnc(ws: WebSocket, job_id: str):
     """RFB bytes between the browser (noVNC) and the instance's VNC port through the SSH tunnel."""
-    st = ws.app.state
-    if session_from_websocket(ws) is None or not _same_origin(ws):
-        await ws.close(code=status.WS_1008_POLICY_VIOLATION)  # before accept: the handshake is denied (403)
-        return
-    if st.store.get(job_id) is None:
+    if ws.app.state.store.get(job_id) is None:
         await ws.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+    await bridge_vnc(ws, job_id, f"job {job_id}")
+
+
+def foreign_connection_error(exc: ConsoleConflict) -> HTTPException:
+    return HTTPException(status.HTTP_409_CONFLICT, {
+        "code": "foreign_connection",
+        "connection_id": exc.connection_id,
+        "message": "An instance console connection that was not created by the migration tool exists for this "
+                   "instance (OCI allows one per instance). Replace it, or delete it in the OCI console first.",
+    })
+
+
+def ws_allowed(ws: WebSocket) -> bool:
+    """Cookie session present and same origin; the caller closes the socket (403 handshake) otherwise."""
+    return session_from_websocket(ws) is not None and _same_origin(ws)
+
+
+async def bridge_vnc(ws: WebSocket, key_id: str, what: str) -> None:
+    """Accept the WebSocket and pump RFB bytes between noVNC and the console session ``key_id`` (a job id or
+    an instance OCID) until either side closes."""
+    st = ws.app.state
+    if not ws_allowed(ws):
+        await ws.close(code=status.WS_1008_POLICY_VIOLATION)  # before accept: the handshake is denied (403)
         return
     # noVNC (older releases) asks for the "binary" subprotocol; echo whatever the client offered
     offered = [p.strip() for p in (ws.headers.get("sec-websocket-protocol") or "").split(",") if p.strip()]
     subprotocol = "binary" if "binary" in offered else (offered[0] if offered else None)
     await ws.accept(subprotocol=subprotocol)
     try:
-        stream = await st.consoles.connect(job_id)
+        stream = await st.consoles.connect(key_id)
     except ConsoleNotReady as exc:
         await ws.close(code=WS_NOT_READY, reason=str(exc)[:120])
         return
     except Exception as exc:  # noqa: BLE001
-        log.warning("console tunnel for job %s: %s", job_id, exc)
+        log.warning("console tunnel for %s: %s", what, exc)
         await ws.close(code=WS_TUNNEL_FAILED, reason=str(exc)[:120])
         return
 
@@ -128,9 +143,9 @@ async def console_vnc(ws: WebSocket, job_id: str):
         for t in done:
             exc = t.exception()
             if exc:
-                log.info("console bridge of job %s ended: %s", job_id, exc)
+                log.info("console bridge of %s ended: %s", what, exc)
     finally:
-        st.consoles.release(job_id)
+        st.consoles.release(key_id)
         await stream.close()
         try:
             await ws.close()

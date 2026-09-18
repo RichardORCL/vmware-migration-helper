@@ -102,6 +102,7 @@ class OciClients:
     identity_info: HelperIdentity
     poll_interval_s: float = 5.0
     work_requests: Any = None  # oci.work_requests.WorkRequestClient; used to explain failed image imports
+    search: Any = None  # oci.resource_search.ResourceSearchClient; instance search by name (Remote Console page)
 
     # ------------------------------------------------------------------ waiting
     def wait_for(
@@ -182,4 +183,5 @@ def build_clients(settings: Settings) -> OciClients:
         object_storage=oci.object_storage.ObjectStorageClient(retry_strategy=retry, **kwargs),
         identity_info=identity,
         work_requests=oci.work_requests.WorkRequestClient(retry_strategy=retry, **kwargs),
+        search=oci.resource_search.ResourceSearchClient(retry_strategy=retry, **kwargs),
     )

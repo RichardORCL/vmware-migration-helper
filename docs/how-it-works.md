@@ -90,6 +90,14 @@ when the migration tool shuts down. OCI allows one console connection per instan
 replaced silently, one created elsewhere only after confirmation. `manage instance-family` (already in the
 stack's policy) covers `instance-console-connection`.
 
+The *OCI Remote Console* box on the start page offers the same console for any instance, without a job:
+`GET /api/instances?compartment_id=` lists the instances of a compartment (`ListInstances`),
+`GET /api/instances/search?q=` finds instances by display name across compartments with OCI Resource
+Search (`query instance resources where displayName =~ '<text>'`), and `/api/instances/{ocid}/console`
+(`POST`/`GET`/`DELETE` and the `/vnc` WebSocket) mirrors the job endpoints. The console manager keys these
+sessions by the instance OCID; a session already open through a job for the same instance is reused, so
+there is never more than one connection per instance.
+
 ## Repository layout
 
 The internal names predate the product name: the code lives in `helper/` (Python package `helper_app`),
@@ -109,7 +117,7 @@ helper/
     runtime_settings.py  Setup page overrides (logging, concurrency, session timeout) persisted to JSON
     sysstat.py         migration tool VM resource usage for the Setup page (CPU, memory, disk, network from /proc,
                        sampled every 2 s with a 10-minute history for the live chart)
-    api/               routes_auth, routes_vms, routes_jobs, routes_console, routes_oci, routes_setup
+    api/               routes_auth, routes_vms, routes_jobs, routes_console, routes_instances, routes_oci, routes_setup
     vsphere/           session (pyVmomi login), inventory (VM list, VmSpec, preflight), export (NFC lease)
     disk/              stream-optimized VMDK decoder/encoder, positional block-device writer
     guest/             post-copy fix-ups on the target boot volume: fixup.py runs the steps in one mount

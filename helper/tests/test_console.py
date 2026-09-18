@@ -322,6 +322,108 @@ def test_console_idle_reaper(cenv):
     assert c.get(f"/api/jobs/{jid}/console").json()["state"] == "NONE"
 
 
+# --------------------------------------------------------------------------- OCI Remote Console page
+def anonymous(client):
+    r = client.post("/api/auth/anonymous")
+    assert r.status_code == 200, r.text
+
+
+def test_instances_listing_and_search(cenv):
+    """Instances by compartment (terminated ones dropped, job of migrated instances linked) and by name
+    through Resource Search, all without a vCenter login."""
+    c, fake = cenv.client, cenv.fake
+    prod, migr = "ocid1.compartment.oc1..prod", "ocid1.compartment.oc1..migr"
+    web = fake.compute.add_instance("web-frontend-01", prod)
+    db = fake.compute.add_instance("db-primary", prod, shape="BM.Standard.E5.192", state="STOPPED")
+    fake.compute.add_instance("web-old", prod, state="TERMINATED")
+    other = fake.compute.add_instance("web-frontend-02", migr)
+    job = completed_job(cenv)  # a migrated VM in the migration compartment
+    c.post("/api/auth/logout")
+    anonymous(c)
+
+    r = c.get("/api/oci/compartments")
+    assert r.status_code == 200 and {x["id"] for x in r.json()} >= {prod, migr}
+
+    r = c.get("/api/instances", params={"compartment_id": prod})
+    assert r.status_code == 200, r.text
+    rows = {x["id"]: x for x in r.json()}
+    assert list(rows) == [db, web]  # sorted by name, TERMINATED left out
+    assert rows[db]["shape"] == "BM.Standard.E5.192" and rows[db]["lifecycle_state"] == "STOPPED"
+    assert rows[web]["compartment_path"] == "prod" and rows[web]["job_id"] is None
+
+    r = c.get("/api/instances", params={"compartment_id": migr})
+    rows = {x["id"]: x for x in r.json()}
+    assert rows[job["instance_id"]]["job_id"] == job["id"] and other in rows
+
+    # search: case-insensitive substring across compartments, quotes escaped in the query
+    r = c.get("/api/instances/search", params={"q": "WEB-front"})
+    assert r.status_code == 200, r.text
+    assert [(x["name"], x["compartment_path"]) for x in r.json()] == [("web-frontend-01", "prod"),
+                                                                       ("web-frontend-02", "prod/migrations")]
+    assert fake.search.queries[-1] == "query instance resources where displayName =~ 'WEB-front'"
+    r = c.get("/api/instances/search", params={"q": "o'brien"})
+    assert r.status_code == 200 and r.json() == []
+    assert fake.search.queries[-1] == "query instance resources where displayName =~ 'o\\'brien'"
+    assert c.get("/api/instances/search", params={"q": "  "}).status_code == 400
+
+    r = c.get(f"/api/instances/{web}")
+    assert r.status_code == 200 and r.json()["name"] == "web-frontend-01" and r.json()["compartment_path"] == "prod"
+    assert c.get("/api/instances/ocid1.instance.oc1..nope").status_code == 404
+
+
+def test_instance_console_open_bridge_close(cenv):
+    """A console for an instance without a job: created in the instance's compartment, keyed by the OCID,
+    served through the same bridge, no job tag on the connection."""
+    c, fake = cenv.client, cenv.fake
+    iid = fake.compute.add_instance("debug-me", "ocid1.compartment.oc1..prod")
+    anonymous(c)
+    assert c.get(f"/api/instances/{iid}/console").json()["state"] == "NONE"
+    r = c.post(f"/api/instances/{iid}/console")
+    assert r.status_code == 202, r.text
+    wait_until(lambda: c.get(f"/api/instances/{iid}/console").json()["state"] in ("ACTIVE", "FAILED"), what="console")
+    st = c.get(f"/api/instances/{iid}/console").json()
+    assert st["state"] == "ACTIVE", st
+    assert st["instance_id"] == iid and st["job_id"] is None and st["created_by"] == "anonymous"
+    conn = fake.compute.console_connections[st["connection_id"]]
+    assert conn.instance_id == iid and conn.freeform_tags == {"vc-oci": "console"}
+    assert cenv.app.state.consoles.sessions[iid].compartment_id == "ocid1.compartment.oc1..prod"
+    assert c.post(f"/api/instances/{iid}/console").json()["connection_id"] == st["connection_id"]  # idempotent
+
+    with c.websocket_connect(f"/api/instances/{iid}/console/vnc", subprotocols=["binary"]) as ws:
+        ws.send_bytes(b"RFB 003.008\n")
+        assert ws.receive_bytes() == b"echo:RFB 003.008\n"
+        assert FakeTunnel.opened[-1].endpoint.target_host == iid
+    wait_until(lambda: c.get(f"/api/instances/{iid}/console").json()["viewers"] == 0, what="viewer released")
+    r = c.delete(f"/api/instances/{iid}/console")
+    assert r.status_code == 200 and r.json()["state"] == "CLOSED"
+    assert fake.compute.console_deleted == [st["connection_id"]]
+    assert cenv.app.state.consoles.sessions == {}
+
+    # a terminated or unknown instance gets no console
+    gone = fake.compute.add_instance("gone", "ocid1.compartment.oc1..prod", state="TERMINATED")
+    assert c.post(f"/api/instances/{gone}/console").status_code == 409
+    assert c.post("/api/instances/ocid1.instance.oc1..nope/console").status_code == 404
+
+
+def test_instance_console_reuses_job_console(cenv):
+    """The instance endpoints find a console opened through the job (and vice versa): one connection."""
+    c, fake = cenv.client, cenv.fake
+    job = completed_job(cenv)
+    jid, iid = job["id"], job["instance_id"]
+    c.post(f"/api/jobs/{jid}/console")
+    st = wait_console(c, jid, "ACTIVE")
+    r = c.post(f"/api/instances/{iid}/console")
+    assert r.status_code == 202 and r.json()["connection_id"] == st["connection_id"]
+    assert c.get(f"/api/instances/{iid}/console").json()["job_id"] == jid
+    assert len([x for x in fake.compute.console_connections.values() if x.instance_id == iid]) == 1
+    with c.websocket_connect(f"/api/instances/{iid}/console/vnc", subprotocols=["binary"]) as ws:
+        ws.send_bytes(b"x")
+        assert ws.receive_bytes() == b"echo:x"
+    wait_until(lambda: c.get(f"/api/jobs/{jid}/console").json()["viewers"] == 0, what="viewer released")
+    assert c.delete(f"/api/instances/{iid}/console").json()["state"] == "CLOSED"
+    assert c.get(f"/api/jobs/{jid}/console").json()["state"] == "NONE"
+
+
 def test_console_connections_deleted_on_shutdown(tmp_path):
     env = Env(tmp_path, fail_once=frozenset(), tunnel_factory=fake_tunnel)
     with TestClient(env.app) as c:

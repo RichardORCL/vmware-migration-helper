@@ -9,6 +9,7 @@ from helper_app.config import Settings
 from helper_app.models import (
     OciBucket,
     OciCompartment,
+    OciInstance,
     OciObject,
     OciOptions,
     OciShape,
@@ -204,6 +205,49 @@ def list_iso_objects(c: OciClients, bucket: str, prefix: Optional[str] = None) -
         for o in objects if o.name.lower().endswith(".iso")
     ]
     return sorted(result, key=lambda o: o.name.lower())
+
+
+_INSTANCE_GONE = ("TERMINATED", "TERMINATING")
+
+
+def list_instances(c: OciClients, compartment_id: str, compartment_paths: Optional[dict[str, str]] = None,
+                   jobs_by_instance: Optional[dict[str, str]] = None) -> list[OciInstance]:
+    """Compute instances of a compartment (terminated ones left out) for the Remote Console page."""
+    paths, jobs = compartment_paths or {}, jobs_by_instance or {}
+    instances = _all(c.compute.list_instances, compartment_id=compartment_id)
+    result = [
+        OciInstance(id=i.id, name=i.display_name or i.id, compartment_id=i.compartment_id,
+                    compartment_path=paths.get(i.compartment_id, ""), lifecycle_state=i.lifecycle_state,
+                    shape=getattr(i, "shape", None), availability_domain=getattr(i, "availability_domain", None),
+                    time_created=getattr(i, "time_created", None), job_id=jobs.get(i.id))
+        for i in instances if i.lifecycle_state not in _INSTANCE_GONE
+    ]
+    return sorted(result, key=lambda i: i.name.lower())
+
+
+def search_instances(c: OciClients, name: str, compartment_paths: Optional[dict[str, str]] = None,
+                     jobs_by_instance: Optional[dict[str, str]] = None, limit: int = 200) -> list[OciInstance]:
+    """Instances whose display name contains ``name`` (case-insensitive), across every compartment the
+    migration tool may see, through the OCI Resource Search service (structured query)."""
+    import oci.resource_search.models as SM
+
+    paths, jobs = compartment_paths or {}, jobs_by_instance or {}
+    needle = name.strip().replace("\\", "\\\\").replace("'", "\\'")
+    if not needle:
+        return []
+    query = f"query instance resources where displayName =~ '{needle}'"
+    details = SM.StructuredSearchDetails(query=query, type="Structured",
+                                         matching_context_type=SM.SearchDetails.MATCHING_CONTEXT_TYPE_NONE)
+    found = c.search.search_resources(details, limit=limit).data
+    items = getattr(found, "items", None) or []
+    result = [
+        OciInstance(id=r.identifier, name=r.display_name or r.identifier, compartment_id=r.compartment_id,
+                    compartment_path=paths.get(r.compartment_id, ""), lifecycle_state=r.lifecycle_state or "",
+                    availability_domain=getattr(r, "availability_domain", None),
+                    time_created=getattr(r, "time_created", None), job_id=jobs.get(r.identifier))
+        for r in items if (r.lifecycle_state or "") not in _INSTANCE_GONE
+    ]
+    return sorted(result, key=lambda i: (i.name.lower(), i.compartment_path.lower()))
 
 
 def os_catalog() -> list[OsCatalogEntry]:

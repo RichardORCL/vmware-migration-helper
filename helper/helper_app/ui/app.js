@@ -122,7 +122,7 @@
       const vcenterOnly = a.hasAttribute("data-vcenter-only");
       a.hidden = anonymous ? vcenterOnly : a.dataset.nav === "iso";
     }
-    userBox.querySelector("[data-username]").textContent = anonymous ? "not logged in (ISO instance mode)"
+    userBox.querySelector("[data-username]").textContent = anonymous ? "not logged in to vCenter"
       : `${me.username} @ ${me.vcenter_host}${me.vcenter_port && me.vcenter_port !== 443 ? ":" + me.vcenter_port : ""}`;
     document.getElementById("logout-btn").textContent = anonymous ? "Back to start" : "Log out";
   }
@@ -1204,38 +1204,50 @@
   // ------------------------------------------------------------ remote console
   // OCI instance console connection (created by the helper with a temporary key) -> SSH tunnel on the helper
   // -> WebSocket on this origin -> noVNC in this page.  The connection is deleted on Close or when idle.
-  async function consoleView(jobId) {
+  // ``target`` is {kind: "job", id} (console of a migration / ISO job) or {kind: "instance", id} (any instance,
+  // from the OCI Remote Console page); both map onto the same API shape under /jobs/{id} or /instances/{id}.
+  async function consoleView(target) {
     app.innerHTML = "";
     app.append(tpl("tpl-console"));
     const status = document.getElementById("console-status"), errBox = document.getElementById("console-error");
     const screen = document.getElementById("vnc-screen");
     const cadBtn = document.getElementById("console-cad"), reconnectBtn = document.getElementById("console-reconnect");
     const closeBtn = document.getElementById("console-close"), back = document.getElementById("console-back");
-    back.href = `#/jobs/${jobId}`;
+    const isJob = target.kind === "job";
+    const base = `/${isJob ? "jobs" : "instances"}/${encodeURIComponent(target.id)}`;
+    const backHash = isJob ? `#/jobs/${target.id}` : "#/instances";
+    back.href = backHash; back.textContent = isJob ? "\u2190 job" : "\u2190 instances";
     let rfb = null; let stopped = false; let closing = false;
     const setStatus = (text, ok) => { status.textContent = text; status.className = "console-status" + (ok ? " ok" : " muted"); };
     const setError = (text) => { errBox.textContent = text || ""; };
 
-    let job;
-    try { job = await api("GET", `/jobs/${encodeURIComponent(jobId)}`); }
-    catch (e) { if (e.status !== 401) showError(e.message); return; }
-    document.getElementById("console-title").textContent = `- ${job.instance_display_name || sourceName(job)}`;
-    if (!hasConsole(job)) { setStatus("", false); setError("The remote console is available for completed migrations and running ISO installations with an OCI instance."); closeBtn.hidden = true; return; }
+    if (isJob) {
+      let job;
+      try { job = await api("GET", base); }
+      catch (e) { if (e.status !== 401) showError(e.message); return; }
+      document.getElementById("console-title").textContent = `- ${job.instance_display_name || sourceName(job)}`;
+      if (!hasConsole(job)) { setStatus("", false); setError("The remote console is available for completed migrations and running ISO installations with an OCI instance."); closeBtn.hidden = true; return; }
+    } else {
+      let inst;
+      try { inst = await api("GET", base); }
+      catch (e) { if (e.status === 401) return; setStatus("", false); setError(e.message); closeBtn.hidden = true; return; }
+      document.getElementById("console-title").textContent = `- ${inst.name} (${inst.lifecycle_state}${inst.shape ? ", " + inst.shape : ""})`;
+    }
 
     // 1. console connection on the OCI side (idempotent while one is active)
     const openConnection = async () => {
       setStatus("Creating the OCI console connection...", false);
       let st;
-      try { st = await api("POST", `/jobs/${encodeURIComponent(jobId)}/console`); }
+      try { st = await api("POST", `${base}/console`); }
       catch (e) {
         if (e.status === 409 && e.detail && e.detail.code === "foreign_connection") {
           if (!confirm(`${e.detail.message}\n\nReplace the existing console connection ${e.detail.connection_id}?`)) throw new Error("An existing console connection is in the way; nothing was changed.");
-          st = await api("POST", `/jobs/${encodeURIComponent(jobId)}/console?replace=true`);
+          st = await api("POST", `${base}/console?replace=true`);
         } else throw e;
       }
       while (st.state === "CREATING" && !stopped) {
         await new Promise((r) => setTimeout(r, 2000));
-        st = await api("GET", `/jobs/${encodeURIComponent(jobId)}/console`);
+        st = await api("GET", `${base}/console`);
       }
       if (st.state !== "ACTIVE") throw new Error(st.error || `console connection is ${st.state}`);
       return st;
@@ -1244,7 +1256,7 @@
     // 2. noVNC over the helper's WebSocket bridge
     const connectVnc = async () => {
       const { default: RFB } = await import("./vendor/novnc/core/rfb.js");
-      const url = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/jobs/${encodeURIComponent(jobId)}/console/vnc`;
+      const url = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api${base}/console/vnc`;
       setStatus("Connecting to the instance console...", false);
       screen.innerHTML = "";
       rfb = new RFB(screen, url, {});
@@ -1273,13 +1285,82 @@
       if (!confirm("Close the remote console and delete the OCI console connection?")) return;
       closing = true; closeBtn.disabled = true; setStatus("Closing...", false);
       if (rfb) { try { rfb.disconnect(); } catch (_) { /* ignore */ } rfb = null; }
-      try { await api("DELETE", `/jobs/${encodeURIComponent(jobId)}/console`); } catch (e) { alert(e.message); }
-      location.hash = `#/jobs/${jobId}`;
+      try { await api("DELETE", `${base}/console`); } catch (e) { alert(e.message); }
+      location.hash = backHash;
     };
     // leaving the view (hash change) disconnects the VNC session; the console connection stays for a quick
     // return and is removed by the helper's idle timeout
     activePoll = () => { stopped = true; if (rfb) { try { rfb.disconnect(); } catch (_) { /* ignore */ } rfb = null; } };
     await start();
+  }
+
+  // ------------------------------------------------------- OCI Remote Console: instance picker
+  // Instances of a compartment (compute ListInstances) or found by name (Resource Search); "Console" opens the
+  // same noVNC view as a job's console, keyed by the instance OCID.  The chosen compartment and the last search
+  // are kept in ``state`` so coming back from a console shows the same list.
+  async function instancesView() {
+    app.innerHTML = "";
+    app.append(tpl("tpl-instances"));
+    const compSel = document.getElementById("inst-compartment"), search = document.getElementById("inst-search");
+    const form = document.getElementById("instances-form"), refreshBtn = document.getElementById("inst-refresh");
+    const searchBtn = document.getElementById("inst-search-btn");
+    const statusEl = document.getElementById("inst-status"), errBox = document.getElementById("inst-error");
+    const rows = document.getElementById("inst-rows");
+    const setStatus = (t) => { statusEl.textContent = t || ""; };
+    const setError = (t) => { errBox.textContent = t || ""; };
+    const busy = (on) => { searchBtn.disabled = refreshBtn.disabled = compSel.disabled = on; };
+    let seq = 0;  // ignore late responses of a superseded listing / search
+
+    const render = (list, what) => {
+      rows.innerHTML = "";
+      if (!list.length) { setStatus(`No instances ${what}.`); return; }
+      setStatus(`${list.length} instance${list.length === 1 ? "" : "s"} ${what}.`);
+      for (const i of list) {
+        const name = el("td", { class: "name" }, el("a", { href: consoleUrl("instances", i.id), target: "_blank", rel: "noopener", title: `${i.id}\nOpen in the OCI console` }, i.name));
+        if (i.job_id) name.append(" ", el("a", { href: `#/jobs/${i.job_id}`, class: "muted", title: "Created by this migration tool job" }, "(job)"));
+        rows.append(el("tr", {},
+          name,
+          el("td", {}, el("span", { class: `power ${i.lifecycle_state}` }, i.lifecycle_state)),
+          el("td", {}, i.shape || "\u2013"),
+          el("td", { title: i.compartment_id }, i.compartment_path || i.compartment_id),
+          el("td", {}, i.availability_domain || "\u2013"),
+          el("td", { class: "row-actions" },
+            el("a", { class: "button primary small", href: `#/instances/${encodeURIComponent(i.id)}/console`,
+              title: "Create an instance console connection and open the VNC console" }, "Console"))));
+      }
+    };
+
+    const load = async (fn, what) => {
+      const my = ++seq; busy(true); setError(""); setStatus("Loading...");
+      try { const list = await fn(); if (my === seq) render(list, what); }
+      catch (e) { if (my !== seq) return; if (e.status === 401) return; rows.innerHTML = ""; setStatus(""); setError(e.message); }
+      finally { if (my === seq) busy(false); }
+    };
+    const listCompartment = () => {
+      state.instancesCompartment = compSel.value; state.instancesQuery = "";
+      const label = compSel.selectedOptions[0] ? compSel.selectedOptions[0].textContent : "";
+      return load(() => api("GET", `/instances?compartment_id=${encodeURIComponent(compSel.value)}`), `in ${label}`);
+    };
+    const doSearch = () => {
+      const q = search.value.trim();
+      if (!q) return listCompartment();
+      state.instancesQuery = q;
+      return load(() => api("GET", `/instances/search?q=${encodeURIComponent(q)}`), `named like "${q}" (all compartments)`);
+    };
+
+    // compartments first; the migration tool's own compartment is preselected (or the one chosen last time)
+    let comps;
+    try { comps = await api("GET", "/oci/compartments"); }
+    catch (e) { if (e.status !== 401) setError(e.message); return; }
+    for (const c of comps) compSel.append(el("option", { value: c.id }, c.path || c.name));
+    const preferred = state.instancesCompartment || state.ownCompartment;
+    if (preferred && comps.some((c) => c.id === preferred)) compSel.value = preferred;
+
+    compSel.onchange = () => { search.value = ""; listCompartment(); };
+    refreshBtn.onclick = () => { search.value = ""; listCompartment(); };
+    form.onsubmit = (ev) => { ev.preventDefault(); doSearch(); };
+    if (state.instancesQuery) { search.value = state.instancesQuery; await doSearch(); }
+    else await listCompartment();
   }
 
   // --------------------------------------------------------------- setup view
@@ -1585,7 +1666,10 @@
       }
     }
     if (!state.region) {
-      try { state.region = (await api("GET", "/health")).region || ""; } catch (_) { /* links work without it */ }
+      try {
+        const h = await api("GET", "/health");
+        state.region = h.region || ""; state.ownCompartment = h.compartment_id || "";
+      } catch (_) { /* links work without it */ }
     }
     for (const a of nav.querySelectorAll("a")) a.classList.toggle("active", hash.startsWith(a.getAttribute("href")));
     const anonymous = !!state.me.anonymous;
@@ -1593,7 +1677,9 @@
     if (hash === "#/login") { if (anonymous) return showLogin(); location.hash = "#/vms"; return; }
     if (hash === "#/iso") return isoView();
     let m;
-    if ((m = /^#\/jobs\/([^/]+)\/console$/.exec(hash))) return consoleView(decodeURIComponent(m[1]));
+    if (hash === "#/instances") return instancesView();
+    if ((m = /^#\/instances\/([^/]+)\/console$/.exec(hash))) return consoleView({ kind: "instance", id: decodeURIComponent(m[1]) });
+    if ((m = /^#\/jobs\/([^/]+)\/console$/.exec(hash))) return consoleView({ kind: "job", id: decodeURIComponent(m[1]) });
     if ((m = /^#\/jobs\/(.+)$/.exec(hash))) return jobDetailView(decodeURIComponent(m[1]));
     if (hash === "#/jobs") return jobsView();
     if (hash === "#/setup") return setupView();

@@ -101,10 +101,11 @@ def create(clients: OciClients, instance_id: str, compartment_id: str, public_ke
            timeout_s: float) -> ConsoleConnectionInfo:
     import oci.core.models as M
 
-    details = M.CreateInstanceConsoleConnectionDetails(
-        instance_id=instance_id, public_key=public_key,
-        freeform_tags={TAG_KEY: TAG_VALUE, TAG_JOB_KEY: job_id},
-    )
+    tags = {TAG_KEY: TAG_VALUE}
+    if job_id:  # consoles opened from the Remote Console page belong to no job
+        tags[TAG_JOB_KEY] = job_id
+    details = M.CreateInstanceConsoleConnectionDetails(instance_id=instance_id, public_key=public_key,
+                                                        freeform_tags=tags)
     conn = clients.compute.create_instance_console_connection(details).data
     conn = clients.wait_for(lambda: clients.compute.get_instance_console_connection(conn.id), "lifecycle_state",
                             ["ACTIVE"], timeout_s, what="instance console connection")

@@ -29,6 +29,9 @@ firmware mode (BIOS/UEFI, Secure Boot), CPU/memory sizing and Windows licensing 
   cores and memory), OS type, firmware (BIOS/UEFI, Secure Boot) and boot disk size; the migration tool
   imports the ISO as a custom image, launches the instance booting it with a blank boot volume and hands
   you the remote console to run the installer.
+- **OCI Remote Console** (no vCenter needed): debug any compute instance the migration tool VM may see
+  with the OCI instance console connection service. Pick a compartment to list its instances, or search
+  instances by name across compartments (OCI Resource Search), and open the VNC console in the browser.
 
 Not in scope: live migration of running VMs (no CBT/delta sync: the VM is off during the copy), VMware Workstation/Fusion, Hyper-V or KVM sources, and
 guest-side reconfiguration (IP addresses, drivers - see the notes on VirtIO drivers for Windows in
@@ -49,8 +52,8 @@ preloaded. Manual deployment with Terraform and all settings are described in
    provide the subnet (must route to vCenter/ESXi over your VPN/FastConnect) and the CIDRs of the
    administrators' browsers; nothing about vCenter is configured in the stack.
 2. **Open the web UI** at `https://<migration-tool-vm-ip>:8443/`, accept the self-signed certificate and
-   choose *VMware vCenter or ESXi* on the start page (the other box, *Create OCI instance based on ISO*,
-   needs no login). Enter the vCenter Server or ESXi host (with *Verify the server certificate* ticked only for a
+   choose *VMware vCenter or ESXi* on the start page (the other boxes, *Create OCI instance based on ISO*
+   and *OCI Remote Console*, need no login). Enter the vCenter Server or ESXi host (with *Verify the server certificate* ticked only for a
    CA-signed certificate) and log in with an account that can read the inventory and export the VMs
    (`VirtualMachine.Provisioning.ExportOVF` / *Allow disk access*). The server is chosen per login, so
    one migration tool VM can migrate from several vCenters or ESXi hosts; the browser remembers the

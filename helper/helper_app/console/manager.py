@@ -24,10 +24,14 @@ log = logging.getLogger(__name__)
 
 @dataclass
 class ConsoleSession:
-    job_id: str
+    """One console connection.  Sessions are keyed by the job id (console of a migration / ISO job) or by
+    the instance OCID (OCI Remote Console page, any instance)."""
+
+    key_id: str
     instance_id: str
     compartment_id: str
     created_by: str
+    job_id: Optional[str] = None
     state: str = "CREATING"  # CREATING | ACTIVE | FAILED
     error: Optional[str] = None
     connection: Optional[cc.ConsoleConnectionInfo] = None
@@ -39,6 +43,7 @@ class ConsoleSession:
     def status(self) -> dict:
         return {
             "job_id": self.job_id,
+            "instance_id": self.instance_id,
             "state": self.state,
             "connection_id": self.connection.id if self.connection else None,
             "viewers": self.viewers,
@@ -106,21 +111,43 @@ class ConsoleManager:
     async def open(self, job: Job, user: str, replace: bool = False) -> dict:
         """Create the console connection for the job's instance (idempotent while one is being created or
         active).  Raises ``ConsoleConflict`` when a foreign connection is in the way and ``replace`` is off."""
+        assert job.instance_id
+        return await self.open_target(job.id, job.instance_id, job.target.compartment_id, user, replace,
+                                      job_id=job.id)
+
+    async def open_instance(self, instance_id: str, compartment_id: str, user: str, replace: bool = False) -> dict:
+        """Console connection for any instance (OCI Remote Console page), keyed by the instance OCID.  When
+        a job console for the same instance is already active it is reused."""
+        existing = self.find_for_instance(instance_id)
+        if existing is not None:
+            sess = self.sessions[existing]
+            sess.last_used = time.monotonic()
+            return sess.status()
+        return await self.open_target(instance_id, instance_id, compartment_id, user, replace)
+
+    async def open_target(self, key_id: str, instance_id: str, compartment_id: str, user: str, replace: bool,
+                          job_id: Optional[str] = None) -> dict:
         async with self._lock:
-            sess = self.sessions.get(job.id)
+            sess = self.sessions.get(key_id)
             if sess and sess.state in ("CREATING", "ACTIVE"):
                 sess.last_used = time.monotonic()
                 return sess.status()
-            assert job.instance_id
             # the console connection lives in the instance's compartment
-            sess = ConsoleSession(job_id=job.id, instance_id=job.instance_id,
-                                  compartment_id=job.target.compartment_id, created_by=user)
+            sess = ConsoleSession(key_id=key_id, instance_id=instance_id, compartment_id=compartment_id,
+                                  created_by=user, job_id=job_id)
             # room first, synchronously: a foreign connection must be reported to the caller right away
             await asyncio.to_thread(cc.ensure_no_other, self.c, sess.compartment_id, sess.instance_id, replace,
                                     self.s.console_connect_timeout_s)
-            self.sessions[job.id] = sess
+            self.sessions[key_id] = sess
             sess.task = asyncio.get_running_loop().create_task(self._create(sess))
             return sess.status()
+
+    def find_for_instance(self, instance_id: str) -> Optional[str]:
+        """Key of the live session (job or instance keyed) that serves ``instance_id``."""
+        for key_id, sess in self.sessions.items():
+            if sess.instance_id == instance_id and sess.state in ("CREATING", "ACTIVE"):
+                return key_id
+        return None
 
     async def _create(self, sess: ConsoleSession) -> None:
         import asyncssh
@@ -129,17 +156,17 @@ class ConsoleManager:
             key = asyncssh.generate_private_key("ssh-rsa", key_size=2048)
             public_key = key.export_public_key("openssh").decode().strip()
             info = await asyncio.to_thread(cc.create, self.c, sess.instance_id, sess.compartment_id, public_key,
-                                           sess.job_id, self.s.console_connect_timeout_s)
+                                           sess.job_id or "", self.s.console_connect_timeout_s)
             sess.key = key
             sess.connection = info
             sess.state = "ACTIVE"
             sess.last_used = time.monotonic()
-            log.info("console connection %s for job %s (instance %s) is active; OCI connection string: %s",
-                     info.id, sess.job_id, sess.instance_id, info.vnc_connection_string)
+            log.info("console connection %s for %s (instance %s) is active; OCI connection string: %s",
+                     info.id, sess.key_id, sess.instance_id, info.vnc_connection_string)
         except Exception as exc:  # noqa: BLE001
             sess.state = "FAILED"
             sess.error = describe_error(exc)
-            log.warning("console connection for job %s failed: %s", sess.job_id, sess.error)
+            log.warning("console connection for %s failed: %s", sess.key_id, sess.error)
 
     async def close(self, job_id: str) -> Optional[dict]:
         sess = self.sessions.pop(job_id, None)

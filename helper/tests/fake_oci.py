@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import itertools
+import re
 from pathlib import Path
 from types import SimpleNamespace as NS
 from typing import Callable, Optional
@@ -162,11 +163,25 @@ class FakeCompute:
         return Resp(inst)
 
     def get_instance(self, iid):
+        if iid not in self.instances:
+            raise service_error(404, "NotAuthorizedOrNotFound", "instance not found", "get_instance")
         inst = self.instances[iid]
         nxt = self.pending_transitions.pop(iid, None)
         if nxt:
             inst.lifecycle_state = nxt
         return Resp(inst)
+
+    def list_instances(self, compartment_id, **kw):
+        return Resp([i for i in self.instances.values() if i.compartment_id == compartment_id])
+
+    def add_instance(self, name, compartment_id, shape="VM.Standard.E5.Flex", state="RUNNING",
+                     availability_domain=None):
+        """An instance that exists in OCI without a migration tool job (Remote Console page tests)."""
+        iid = oid("instance")
+        self.instances[iid] = NS(id=iid, display_name=name, lifecycle_state=state, compartment_id=compartment_id,
+                                 availability_domain=availability_domain or self.f.identity.availability_domain,
+                                 shape=shape, time_created=None)
+        return iid
 
     def list_vnic_attachments(self, compartment_id, instance_id=None, **kw):
         return Resp([a for a in self.vnic_attachments.values() if instance_id is None or a.instance_id == instance_id])
@@ -715,6 +730,7 @@ class FakeOci:
         self.object_storage = FakeObjectStorage(bucket_exists, compartment_id=self.identity.compartment_id)
         self.identity_client = FakeIdentity(self.identity.tenancy_id)
         self.network = FakeNetwork()
+        self.search = FakeSearch(self)
 
     def scan_devices(self) -> dict[str, int]:
         return dict(self.block_devices)
@@ -733,7 +749,33 @@ class FakeOci:
             identity_info=self.identity,
             poll_interval_s=0.0,
             work_requests=self.work_requests,
+            search=self.search,
         )
+
+
+class FakeSearch:
+    """Resource Search: structured queries of the form
+    ``query instance resources where displayName =~ '<text>'`` against the fake compute inventory."""
+
+    _QUERY_RE = re.compile(r"^query instance resources where displayName =~ '(?P<text>(?:[^'\\]|\\.)*)'$")
+
+    def __init__(self, fake: "FakeOci"):
+        self.f = fake
+        self.queries: list[str] = []
+
+    def search_resources(self, details, limit=None, **kw):
+        self.queries.append(details.query)
+        m = self._QUERY_RE.match(details.query)
+        if details.type != "Structured" or not m:
+            raise service_error(400, "InvalidParameter", f"unsupported query: {details.query}", "search_resources")
+        needle = m.group("text").replace("\\'", "'").replace("\\\\", "\\").lower()
+        items = [
+            NS(identifier=i.id, display_name=i.display_name, compartment_id=i.compartment_id,
+               lifecycle_state=i.lifecycle_state, availability_domain=getattr(i, "availability_domain", None),
+               time_created=getattr(i, "time_created", None), resource_type="Instance")
+            for i in self.f.compute.instances.values() if needle in (i.display_name or "").lower()
+        ]
+        return Resp(NS(items=items[: limit or len(items)]))
 
 
 def _letters(i: int) -> str:

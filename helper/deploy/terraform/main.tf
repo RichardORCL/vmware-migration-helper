@@ -127,7 +127,9 @@ resource "oci_identity_policy" "helper" {
   name           = "${var.helper_display_name}-policy"
   description    = "Permissions needed by the OCI Migration Tool VM"
   statements = [
-    # target instances, volumes and attachments
+    # target instances, volumes and attachments; instance-family also covers the instance console connections
+    # and the instance listing of the "OCI Remote Console" page (Resource Search only returns resources the
+    # migration tool VM may read anyway, so the policy scope bounds the search as well)
     "Allow dynamic-group ${local.dynamic_group} to manage instance-family in ${local.policy_scope}",
     "Allow dynamic-group ${local.dynamic_group} to manage volume-family in ${local.policy_scope}",
     "Allow dynamic-group ${local.dynamic_group} to use virtual-network-family in ${local.policy_scope}",

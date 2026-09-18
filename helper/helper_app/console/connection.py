@@ -5,6 +5,10 @@ parsed from the ``vncConnectionString`` OCI returns, e.g.::
 
     ssh -o ProxyCommand='ssh -W %h:%p -p 443 <connection OCID>@instance-console.<region>.oci.oraclecloud.com'
         -N -L localhost:5900:<instance OCID>:5900 <instance OCID>
+
+The forward target (``-L ...:<host>:<port>``) and the SSH host of the second hop (the trailing argument)
+are parsed separately: OCI does not always name the instance in both places (bare metal instances get
+``-L 5900:localhost:5900 <user>@<instance OCID>``).
 """
 
 from __future__ import annotations
@@ -22,6 +26,9 @@ TAG_JOB_KEY = "vc-oci-job"
 _PROXY_RE = re.compile(r"(?P<user>ocid1\.instanceconsoleconnection\.[\w.-]+)@(?P<host>[\w.-]+)")
 _PROXY_PORT_RE = re.compile(r"-p\s+(?P<port>\d+)")
 _FORWARD_RE = re.compile(r"-L\s+(?:[\w.-]+:)?\d+:(?P<target>[\w.-]+):(?P<port>\d+)")
+_PROXY_COMMAND_RE = re.compile(r"ProxyCommand=(?P<q>['\"]).*?(?P=q)", re.DOTALL)
+# the second hop: the trailing ``[user@]host`` argument of the outer ssh command
+_SSH_HOST_RE = re.compile(r"(?:(?P<user>[\w.-]+)@)?(?P<host>ocid1\.instance\.[\w.-]+)\s*$")
 
 
 class ConsoleConflict(RuntimeError):
@@ -39,8 +46,10 @@ class ConsoleEndpoint:
     proxy_host: str
     proxy_port: int
     proxy_user: str  # the console connection OCID
-    target_host: str  # the instance OCID, resolved by the console service
-    target_port: int  # VNC port on the instance (5900)
+    target_host: str  # SSH host of the second hop: the instance OCID, resolved by the console service
+    target_port: int  # VNC port (5900)
+    vnc_host: str = ""  # forward target as seen from the second hop (the instance OCID or ``localhost``)
+    target_user: str = ""  # user name OCI put in front of the second hop, if any
 
 
 def parse_vnc_connection_string(text: str) -> ConsoleEndpoint:
@@ -49,12 +58,20 @@ def parse_vnc_connection_string(text: str) -> ConsoleEndpoint:
     if not proxy or not forward:
         raise OciError(f"cannot parse the VNC connection string OCI returned: {text!r}")
     port = _PROXY_PORT_RE.search(text)
+    # the hop-2 host is the trailing argument of the outer command; the -L target names the instance for
+    # VM instances and "localhost" for bare metal ones
+    outer = _PROXY_COMMAND_RE.sub("ProxyCommand=''", text)
+    ssh_host = _SSH_HOST_RE.search(outer)
+    vnc_host = forward.group("target")
+    target_host = ssh_host.group("host") if ssh_host else vnc_host
     return ConsoleEndpoint(
         proxy_host=proxy.group("host"),
         proxy_port=int(port.group("port")) if port else 443,
         proxy_user=proxy.group("user"),
-        target_host=forward.group("target"),
+        target_host=target_host,
         target_port=int(forward.group("port")),
+        vnc_host=vnc_host,
+        target_user=(ssh_host.group("user") or "") if ssh_host else "",
     )
 
 

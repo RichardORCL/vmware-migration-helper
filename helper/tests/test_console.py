@@ -25,13 +25,28 @@ DOC_STRING = ("ssh -o ProxyCommand='ssh -W %h:%p -p 443 ocid1.instanceconsolecon
               "ocid1.instance.oc1.phx.bbbbbbbb")
 
 
+BM_STRING = ("ssh -o ProxyCommand='ssh -W %h:%p -p 443 ocid1.instanceconsoleconnection.oc1.eu-frankfurt-1.cccccccc@"
+             "instance-console.eu-frankfurt-1.oci.oraclecloud.com' -N -L 5900:localhost:5900 "
+             "un7rfqk4ibrpaifa@ocid1.instance.oc1.eu-frankfurt-1.dddddddd")
+
+
 def test_parse_vnc_connection_string():
     ep = parse_vnc_connection_string(DOC_STRING)
     assert ep == ConsoleEndpoint(proxy_host="instance-console.us-phoenix-1.oci.oraclecloud.com", proxy_port=443,
                                  proxy_user="ocid1.instanceconsoleconnection.oc1.phx.aaaaaaaa",
-                                 target_host="ocid1.instance.oc1.phx.bbbbbbbb", target_port=5900)
+                                 target_host="ocid1.instance.oc1.phx.bbbbbbbb", target_port=5900,
+                                 vnc_host="ocid1.instance.oc1.phx.bbbbbbbb", target_user="")
     with pytest.raises(Exception, match="cannot parse"):
         parse_vnc_connection_string("ssh nowhere")
+
+
+def test_parse_vnc_connection_string_bare_metal():
+    """Bare metal: the -L target is localhost and the hop-2 argument carries a user name; the SSH host of
+    the second hop is still the instance OCID (taken from the trailing argument, not from -L)."""
+    ep = parse_vnc_connection_string(BM_STRING)
+    assert ep.proxy_user == "ocid1.instanceconsoleconnection.oc1.eu-frankfurt-1.cccccccc"
+    assert ep.target_host == "ocid1.instance.oc1.eu-frankfurt-1.dddddddd"
+    assert (ep.vnc_host, ep.target_port, ep.target_user) == ("localhost", 5900, "un7rfqk4ibrpaifa")
 
 
 def test_fingerprint_matches():

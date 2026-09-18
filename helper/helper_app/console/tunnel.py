@@ -6,7 +6,8 @@ processes and a local listening port:
 1. hop 1: SSH to the console service (``instance-console.<region>...:443``) as the connection OCID; its host
    key is checked against ``serviceHostKeyFingerprint`` from the API;
 2. hop 2: SSH to ``<instance OCID>:22`` tunnelled through hop 1 (what ``-W %h:%p`` does);
-3. a direct-tcpip channel from hop 2 to ``<instance OCID>:5900`` carries the RFB (VNC) bytes.
+3. a direct-tcpip channel from hop 2 to the ``-L`` target (``<instance OCID>:5900`` for VM instances,
+   ``localhost:5900`` for bare metal ones) carries the RFB (VNC) bytes.
 
 Both hops authenticate with the temporary key the console connection was created with.
 """
@@ -22,8 +23,9 @@ from helper_app.console.connection import ConsoleEndpoint
 
 log = logging.getLogger(__name__)
 
-# user names tried for the second hop: OCI's documented command lets ssh pick the local user name, so the
-# service does not seem to care; the instance OCID is what the console's Windows instructions use
+# user names tried for the second hop, after the one OCI put into the connection string (if any): OCI's
+# documented command lets ssh pick the local user name, so the service does not seem to care; the instance
+# OCID is what the console's Windows instructions use
 HOP2_USERNAMES = ("{instance}", "{connection}")
 
 
@@ -118,29 +120,54 @@ async def open_vnc_stream(endpoint: ConsoleEndpoint, key, service_fingerprint: s
                           host_key.get_fingerprint("sha256"), service_fingerprint)
             return ok
 
+    hop1_desc = f"{endpoint.proxy_host}:{endpoint.proxy_port}"
+    hop2_desc = f"{endpoint.target_host}:22 through the console service"
+
     async def _open() -> TunnelStream:
         connections = []
         try:
-            hop1 = await asyncssh.connect(
-                endpoint.proxy_host, endpoint.proxy_port, username=endpoint.proxy_user, client_keys=[key],
-                known_hosts=([], [], []), client_factory=ServiceHostClient, connect_timeout=timeout_s,
-            )
+            try:
+                hop1 = await asyncssh.connect(
+                    endpoint.proxy_host, endpoint.proxy_port, username=endpoint.proxy_user, client_keys=[key],
+                    known_hosts=([], [], []), client_factory=ServiceHostClient, connect_timeout=timeout_s,
+                )
+            except asyncssh.HostKeyNotVerifiable as exc:
+                raise TunnelError(f"host key of {endpoint.proxy_host} rejected: {exc}") from exc
+            except (asyncssh.Error, OSError) as exc:
+                raise TunnelError(f"SSH to the console service {hop1_desc} failed: {exc}") from exc
             connections.insert(0, hop1)
             hop2 = None
             errors = []
-            for template in HOP2_USERNAMES:
-                user = template.format(instance=endpoint.target_host, connection=endpoint.proxy_user)
+            users = [u for u in (endpoint.target_user,) if u]
+            users += [t.format(instance=endpoint.target_host, connection=endpoint.proxy_user) for t in HOP2_USERNAMES]
+            for user in dict.fromkeys(users):
                 try:
                     hop2 = await asyncssh.connect(endpoint.target_host, 22, tunnel=hop1, username=user,
                                                   client_keys=[key], known_hosts=None, connect_timeout=timeout_s)
                     break
                 except asyncssh.PermissionDenied as exc:
                     errors.append(f"{user}: {exc}")
+                except (asyncssh.Error, OSError) as exc:
+                    raise TunnelError(f"second SSH hop to {hop2_desc} failed: {exc}") from exc
             if hop2 is None:
                 raise TunnelError("the console service refused the second SSH hop: " + "; ".join(errors))
             connections.insert(0, hop2)
-            reader, writer = await hop2.open_connection(endpoint.target_host, endpoint.target_port)
-            return _SshStream(reader, writer, connections)
+            # the VNC channel: the -L target OCI named first (localhost on bare metal), the instance OCID as
+            # the fallback (and the other way round), since the string has not always been consistent
+            targets = list(dict.fromkeys(h for h in (endpoint.vnc_host, endpoint.target_host, "localhost") if h))
+            last: Exception | None = None
+            for host in targets:
+                try:
+                    reader, writer = await hop2.open_connection(host, endpoint.target_port)
+                    if host != targets[0]:
+                        log.info("console VNC channel to %s:%s opened after %s was refused", host, endpoint.target_port,
+                                 targets[0])
+                    return _SshStream(reader, writer, connections)
+                except asyncssh.ChannelOpenError as exc:
+                    last = exc
+                    log.debug("console VNC channel to %s:%s refused: %s", host, endpoint.target_port, exc)
+            raise TunnelError(f"VNC channel to port {endpoint.target_port} refused by the console service "
+                              f"(tried {', '.join(targets)}): {last}")
         except BaseException:
             for conn in connections:
                 conn.close()
@@ -151,8 +178,6 @@ async def open_vnc_stream(endpoint: ConsoleEndpoint, key, service_fingerprint: s
     except TunnelError:
         raise
     except asyncio.TimeoutError:
-        raise TunnelError(f"timed out after {timeout_s:.0f}s connecting to {endpoint.proxy_host}:{endpoint.proxy_port}")
-    except asyncssh.HostKeyNotVerifiable as exc:
-        raise TunnelError(f"host key of {endpoint.proxy_host} rejected: {exc}") from exc
+        raise TunnelError(f"timed out after {timeout_s:.0f}s connecting to {hop1_desc}")
     except (asyncssh.Error, OSError) as exc:
-        raise TunnelError(f"SSH tunnel to {endpoint.proxy_host}:{endpoint.proxy_port} failed: {exc}") from exc
+        raise TunnelError(f"SSH tunnel through {hop1_desc} failed: {exc}") from exc

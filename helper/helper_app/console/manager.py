@@ -134,8 +134,8 @@ class ConsoleManager:
             sess.connection = info
             sess.state = "ACTIVE"
             sess.last_used = time.monotonic()
-            log.info("console connection %s for job %s (instance %s) is active", info.id, sess.job_id,
-                     sess.instance_id)
+            log.info("console connection %s for job %s (instance %s) is active; OCI connection string: %s",
+                     info.id, sess.job_id, sess.instance_id, info.vnc_connection_string)
         except Exception as exc:  # noqa: BLE001
             sess.state = "FAILED"
             sess.error = describe_error(exc)

@@ -430,6 +430,7 @@ class Job(BaseModel):
     nfc_host: Optional[str] = None  # host the disk streams were downloaded from (vCenter or ESXi)
     guest_fixup: Optional[GuestFixup] = None  # post-copy initramfs rebuild on the target boot volume
     network_fixup: Optional[GuestFixup] = None  # post-copy network configuration (DHCP on the renamed NIC)
+    azure_fixup: Optional[GuestFixup] = None  # Azure source: cloud-init / waagent / serial console (Linux only)
     disks: list[DiskState] = Field(default_factory=list)
     transfer: TransferStats = Field(default_factory=TransferStats)
     created_by: str = ""

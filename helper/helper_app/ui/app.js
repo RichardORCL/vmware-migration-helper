@@ -388,6 +388,8 @@
         "The instance may stop in the dracut emergency shell; rebuild the initramfs with virtio drivers inside the guest (dracut -f --add-drivers \"virtio_blk virtio_scsi virtio_pci virtio_net\") and migrate again, or check Copy diagnostics for the details.")]] : []),
       ...(job.network_fixup ? [["Network fix-up", fixupEl(job.network_fixup,
         "The instance may come up without network. Open the Remote console, log in and configure DHCP on the new interface (NetworkManager: nmcli con add type ethernet con-name oci ifname \"*\" ipv4.method auto; network-scripts: create /etc/sysconfig/network-scripts/ifcfg-<nic> with BOOTPROTO=dhcp ONBOOT=yes), or check Copy diagnostics for the details.")]] : []),
+      ...(job.azure_fixup ? [["Azure guest fix-up", fixupEl(job.azure_fixup,
+        "First boot may hang ~90s on Azure metadata or show /dev/sr0 errors. Remove Azure cloud-init datasource files, disable walinuxagent, comment sr0 in fstab, enable serial-getty@ttyS0, and prefer the OCI cloud-init datasource — or re-migrate with an updated migration tool.")]] : []),
       ["Disk download", `Azure page blobs (allocated ranges only)${job.target.volume_vpus_per_gb ? `, ${job.target.volume_vpus_per_gb} VPU/GB volumes` : ""}`],
       ["Started by", `${job.created_by || "-"} at ${new Date(job.created_at).toLocaleString()}`],
     ] : [

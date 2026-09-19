@@ -563,39 +563,47 @@ class MigrationRunner:
 
     def _guest_fixup(self, job: Job) -> None:
         want_initramfs, want_network = job.target.rebuild_initramfs, job.target.fix_network
+        want_azure = job.kind == "azure"
         disabled = GuestFixup(status="skipped", detail="disabled for this job")
 
-        def both(fx: GuestFixup) -> None:
+        def all_steps(fx: GuestFixup) -> None:
             job.guest_fixup = fx if want_initramfs else disabled
             job.network_fixup = fx if want_network else disabled
+            job.azure_fixup = fx if want_azure else None
 
         if job.vm.is_windows:
             job.guest_fixup = GuestFixup(status="skipped", detail="Windows guest (VirtIO drivers are installed inside "
                                                                   "Windows, see the note on the export page)")
             job.network_fixup = GuestFixup(status="skipped", detail="Windows guest (the VirtIO network adapter "
                                                                     "uses DHCP by default)")
+            job.azure_fixup = None
             return
-        if not want_initramfs and not want_network:
-            both(disabled)
+        if not want_initramfs and not want_network and not want_azure:
+            all_steps(disabled)
+            job.azure_fixup = None
             return
         boot = next((d for d in job.disks if d.is_boot), job.disks[0])
         if not boot.device:
-            both(GuestFixup(status="skipped", detail="boot volume device unknown"))
+            all_steps(GuestFixup(status="skipped", detail="boot volume device unknown"))
             return
         job.step = "guest_fixup"
-        what = " and ".join(filter(None, ["initramfs" if want_initramfs else "", "network" if want_network else ""]))
+        what = " and ".join(filter(None, ["initramfs" if want_initramfs else "", "network" if want_network else "",
+                                          "Azure cloud-init" if want_azure else ""]))
         self._save(job, JobPhase.FINALIZING, f"All disks copied; preparing the guest for OCI ({what})")
         try:
-            res = self.guest_fixer(boot.device, want_initramfs, want_network,
+            res = self.guest_fixer(boot.device, want_initramfs, want_network, want_azure,
                                    lambda msg: self._save(job, message=f"Guest fix-up: {msg}"))
             job.guest_fixup = res.initramfs or disabled
             job.network_fixup = res.network or disabled
+            job.azure_fixup = res.azure_cloud if want_azure else None
         except Exception as exc:  # noqa: BLE001 - a fix-up problem must not fail the migration
             log.exception("guest fix-up for job %s crashed", job.id)
-            both(GuestFixup(status="failed", detail=describe_error(exc)))
+            fail = GuestFixup(status="failed", detail=describe_error(exc))
+            all_steps(fail)
         parts = [f"{name} {fx.status.replace('_', ' ')}: {fx.detail}"
-                 for name, fx in (("initramfs", job.guest_fixup), ("network", job.network_fixup))
-                 if fx is not disabled]
+                 for name, fx in (("initramfs", job.guest_fixup), ("network", job.network_fixup),
+                                  ("Azure", job.azure_fixup))
+                 if fx is not None and fx is not disabled]
         self._save(job, message="Guest fix-up - " + "; ".join(parts))
 
     def _resolve_nfc_host(self, job: Job, vm, session: UserSession) -> str:

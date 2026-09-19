@@ -154,7 +154,8 @@ def test_azure_migration_deallocate_mode(env):
     contents = {open(a.device or a.fake_disk, "rb").read() for a in helper_atts}
     assert env.raws[0] in contents and env.raws[1] in contents
     assert job["guest_fixup"]["status"] == "done" and job["network_fixup"]["status"] == "done"
-    assert env.fixups and env.fixups[-1][1:] == (True, True)
+    assert job["azure_fixup"]["status"] == "done"
+    assert env.fixups and env.fixups[-1][1:] == (True, True, True)
     # OCI side: Ubuntu 22.04 UEFI image, instance tagged with the Azure origin
     img = fake.compute.images[job["seed_image_id"]]
     assert (img.operating_system, img.operating_system_version) == ("Ubuntu", "22.04")

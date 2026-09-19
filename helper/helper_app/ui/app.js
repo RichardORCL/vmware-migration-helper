@@ -90,6 +90,27 @@
     if (!dlg.dataset.wired) {
       dlg.dataset.wired = "1";
       document.getElementById("azure-auth-help-close").addEventListener("click", () => dlg.close());
+      const copyBtn = document.getElementById("azure-auth-help-copy");
+      const copyState = document.getElementById("azure-auth-help-copy-state");
+      const cliArea = document.getElementById("azure-auth-help-cli");
+      copyBtn.addEventListener("click", async () => {
+        copyBtn.disabled = true;
+        const text = cliArea.value;
+        try {
+          if (!navigator.clipboard) throw new Error("clipboard API not available");
+          await navigator.clipboard.writeText(text);
+          copyState.textContent = `Copied ${text.split("\n").length} lines to the clipboard.`;
+        } catch (_) {
+          cliArea.focus();
+          cliArea.select();
+          copyState.textContent = "Clipboard not available; the commands are selected — press Ctrl+C.";
+        } finally {
+          copyBtn.disabled = false;
+          setTimeout(() => {
+            if (copyState.textContent.startsWith("Copied")) copyState.textContent = "";
+          }, 6000);
+        }
+      });
       dlg.addEventListener("click", (ev) => { if (ev.target === dlg) dlg.close(); });
       window.addEventListener("hashchange", () => { if (dlg.open) dlg.close(); });
     }

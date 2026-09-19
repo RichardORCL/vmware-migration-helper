@@ -747,13 +747,15 @@ Microsoft.Compute/snapshots/endGetAccess/action</pre>
         <code>login.microsoftonline.com</code>, <code>management.azure.com</code>, and Azure blob endpoints
         (<code>*.blob.core.windows.net</code>, <code>*.blob.storage.azure.net</code>).</li>
     </ul>
-    <p class="muted">Replace the variables at the top, then run in Azure CLI (<code>az login</code> as a user who can
-      create app registrations and role assignments). Copy the <strong>password</strong> from the secret step into the
-      login form; it is shown only once.</p>
-    <pre class="log" id="azure-auth-help-cli"># --- variables (edit these) ---
+    <p class="muted">Edit the variables in the box below, then use <strong>Copy commands to clipboard</strong> or run
+      them in Azure CLI (<code>az login</code> as a user who can create app registrations and role assignments). Copy
+      the <strong>password</strong> from the secret step into the login form; it is shown only once. The default client
+      secret lifetime is <strong>6 months</strong> (<code>SECRET_MONTHS</code>).</p>
+    <textarea class="log azure-cli-edit" id="azure-auth-help-cli" rows="22" spellcheck="false" aria-label="Azure CLI setup commands"># --- variables (edit these) ---
 SUBSCRIPTION_ID="00000000-0000-0000-0000-000000000000"
 APP_NAME="oci-umt-migration"
 ROLE_NAME="OCI Ultimate Migration Tool Disk Export"
+SECRET_MONTHS=6
 # Subscription scope, or a resource group:
 # ASSIGNMENT_SCOPE="/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/my-rg"
 ASSIGNMENT_SCOPE="/subscriptions/${SUBSCRIPTION_ID}"
@@ -766,7 +768,8 @@ APP_ID=$(az ad app list --display-name "$APP_NAME" --query "[0].appId" -o tsv)
 az ad sp create --id "$APP_ID"
 
 # 2) Client secret — copy "password" into the migration tool Azure login (shown once)
-az ad app credential reset --id "$APP_ID" --display-name oci-umt --years 2
+END_DATE=$(date -u -d "+${SECRET_MONTHS} months" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v+${SECRET_MONTHS}m +%Y-%m-%dT%H:%M:%SZ)
+az ad app credential reset --id "$APP_ID" --display-name oci-umt --end-date "$END_DATE"
 
 # 3) Custom role (save as oci-umt-role.json; set AssignableScopes to your subscription id)
 # {
@@ -790,12 +793,16 @@ az role assignment create --assignee "$APP_ID" --role "Reader" --scope "$ASSIGNM
 az role assignment create --assignee "$APP_ID" --role "$ROLE_NAME" --scope "$ASSIGNMENT_SCOPE"
 
 echo "Tenant ID: $TENANT_ID"
-echo "Client ID: $APP_ID"</pre>
+echo "Client ID: $APP_ID"</textarea>
+    <p class="muted" id="azure-auth-help-copy-state"></p>
     <p class="muted">Instead of the custom role you can assign built-in roles:
       <strong>Virtual Machine Contributor</strong> (deallocate),
       <strong>Disk Snapshot Contributor</strong> (snapshots and <code>beginGetAccess</code>),
       and <strong>Disk Restore Operator</strong> (<code>endGetAccess</code> on disks).</p>
-    <div class="actions"><button type="button" class="secondary" id="azure-auth-help-close">Close</button></div>
+    <div class="actions">
+      <button type="button" class="primary" id="azure-auth-help-copy">Copy commands to clipboard</button>
+      <button type="button" class="secondary" id="azure-auth-help-close">Close</button>
+    </div>
   </dialog>
 
   <dialog id="encrypted-help" class="help">

@@ -76,7 +76,9 @@ h2 { font-size: 15px; margin: 0 0 8px; font-weight: 600; }
 code { font-family: Consolas, monospace; font-size: 12px; background: #eef1f3; padding: 0 3px; border-radius: 2px; }
 @media (max-width: 900px) { .setup { grid-template-columns: 1fr; } }
 textarea.diag { width: 100%; margin-top: 6px; font: 12px/1.4 Consolas, monospace; border: 1px solid var(--border); border-radius: 3px; padding: 8px; white-space: pre; }
-pre.log { background: #1b2a32; color: #d7e0e5; padding: 10px; border-radius: 3px; font: 12px/1.4 Consolas, monospace; max-height: 320px; overflow: auto; white-space: pre-wrap; }
+pre.log, textarea.log { background: #1b2a32; color: #d7e0e5; padding: 10px; border-radius: 3px; font: 12px/1.4 Consolas, monospace; max-height: 320px; overflow: auto; white-space: pre-wrap; }
+textarea.log { width: 100%; box-sizing: border-box; border: 1px solid #2a3d48; resize: vertical; min-height: 240px; }
+textarea.log:focus { outline: 2px solid var(--primary); outline-offset: 1px; }
 .badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; font-weight: 600; background: #e3eef5; color: var(--primary); }
 .badge.ok { background: #e3f5e6; color: var(--ok); }
 .badge.warn { background: #fff4d6; color: var(--warn); }
@@ -101,7 +103,7 @@ button.info { display: inline-flex; align-items: center; justify-content: center
 button.info:hover { background: var(--primary); color: #fff; }
 dialog.help { max-width: 640px; border: 1px solid var(--border); border-radius: 4px; padding: 18px 22px; font-size: 14px; line-height: 1.5; }
 dialog.help-wide { max-width: min(820px, 96vw); }
-dialog.help-wide pre.log { max-height: 340px; font-size: 11px; }
+dialog.help-wide pre.log, dialog.help-wide textarea.log { max-height: 340px; font-size: 11px; }
 dialog.help ul { padding-left: 22px; margin: 8px 0; }
 dialog.help li { margin: 4px 0; }
 dialog.help::backdrop { background: rgba(0, 0, 0, .35); }

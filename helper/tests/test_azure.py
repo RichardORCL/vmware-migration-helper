@@ -9,7 +9,9 @@ import threading
 
 import pytest
 
-from helper_app.azure.client import AzureAuthError, AzureClient, AzureError
+import httpx
+
+from helper_app.azure.client import AzureAuthError, AzureClient, AzureError, _append_sas_query
 from helper_app.azure.export import AzureDiskExport, release_azure_resources, snapshot_name
 from helper_app.azure.inventory import (
     guess_guest_os,
@@ -467,3 +469,28 @@ def test_connector_default_factory_builds_real_client():
     c = AzureConnector(Settings())._factory(TENANT, CLIENT_ID, SECRET)
     assert isinstance(c, AzureClient) and c.arm_base == "https://management.azure.com"
     c.close()
+
+
+def test_append_sas_query_preserves_existing_signature():
+    sas = "https://md.blob.storage.azure.net/c/b?sv=2019-07-07&sr=b&sig=abc%2Bdef%3D"
+    assert _append_sas_query(sas, {"comp": "pagelist", "maxresults": "10000"}) == (
+        sas + "&comp=pagelist&maxresults=10000"
+    )
+
+
+def test_blob_get_appends_query_without_httpx_params():
+    """httpx ``params=`` re-encodes the SAS query string and Azure returns HTTP 401."""
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, text="<PageList></PageList>")
+
+    client = AzureClient("tenant", "id", "secret", http=httpx.Client(transport=httpx.MockTransport(handler)))
+    sas = "https://md.blob.storage.azure.net/c/b?sv=2019-07-07&sr=b&sig=abc%2Bdef%3D"
+    client.blob_get(sas, params={"comp": "pagelist", "maxresults": "10000"})
+    assert len(requests) == 1
+    url = str(requests[0].url)
+    assert "comp=pagelist" in url and "maxresults=10000" in url
+    assert "sig=abc%2Bdef%3D" in url
+    client.close()

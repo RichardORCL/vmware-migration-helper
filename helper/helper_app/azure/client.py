@@ -12,6 +12,7 @@ import re
 import threading
 import time
 from typing import Any, Callable, Iterator, Optional
+from urllib.parse import quote
 
 import httpx
 
@@ -28,6 +29,14 @@ BLOB_API_VERSION = "2021-08-06"
 
 TOKEN_REFRESH_MARGIN_S = 300  # renew the bearer token this long before it expires
 DEFAULT_POLL_S = 5.0
+
+
+def _append_sas_query(sas_url: str, params: dict[str, str]) -> str:
+    """Append query parameters without re-encoding the existing SAS (httpx ``params=`` breaks ``sig``)."""
+    if not params:
+        return sas_url
+    extra = "&".join(f"{quote(k, safe='')}={quote(str(v), safe='')}" for k, v in params.items())
+    return sas_url + ("&" if "?" in sas_url else "?") + extra
 MAX_POLL_S = 30.0
 
 _AADSTS = re.compile(r"AADSTS(\d+)")
@@ -357,7 +366,11 @@ class AzureClient:
         hdrs = {"x-ms-version": BLOB_API_VERSION}
         if headers:
             hdrs.update(headers)
-        return self.http.get(sas_url, params=params, headers=hdrs)
+        url = _append_sas_query(sas_url, {k: str(v) for k, v in (params or {}).items()})
+        try:
+            return self.http.get(url, headers=hdrs)
+        except httpx.HTTPError as exc:
+            raise AzureError(f"GET export blob: {exc}") from exc
 
     # -------------------------------------------------------------- lifecycle
     def close(self) -> None:

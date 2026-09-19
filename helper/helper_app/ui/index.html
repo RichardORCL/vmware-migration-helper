@@ -811,26 +811,45 @@ Microsoft.Compute/snapshots/endGetAccess/action</pre>
       <code>compute.instances.list/get/stop</code>, <code>compute.disks.get</code>,
       <code>compute.snapshots.create/delete</code>, and snapshot export to Cloud Storage; on the export bucket —
       <code>storage.objects.create/get/delete</code> and <code>storage.buckets.get</code>.</p>
-    <p class="muted">Edit the project, bucket and role names below, then copy the commands to your shell
-      (<code>gcloud auth login</code> as a user who can create service accounts).</p>
-    <textarea class="log azure-cli-edit" id="gcp-auth-help-cli" rows="18" spellcheck="false"
-              aria-label="gcloud setup commands"># --- variables (edit these) ---
-PROJECT_ID="my-gcp-project"
-EXPORT_BUCKET="my-migration-exports"
+    <p class="muted"><strong>Before you run anything:</strong> set <code>PROJECT_ID</code> to the project that owns your VMs
+      (Cloud Shell shows it in the prompt, e.g. <code>streetview-459214</code>). The placeholder
+      <code>my-gcp-project</code> is not a real project. That project must have an <strong>active billing account</strong>
+      (otherwise bucket creation fails with <code>billing account … disabled</code>). You need permission to create service
+      accounts (<code>iam.serviceAccounts.create</code>) — typically <strong>Owner</strong> or <strong>IAM Admin</strong>
+      on that project.</p>
+    <p class="muted">Edit the variables below, then copy the commands to your shell (<code>gcloud auth login</code> as that
+      user).</p>
+    <textarea class="log azure-cli-edit" id="gcp-auth-help-cli" rows="26" spellcheck="false"
+              aria-label="gcloud setup commands"># --- variables (edit these first) ---
+# Your real GCP project id (same as in the Cloud Shell prompt). Do not leave my-gcp-project.
+PROJECT_ID="streetview-459214"
+# Globally unique bucket name for temporary disk exports (lowercase, no gs:// prefix)
+EXPORT_BUCKET="streetview-459214-oci-umt-exports"
+REGION="europe-west3"
 SA_NAME="oci-umt-migration"
 SA_EMAIL="${SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
 
-gcloud iam service-accounts create "$SA_NAME" --project="$PROJECT_ID" --display-name="OCI UMT migration"
+gcloud config set project "$PROJECT_ID"
+gcloud config get-value project
 
+# 1) Service account (skip create if it already exists)
+gcloud iam service-accounts describe "$SA_EMAIL" --project="$PROJECT_ID" 2>/dev/null \
+  || gcloud iam service-accounts create "$SA_NAME" --project="$PROJECT_ID" --display-name="OCI UMT migration"
+
+# 2) Project roles for the migration service account
 gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:${SA_EMAIL}" --role="roles/compute.viewer"
 gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:${SA_EMAIL}" --role="roles/compute.instanceAdmin.v1"
 gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:${SA_EMAIL}" --role="roles/compute.storageAdmin"
 
-gsutil mb -p "$PROJECT_ID" -l EU "gs://${EXPORT_BUCKET}" || true
-gsutil iam ch "serviceAccount:${SA_EMAIL}:objectAdmin" "gs://${EXPORT_BUCKET}"
+# 3) Export bucket (requires billing enabled on PROJECT_ID)
+gcloud storage buckets create "gs://${EXPORT_BUCKET}" --project="$PROJECT_ID" --location="${REGION}" \
+  --uniform-bucket-level-access
+gcloud storage buckets add-iam-policy-binding "gs://${EXPORT_BUCKET}" \
+  --member="serviceAccount:${SA_EMAIL}" --role="roles/storage.objectAdmin"
 
+# 4) JSON key — paste file contents + bucket name into the migration tool GCP login
 gcloud iam service-accounts keys create oci-umt-key.json --iam-account="$SA_EMAIL" --project="$PROJECT_ID"
-echo "Paste oci-umt-key.json and bucket ${EXPORT_BUCKET} into the migration tool login form."</textarea>
+echo "Login form: export bucket = ${EXPORT_BUCKET} ; key file = oci-umt-key.json"</textarea>
     <p class="muted" id="gcp-auth-help-copy-state"></p>
     <div class="actions">
       <button type="button" class="primary" id="gcp-auth-help-copy">Copy commands to clipboard</button>

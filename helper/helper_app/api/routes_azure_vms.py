@@ -11,6 +11,7 @@ from helper_app.auth import require_azure_session
 from helper_app.azure.client import AzureAuthError, AzureError
 from helper_app.azure.inventory import AzureVmDetails, inspect_vm, list_vm_summaries
 from helper_app.azure.preflight import disks_with_active_sas, preflight, warnings
+from helper_app.azure.rbac import revoke_export_access_hint
 from helper_app.models import (
     AzureCaptureMode,
     AzureRevokeExportDisk,
@@ -112,7 +113,7 @@ def _revoke_export_access(session: UserSession, body: RevokeExportAccessRequest)
                     disk_id=disk_id, name=name, ok=True, message=f"{name} not found (already gone)"))
                 continue
             results.append(RevokeExportAccessResult(
-                disk_id=disk_id, name=name, ok=False, message=str(exc)))
+                disk_id=disk_id, name=name, ok=False, message=revoke_export_access_hint(exc, name)))
     session.cache.pop("azure_vms", None)
     return RevokeExportAccessResponse(results=results)
 

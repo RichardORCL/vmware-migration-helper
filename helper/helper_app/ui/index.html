@@ -302,8 +302,13 @@ Microsoft.Compute/snapshots/write
 Microsoft.Compute/snapshots/delete
 Microsoft.Compute/snapshots/beginGetAccess/action
 Microsoft.Compute/snapshots/endGetAccess/action</pre>
-        <p class="muted">The <em>Virtual Machine Contributor</em> and <em>Disk Snapshot Contributor</em> built-in roles
-          cover them as well. The migration tool VM must reach <code>login.microsoftonline.com</code>,
+        <p class="muted">Typical built-in assignment on each resource group (or the subscription):
+          <strong>Reader</strong> (subscription),
+          <strong>Virtual Machine Contributor</strong> (deallocate VMs),
+          <strong>Disk Snapshot Contributor</strong> (snapshots and granting disk export access), and
+          <strong>Disk Restore Operator</strong> (revoking disk export access / <code>endGetAccess</code> on disks -
+          not included in Disk Snapshot Contributor). Or use one custom role with the actions above.
+          The migration tool VM must reach <code>login.microsoftonline.com</code>,
           <code>management.azure.com</code> and the Azure blob endpoints (<code>*.blob.core.windows.net</code>,
           <code>*.blob.storage.azure.net</code>) on TCP 443.</p>
       </details>

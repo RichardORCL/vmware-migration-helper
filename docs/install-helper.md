@@ -23,7 +23,7 @@ variables keep their original "helper" names; see [how-it-works.md](how-it-works
   `Microsoft.Compute/disks/endGetAccess/action`, `Microsoft.Compute/snapshots/write`,
   `Microsoft.Compute/snapshots/delete`, `Microsoft.Compute/snapshots/beginGetAccess/action` and
   `Microsoft.Compute/snapshots/endGetAccess/action` on the resource groups (custom role, or the built-in
-  *Virtual Machine Contributor* + *Disk Snapshot Contributor*). Nothing about Azure is configured in the
+  *Virtual Machine Contributor* + *Disk Snapshot Contributor* + *Disk Restore Operator* for revoking disk export). Nothing about Azure is configured in the
   stack; the credentials are typed on the Azure login page and kept in memory for the session.
 
 The Terraform in `helper/deploy/terraform` is a self-contained [Resource Manager](https://docs.oracle.com/en-us/iaas/Content/ResourceManager/home.htm) stack (it ships a `schema.yaml` for the console form) and also works with a local `terraform apply`.

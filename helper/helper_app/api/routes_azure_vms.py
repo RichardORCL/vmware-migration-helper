@@ -10,8 +10,17 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from helper_app.auth import require_azure_session
 from helper_app.azure.client import AzureAuthError, AzureError
 from helper_app.azure.inventory import AzureVmDetails, inspect_vm, list_vm_summaries
-from helper_app.azure.preflight import preflight, warnings
-from helper_app.models import AzureCaptureMode, GuestOsMapping, VmInspection, VmSummary
+from helper_app.azure.preflight import disks_with_active_sas, preflight, warnings
+from helper_app.models import (
+    AzureCaptureMode,
+    AzureRevokeExportDisk,
+    GuestOsMapping,
+    RevokeExportAccessRequest,
+    RevokeExportAccessResponse,
+    RevokeExportAccessResult,
+    VmInspection,
+    VmSummary,
+)
 from helper_app.oci.mapping import map_guest_os, os_version_choices
 from helper_app.sessions import UserSession
 
@@ -48,10 +57,12 @@ def inspect(session: UserSession, vm_id: str, capture_mode: AzureCaptureMode = "
     problems = preflight(details, capture_mode)
     spec = details.spec
     os_meta = map_guest_os(spec.guest_id, spec.guest_full_name)
+    revoke = [AzureRevokeExportDisk(disk_id=d, name=n) for d, n in disks_with_active_sas(details)]
     return VmInspection(
         vm=spec, can_export=not problems, problems=problems, warnings=warnings(details, capture_mode),
         needs_power_off=(capture_mode == "deallocate" and spec.power_state != "poweredOff"),
         tools_running=False,
+        azure_revoke_export_disks=revoke,
         os=GuestOsMapping(
             operating_system=os_meta.operating_system,
             operating_system_version=os_meta.operating_system_version,
@@ -79,3 +90,42 @@ async def inspect_vm_route(id: str = Query(description="Azure resource ID of the
                            session: UserSession = Depends(require_azure_session)):
     """Inspection of one VM (resource IDs contain slashes, hence a query parameter)."""
     return await asyncio.to_thread(inspect, session, id, capture_mode)
+
+
+def _revoke_export_access(session: UserSession, body: RevokeExportAccessRequest) -> RevokeExportAccessResponse:
+    if body.vm_id:
+        details = inspect_details(session, body.vm_id)
+        disk_ids = [d for d, _ in disks_with_active_sas(details)]
+    else:
+        disk_ids = list(body.disk_ids or [])
+    client = session.azure.client
+    results: list[RevokeExportAccessResult] = []
+    for disk_id in disk_ids:
+        name = disk_id.rsplit("/", 1)[-1]
+        try:
+            client.end_get_access(disk_id)
+            results.append(RevokeExportAccessResult(
+                disk_id=disk_id, name=name, ok=True, message=f"Revoked export access on {name}"))
+        except AzureError as exc:
+            if exc.status == 404:
+                results.append(RevokeExportAccessResult(
+                    disk_id=disk_id, name=name, ok=True, message=f"{name} not found (already gone)"))
+                continue
+            results.append(RevokeExportAccessResult(
+                disk_id=disk_id, name=name, ok=False, message=str(exc)))
+    session.cache.pop("azure_vms", None)
+    return RevokeExportAccessResponse(results=results)
+
+
+@router.post("/revoke-export-access", response_model=RevokeExportAccessResponse)
+async def revoke_export_access_route(body: RevokeExportAccessRequest,
+                                     session: UserSession = Depends(require_azure_session)):
+    """Revoke a stale disk export SAS (``endGetAccess`` / ``az disk revoke-access``)."""
+    try:
+        return await asyncio.to_thread(_revoke_export_access, session, body)
+    except HTTPException:
+        raise
+    except AzureAuthError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc))
+    except AzureError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc))

@@ -8,6 +8,16 @@ from helper_app.models import AzureCaptureMode
 MAX_OCI_VOLUME_BYTES = 32 * 1024**4  # 32 TB block / boot volume limit
 
 
+def disks_with_active_sas(details: AzureVmDetails) -> list[tuple[str, str]]:
+    """``(disk resource id, disk name)`` for managed disks in ``ActiveSAS`` export state."""
+    out: list[tuple[str, str]] = []
+    for disk_id in details.disk_ids:
+        props = details.disk_doc(disk_id).get("properties") or {}
+        if str(props.get("diskState") or "") == "ActiveSAS":
+            out.append((disk_id, disk_id.rsplit("/", 1)[-1]))
+    return out
+
+
 def preflight(details: AzureVmDetails, capture_mode: AzureCaptureMode = "deallocate") -> list[str]:
     spec = details.spec
     problems: list[str] = []
@@ -49,7 +59,8 @@ def preflight(details: AzureVmDetails, capture_mode: AzureCaptureMode = "dealloc
         state = str(props.get("diskState") or "")
         if state == "ActiveSAS" and capture_mode == "deallocate":
             problems.append(f"disk {name} already has an export SAS granted (state ActiveSAS); revoke it "
-                            "(az disk revoke-access) - another export or a previous job may still be using it")
+                            "with Revoke export access below (or az disk revoke-access) - another export or a "
+                            "previous job may still be using it")
     return problems
 
 

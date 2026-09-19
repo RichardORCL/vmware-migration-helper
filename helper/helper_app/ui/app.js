@@ -786,6 +786,9 @@
     ]);
     const problems = document.getElementById("vm-problems");
     const warnings = document.getElementById("vm-warnings");
+    const revokeBox = document.getElementById("azure-revoke-export");
+    const revokeBtn = document.getElementById("azure-revoke-btn");
+    const revokeStatus = document.getElementById("azure-revoke-status");
     // Azure: problems, warnings and the "needs power off" flag depend on the capture mode, so they are
     // re-fetched when the radio changes (vSphere: filled once)
     const fillChecks = () => {
@@ -800,8 +803,43 @@
             : `"${vm.name}" is already deallocated: its disks are exported as they are.`;
       }
       submit.disabled = !inspection.can_export;
+      const revocable = inspection.azure_revoke_export_disks || [];
+      if (revokeBox) {
+        revokeBox.hidden = !azure || !revocable.length;
+        if (revocable.length) {
+          document.getElementById("azure-revoke-text").textContent =
+            revocable.length === 1
+              ? `Disk ${revocable[0].name} still has export read access granted (ActiveSAS). Revoke it before starting a new migration (same as az disk revoke-access).`
+              : `${revocable.length} disks still have export read access granted (ActiveSAS). Revoke them before starting a new migration.`;
+        }
+      }
     };
     fillChecks();
+    if (azure && revokeBtn && !revokeBtn.dataset.wired) {
+      revokeBtn.dataset.wired = "1";
+      revokeBtn.addEventListener("click", async () => {
+        revokeBtn.disabled = true;
+        if (revokeStatus) revokeStatus.textContent = "Revoking export access…";
+        formError.textContent = "";
+        try {
+          const ids = (inspection.azure_revoke_export_disks || []).map((d) => d.disk_id);
+          const res = await api("POST", "/azure/revoke-export-access", { disk_ids: ids });
+          const failed = (res.results || []).filter((r) => !r.ok);
+          if (revokeStatus) {
+            revokeStatus.textContent = failed.length
+              ? failed.map((r) => r.message).join("; ")
+              : (res.results || []).map((r) => r.message).join("; ");
+          }
+          inspection = await api("GET", inspectUrl());
+          fillChecks();
+          if (failed.length) revokeBtn.disabled = false;
+        } catch (e) {
+          if (e.status !== 401) formError.textContent = e.message;
+          if (revokeStatus) revokeStatus.textContent = "";
+          revokeBtn.disabled = false;
+        }
+      });
+    }
     captureBox.hidden = !azure;
     if (azure) {
       for (const radio of captureBox.querySelectorAll('input[name="capture_mode"]')) radio.addEventListener("change", async () => {

@@ -93,6 +93,26 @@ def test_azure_vm_list_and_inspect(env):
     assert c.get("/api/azure/vm", params={"id": "vm-101"}).status_code == 502
 
 
+def test_azure_revoke_stale_export_sas(env):
+    c = env.client
+    azure_login(c)
+    vm = fake_vm(env, "win-01")
+    vm.os_disk.sas_token = "stale"
+    vid = vm_id(env, "win-01")
+    insp = c.get("/api/azure/vm", params={"id": vid}).json()
+    assert insp["can_export"] is False and len(insp["azure_revoke_export_disks"]) == 1
+    assert insp["azure_revoke_export_disks"][0]["name"] == "win-01_OsDisk"
+    r = c.post("/api/azure/revoke-export-access", json={"disk_ids": [insp["azure_revoke_export_disks"][0]["disk_id"]]})
+    assert r.status_code == 200, r.text
+    assert r.json()["results"][0]["ok"] is True and vm.os_disk.sas_token is None
+    assert vm.os_disk.id in env.azure.sas_revoked
+    insp = c.get("/api/azure/vm", params={"id": vid}).json()
+    assert insp["can_export"] is True and insp["azure_revoke_export_disks"] == []
+    r = c.post("/api/azure/revoke-export-access", json={"vm_id": vid})
+    assert r.status_code == 200 and r.json()["results"] == []
+    assert c.post("/api/azure/revoke-export-access", json={}).status_code == 422
+
+
 # --------------------------------------------------------------------------- migrations
 def test_azure_migration_deallocate_mode(env):
     c = env.client

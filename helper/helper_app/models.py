@@ -7,7 +7,7 @@ from enum import Enum
 from ipaddress import IPv4Address
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field, computed_field, field_validator
+from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
 
 
 # --------------------------------------------------------------------------- #
@@ -108,6 +108,11 @@ class GuestOsMapping(BaseModel):
     version_choices: list[str] = Field(default_factory=list, description="Releases OCI knows for this OS")
 
 
+class AzureRevokeExportDisk(BaseModel):
+    disk_id: str
+    name: str
+
+
 class VmInspection(BaseModel):
     vm: VmSpec
     can_export: bool
@@ -117,6 +122,32 @@ class VmInspection(BaseModel):
     needs_power_off: bool = Field(default=False, description="VM is powered on: the migration shuts it down "
                                                              "before the export and must be confirmed")
     tools_running: bool = Field(default=False, description="VMware Tools is running (graceful shutdown possible)")
+    azure_revoke_export_disks: list[AzureRevokeExportDisk] = Field(
+        default_factory=list,
+        description="Azure managed disks with an export SAS still granted (ActiveSAS); revoke before deallocate export",
+    )
+
+
+class RevokeExportAccessRequest(BaseModel):
+    disk_ids: Optional[list[str]] = None
+    vm_id: Optional[str] = Field(default=None, description="Revoke export access on every ActiveSAS disk of this VM")
+
+    @model_validator(mode="after")
+    def one_target(self) -> "RevokeExportAccessRequest":
+        if bool(self.disk_ids) == bool(self.vm_id):
+            raise ValueError("provide disk_ids or vm_id, not both")
+        return self
+
+
+class RevokeExportAccessResult(BaseModel):
+    disk_id: str
+    name: str
+    ok: bool
+    message: str
+
+
+class RevokeExportAccessResponse(BaseModel):
+    results: list[RevokeExportAccessResult]
 
 
 # --------------------------------------------------------------------------- #

@@ -11,6 +11,7 @@ import pytest
 from helper_app.guest import network
 from helper_app.guest.initramfs import CmdResult, Skip
 from helper_app.guest.network import (
+    WAIT_ONLINE_DROPIN,
     BACKUP_SUFFIX,
     FIRSTBOOT_SCRIPT,
     FIRSTBOOT_UNIT,
@@ -208,6 +209,9 @@ def test_netplan_and_networkd(tmp_path):
     yaml = (mnt / "etc" / "netplan" / NETPLAN_FILE).read_text()
     assert 'name: "e*"' in yaml and "dhcp4: true" in yaml
     assert (mnt / "etc" / "netplan" / "00-installer-config.yaml").exists()
+    wait = mnt / "etc" / "systemd" / "system" / "systemd-networkd-wait-online.service.d" / WAIT_ONLINE_DROPIN
+    assert wait.exists() and "--any -o routable" in wait.read_text()
+    assert "systemd-networkd-wait-online boot delay fix" in detail
     assert shell.calls == []  # no SELinux on this guest
 
     mnt = guest(tmp_path / "b", os_name="openSUSE Leap 15.5", nm=False, networkd=True, selinux="")

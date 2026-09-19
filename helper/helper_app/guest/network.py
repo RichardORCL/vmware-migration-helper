@@ -15,7 +15,9 @@ real names at the guest's first boot:
 * legacy ``network-scripts`` (NetworkManager disabled): ``ifcfg-*`` files need the device name, so a
   one-shot systemd unit creates ``ifcfg-<name>`` with DHCP for every physical NIC that has none, on the
   first boot, and then disables itself.
-* netplan (Ubuntu) and systemd-networkd: a drop-in matching ``e*`` / ``Type=ether`` with DHCP.
+* netplan (Ubuntu) and systemd-networkd: a drop-in matching ``e*`` / ``Type=ether`` with DHCP, plus a persistent
+  override for ``systemd-networkd-wait-online`` (``--any -o routable``) so boot is not blocked ~120s waiting for
+  a phantom ``eth0`` when the real OCI NIC is ``enp0s5``/``ens3``.
 * ``70-persistent-net.rules`` (udev, pins ``eth0`` to the old MAC and would make the OCI NIC ``eth1``) is
   disabled.
 
@@ -142,6 +144,16 @@ Type=ether
 DHCP=yes
 """
 
+# Netplan generates /run/.../systemd-networkd-wait-online.service.d/10-netplan.conf that often lists eth0 plus
+# the real NIC; when eth0 does not exist, wait-online hits the 120s timeout and login on the serial console is delayed.
+WAIT_ONLINE_DROPIN = "99-vc-oci-wait-online.conf"
+WAIT_ONLINE_TEXT = """# added by the OCI Ultimate Migration Tool
+# Do not wait for every interface netplan names (often includes a missing eth0 on Azure Ubuntu images).
+[Service]
+ExecStart=
+ExecStart=/usr/lib/systemd/systemd-networkd-wait-online --any -o routable
+"""
+
 Shell = Callable[..., CmdResult]  # session.sh(argv, timeout_s=..., ok=...)
 
 
@@ -190,6 +202,7 @@ class NetworkFixer:
             handled = True
         if has_netplan:
             self.write_netplan()
+            self.write_networkd_wait_online_override()
             handled = True
         if networkd_enabled:
             self.write_networkd()
@@ -291,6 +304,18 @@ class NetworkFixer:
         self.written.append(self.rel(path))
         self.note(f"systemd-networkd: wrote {NETWORKD_FILE} (Match Type=ether, DHCP=yes)")
         self.changes.append("systemd-networkd DHCP drop-in for any Ethernet interface added")
+
+    def write_networkd_wait_online_override(self) -> None:
+        dropin_dir = self.mnt / "etc" / "systemd" / "system" / "systemd-networkd-wait-online.service.d"
+        path = dropin_dir / WAIT_ONLINE_DROPIN
+        if path.exists() and WAIT_ONLINE_TEXT.strip() in path.read_text():
+            self.note("systemd-networkd-wait-online override already present")
+            return
+        dropin_dir.mkdir(parents=True, exist_ok=True)
+        path.write_text(WAIT_ONLINE_TEXT)
+        self.written.append(self.rel(path))
+        self.note(f"systemd-networkd-wait-online: wrote {WAIT_ONLINE_DROPIN} (--any -o routable)")
+        self.changes.append("systemd-networkd-wait-online boot delay fix (--any routable)")
 
     # ----------------------------------------------------------------- selinux
     def label_for_selinux(self) -> None:

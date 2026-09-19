@@ -211,6 +211,20 @@ def test_azure_migration_snapshot_mode_keeps_vm_running(env):
     assert job["phase"] == "COMPLETED" and ol.ops == ["deallocate"] and job["power_off_result"] == "deallocated"
 
 
+def test_azure_cleanup_disabled_skips_fixup(env):
+    c = env.client
+    azure_login(c)
+    vm = fake_vm(env, "lin-01")
+    r = c.post("/api/jobs/azure", json={"vm_id": vm.id, "target": target(azure_cleanup=False),
+                                        "capture_mode": "snapshot"})
+    assert r.status_code == 202, r.text
+    job = wait_phase(c, r.json()["id"], "COMPLETED", "FAILED")
+    assert job["phase"] == "COMPLETED", job
+    assert job["azure_fixup"]["status"] == "skipped" and "disabled" in job["azure_fixup"]["detail"]
+    assert env.fixups and env.fixups[-1][1:] == (True, True, False)
+    assert "azure fixup=skipped (enabled=False)" in c.get(f"/api/jobs/{job['id']}/diagnostics").text
+
+
 def test_azure_job_validation(env):
     c = env.client
     azure_login(c)

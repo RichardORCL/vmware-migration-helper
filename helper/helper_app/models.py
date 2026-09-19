@@ -233,6 +233,13 @@ class OciTarget(BaseModel):
                     "netplan/networkd drop-ins; MAC-pinned udev naming rules are disabled. Skipped for Windows; "
                     "never fails the migration",
     )
+    azure_cleanup: bool = Field(
+        default=True,
+        description="Azure Linux guests: after the copy, remove Azure cloud-init and waagent hooks, comment out "
+                    "the Azure CD-ROM (sr0) in fstab, enable serial console on ttyS0, and prefer the OCI cloud-init "
+                    "datasource so the guest boots cleanly in OCI. Ignored for VMware jobs and Windows; never fails "
+                    "the migration",
+    )
 
     @field_validator("private_ip", mode="before")
     @classmethod

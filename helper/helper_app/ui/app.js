@@ -388,8 +388,8 @@
         "The instance may stop in the dracut emergency shell; rebuild the initramfs with virtio drivers inside the guest (dracut -f --add-drivers \"virtio_blk virtio_scsi virtio_pci virtio_net\") and migrate again, or check Copy diagnostics for the details.")]] : []),
       ...(job.network_fixup ? [["Network fix-up", fixupEl(job.network_fixup,
         "The instance may come up without network. Open the Remote console, log in and configure DHCP on the new interface (NetworkManager: nmcli con add type ethernet con-name oci ifname \"*\" ipv4.method auto; network-scripts: create /etc/sysconfig/network-scripts/ifcfg-<nic> with BOOTPROTO=dhcp ONBOOT=yes), or check Copy diagnostics for the details.")]] : []),
-      ...(job.azure_fixup ? [["Azure guest fix-up", fixupEl(job.azure_fixup,
-        "First boot may hang ~90s on Azure metadata or show /dev/sr0 errors. Remove Azure cloud-init datasource files, disable walinuxagent, comment sr0 in fstab, enable serial-getty@ttyS0, and prefer the OCI cloud-init datasource — or re-migrate with an updated migration tool.")]] : []),
+      ...(job.azure_fixup ? [["Azure cleanup", fixupEl(job.azure_fixup,
+        "First boot may hang ~90s on Azure metadata or show /dev/sr0 errors. Enable Azure cleanup under Advanced: firmware and device model on the export page, or apply the same steps manually (cloud-init, waagent, fstab sr0, serial-getty@ttyS0).")]] : []),
       ["Disk download", `Azure page blobs (allocated ranges only)${job.target.volume_vpus_per_gb ? `, ${job.target.volume_vpus_per_gb} VPU/GB volumes` : ""}`],
       ["Started by", `${job.created_by || "-"} at ${new Date(job.created_at).toLocaleString()}`],
     ] : [
@@ -889,6 +889,10 @@
     for (const id of ["rebuild-initramfs-label", "rebuild-initramfs-hint", "fix-network-label", "fix-network-hint"]) {
       document.getElementById(id).hidden = isWin;  // Linux-only post-copy fix-ups
     }
+    const showAzureCleanup = azure && !isWin;
+    for (const id of ["azure-cleanup-label", "azure-cleanup-hint"]) {
+      document.getElementById(id).hidden = !showAzureCleanup;
+    }
     if (isWin && isWindowsClient(vm)) {
       // OCI has no licenses for client editions; the API refuses OCI_PROVIDED for them
       const ociLic = form.querySelector('input[name="windows_license_type"][value="OCI_PROVIDED"]');
@@ -934,6 +938,7 @@
         pipelined_decode: !azure && fd.get("pipelined_decode") === "on",
         rebuild_initramfs: !isWin && fd.get("rebuild_initramfs") === "on",
         fix_network: !isWin && fd.get("fix_network") === "on",
+        azure_cleanup: azure && !isWin && fd.get("azure_cleanup") === "on",
         volume_vpus_per_gb: Number(fd.get("volume_vpus_per_gb") || 10),
       };
       // a running VM is shut down (vSphere) or deallocated (Azure, deallocate mode) by the migration: make the

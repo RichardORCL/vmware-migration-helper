@@ -563,13 +563,13 @@ class MigrationRunner:
 
     def _guest_fixup(self, job: Job) -> None:
         want_initramfs, want_network = job.target.rebuild_initramfs, job.target.fix_network
-        want_azure = job.kind == "azure"
+        want_azure = job.kind == "azure" and job.target.azure_cleanup
         disabled = GuestFixup(status="skipped", detail="disabled for this job")
 
         def all_steps(fx: GuestFixup) -> None:
             job.guest_fixup = fx if want_initramfs else disabled
             job.network_fixup = fx if want_network else disabled
-            job.azure_fixup = fx if want_azure else None
+            job.azure_fixup = (fx if want_azure else disabled) if job.kind == "azure" else None
 
         if job.vm.is_windows:
             job.guest_fixup = GuestFixup(status="skipped", detail="Windows guest (VirtIO drivers are installed inside "
@@ -580,7 +580,6 @@ class MigrationRunner:
             return
         if not want_initramfs and not want_network and not want_azure:
             all_steps(disabled)
-            job.azure_fixup = None
             return
         boot = next((d for d in job.disks if d.is_boot), job.disks[0])
         if not boot.device:

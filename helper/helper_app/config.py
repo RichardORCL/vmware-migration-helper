@@ -8,6 +8,8 @@ from typing import Literal, Optional
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from helper_app.branding import SEED_BUCKET_DEFAULT
+
 PACKAGE_DIR = Path(__file__).resolve().parent
 
 
@@ -70,7 +72,7 @@ class Settings(BaseSettings):
     tenancy_id: str = ""
 
     # Seed image handling
-    seed_bucket: str = "vc-oci-seed-images"
+    seed_bucket: str = SEED_BUCKET_DEFAULT
     seed_compartment_id: str = ""  # defaults to the helper compartment
     seed_disk_size_gb: int = 1
 

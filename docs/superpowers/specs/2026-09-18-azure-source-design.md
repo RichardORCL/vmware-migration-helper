@@ -114,7 +114,7 @@ flowchart LR
 - `MigrationRunner.submit_azure` / `_run_azure`: `prepare` (unchanged) -> deallocate or snapshot
   -> `AzureDiskExport` -> per disk `_copy_azure_disk` (retry/progress/cancel like `_export_disk`)
   -> guest fix-up -> `finalize` (unchanged). Cleanup also revokes SAS and deletes snapshots.
-- Instance tags: `vc-oci-source-azure = <subscription>/<resource group>`.
+- Instance tags: `oci-umt-source-azure = <subscription>/<resource group>`.
 - Settings: `HELPER_AZURE_SAS_DURATION_S` (86400), `HELPER_AZURE_RANGE_WORKERS` (4),
   `HELPER_AZURE_RANGE_CHUNK_BYTES` (8 MiB), `HELPER_AZURE_DEALLOCATE_TIMEOUT_S` (900),
   `HELPER_AZURE_SNAPSHOT_TIMEOUT_S` (900).

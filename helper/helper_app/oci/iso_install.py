@@ -18,6 +18,19 @@ import re
 import uuid
 from typing import Any, Callable
 
+from helper_app.branding import (
+    ISO_DISPLAY_PREFIX,
+    ISO_ETAG_TAG,
+    ISO_SOURCE_TAG,
+    ISO_TAG,
+    TAG_FIRMWARE,
+    TAG_JOB,
+    TAG_LAUNCH_MODE,
+    TAG_OS,
+    TAG_SECURE_BOOT,
+    TAG_SOURCE_DETAILS,
+    TAG_SOURCE_ISO,
+)
 from helper_app.config import Settings
 from helper_app.models import (
     BootVolumeType,
@@ -44,9 +57,6 @@ from helper_app.oci.mapping import WINDOWS_CLIENT_VERSIONS, is_bare_metal_shape,
 
 log = logging.getLogger(__name__)
 
-ISO_TAG = "vc-oci-iso"
-ISO_SOURCE_TAG = "vc-oci-iso-source"
-ISO_ETAG_TAG = "vc-oci-iso-etag"
 TAG_VALUE_MAX = 256
 
 STEP_ISO_IMAGE = "iso_image"
@@ -89,10 +99,10 @@ def iso_image_tags(iso: IsoSpec, lo: LaunchOptionsSpec) -> dict[str, str]:
         ISO_TAG: "true",
         ISO_SOURCE_TAG: iso.key[-TAG_VALUE_MAX:],
         ISO_ETAG_TAG: (iso.etag or "-")[:TAG_VALUE_MAX],
-        "vc-oci-firmware": lo.firmware,
-        "vc-oci-secure-boot": "true" if lo.secure_boot else "false",
-        "vc-oci-launch-mode": import_launch_mode(lo),
-        "vc-oci-os": _slug(f"{iso.operating_system}-{iso.operating_system_version}"),
+        TAG_FIRMWARE: lo.firmware,
+        TAG_SECURE_BOOT: "true" if lo.secure_boot else "false",
+        TAG_LAUNCH_MODE: import_launch_mode(lo),
+        TAG_OS: _slug(f"{iso.operating_system}-{iso.operating_system_version}"),
     }
 
 
@@ -102,7 +112,7 @@ def _slug(text: str) -> str:
 
 def _display_name(iso: IsoSpec, lo: LaunchOptionsSpec) -> str:
     base = _slug(re.sub(r"\.iso$", "", iso.object_name.rsplit("/", 1)[-1], flags=re.I))[:40]
-    return f"vc-oci-iso-{base}-{lo.firmware.lower()}-{import_launch_mode(lo).lower()}-{uuid.uuid4().hex[:6]}"
+    return f"{ISO_DISPLAY_PREFIX}-{base}-{lo.firmware.lower()}-{import_launch_mode(lo).lower()}-{uuid.uuid4().hex[:6]}"
 
 
 class IsoInstaller:
@@ -369,7 +379,7 @@ def iso_source_tags(job: Job) -> dict[str, str]:
     details = (f"{iso.operating_system} {iso.operating_system_version}, {firmware}, "
                f"{iso.boot_disk_gb} GB boot volume")
     return {
-        "vc-oci-job": job.id,
-        "vc-oci-source-iso": iso.key[-TAG_VALUE_MAX:],
-        "vc-oci-source-details": details[:TAG_VALUE_MAX],
+        TAG_JOB: job.id,
+        TAG_SOURCE_ISO: iso.key[-TAG_VALUE_MAX:],
+        TAG_SOURCE_DETAILS: details[:TAG_VALUE_MAX],
     }

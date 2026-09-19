@@ -422,11 +422,11 @@ def test_disk_export_snapshot_mode_and_cleanup_on_failure(fleet):
     assert vm.power == "running"
     info = _info(vm, "snapshot")
     with AzureDiskExport(client, "job2abcdef", info, sas_duration_s=3600, snapshot_timeout_s=10, save=lambda: None) as ex:
-        assert len(info.snapshot_ids) == 2 and all(s.rsplit("/", 1)[-1].startswith("vcoci-job2abcd-") for s in info.snapshot_ids)
+        assert len(info.snapshot_ids) == 2 and all(s.rsplit("/", 1)[-1].startswith("oci-umt-job2abcd-") for s in info.snapshot_ids)
         assert set(info.sas_granted) == set(info.snapshot_ids)  # SAS on the snapshots, not the disks
         assert fleet.sas_granted == info.snapshot_ids
         snap = fleet.snapshots[info.snapshot_ids[0].lower()]
-        assert snap.body["properties"]["incremental"] is True and snap.body["tags"] == {"vc-oci-job": "job2abcdef"}
+        assert snap.body["properties"]["incremental"] is True and snap.body["tags"] == {"oci-umt-job": "job2abcdef"}
         assert client.blob_head(ex.sas_url(0)).headers["Content-Length"] == str(len(vm.os_disk.data) + 512)
     assert vm.power == "running" and vm.ops == []  # the VM was never touched
     assert info.snapshot_ids == [] and info.sas_granted == []
@@ -459,7 +459,7 @@ def test_disk_export_snapshot_mode_and_cleanup_on_failure(fleet):
 
 def test_snapshot_name_is_valid():
     name = snapshot_name("0123456789abcdef", "/subs/x/disks/my disk (os)!", 0)
-    assert name.startswith("vcoci-01234567-0-my-disk-") and len(name) <= 80
+    assert name.startswith("oci-umt-01234567-0-my-disk-") and len(name) <= 80
     assert all(c.isalnum() or c in "-_." for c in name)
     long = snapshot_name("abcdefgh" * 4, "/x/disks/" + "d" * 100, 12)
     assert len(long) <= 80

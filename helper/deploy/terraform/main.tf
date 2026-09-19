@@ -21,7 +21,7 @@ provider "oci" {
 locals {
   network_compartment = var.network_compartment_ocid != "" ? var.network_compartment_ocid : var.compartment_ocid
   policy_scope  = var.policy_scope_compartment_ocid != "" ? "compartment id ${var.policy_scope_compartment_ocid}" : "tenancy"
-  tag_namespace = "vc-oci"
+  tag_namespace = "oci-umt"
   tag_role_key  = "role"
   dynamic_group = "${var.helper_display_name}-dg"
 }
@@ -95,7 +95,7 @@ resource "oci_objectstorage_bucket" "seed" {
   namespace      = data.oci_objectstorage_namespace.ns.namespace
   name           = var.seed_bucket_name
   access_type    = "NoPublicAccess"
-  freeform_tags  = { "vc-oci" = "seed-images" }
+  freeform_tags  = { "oci-umt" = "seed-images" }
 }
 
 # ---------------------------------------------------------------------------- IAM (instance principal)
@@ -158,7 +158,7 @@ resource "oci_identity_policy" "helper" {
 }
 
 # IAM objects are created in the home region and replicated asynchronously. Launching the instance
-# with the freshly created defined tag right away fails with "TagNamespace vc-oci does not exists",
+# with the freshly created defined tag right away fails with "TagNamespace oci-umt does not exists",
 # so give the replication time to reach the Compute service in the target region.
 resource "time_sleep" "iam_propagation" {
   count           = var.create_iam ? 1 : 0
@@ -199,7 +199,7 @@ resource "oci_core_instance" "helper" {
   }
 
   # The tag selects the instance into the dynamic group. When create_iam is false the namespace
-  # "vc-oci" with key "role" must already exist in the tenancy.
+  # "oci-umt" with key "role" must already exist in the tenancy.
   defined_tags = { "${local.tag_namespace}.${local.tag_role_key}" = "helper" }
 
   metadata = {

@@ -52,7 +52,7 @@ def make_job(iso: IsoSpec, target: OciTarget, job_id="iso0001") -> Job:
 @pytest.fixture
 def env(tmp_path):
     settings = Settings(device_prefix=str(tmp_path / "dev" / "oraclevd"), db_path=str(tmp_path / "jobs.db"),
-                        seed_bucket="vc-oci-seed", launch_timeout_s=5, volume_timeout_s=5,
+                        seed_bucket="oci-umt-seed", launch_timeout_s=5, volume_timeout_s=5,
                         image_import_timeout_s=5)
     fake = FakeOci(settings.device_prefix)
     fake.object_storage.add_object("isos", "images/ubuntu-24.04-live-server-amd64.iso", etag="etag-ubuntu-1")
@@ -99,11 +99,11 @@ def test_image_tags_identify_object_firmware_and_device_model():
     assert tags[ISO_TAG] == "true"
     assert tags[ISO_SOURCE_TAG] == f"{NS}/isos/images/ubuntu-24.04-live-server-amd64.iso"
     assert tags[ISO_ETAG_TAG] == "etag-ubuntu-1"
-    assert tags["vc-oci-firmware"] == "UEFI_64" and tags["vc-oci-secure-boot"] == "false"
-    assert tags["vc-oci-launch-mode"] == "PARAVIRTUALIZED" and tags["vc-oci-os"] == "ubuntu-24-04"
+    assert tags["oci-umt-firmware"] == "UEFI_64" and tags["oci-umt-secure-boot"] == "false"
+    assert tags["oci-umt-launch-mode"] == "PARAVIRTUALIZED" and tags["oci-umt-os"] == "ubuntu-24-04"
     # the same ISO with emulated devices is a different image
     emulated = iso_image_tags(iso, iso_launch_options(iso, make_target(compatibility_mode=True)))
-    assert emulated["vc-oci-launch-mode"] == "EMULATED" and emulated != tags
+    assert emulated["oci-umt-launch-mode"] == "EMULATED" and emulated != tags
     # OCI refuses tag keys with periods or spaces
     assert all("." not in k and " " not in k for k in tags)
 
@@ -132,7 +132,7 @@ def test_run_imports_iso_launches_with_blank_boot_volume_and_hands_over(env):
     assert (img.operating_system, img.operating_system_version) == ("Ubuntu", "24.04")
     assert img.compartment_id == installer.image_compartment == fake.identity.compartment_id
     assert img.freeform_tags[ISO_TAG] == "true" and img.freeform_tags[ISO_SOURCE_TAG].endswith("amd64.iso")
-    assert img.display_name.startswith("vc-oci-iso-ubuntu-24-04-live-server-amd64-uefi_64-paravirtualized-")
+    assert img.display_name.startswith("oci-umt-iso-ubuntu-24-04-live-server-amd64-uefi_64-paravirtualized-")
     schemas = [s for s in fake.compute.capability_schemas if s.image_id == job.iso_image_id]
     assert len(schemas) == 1
     assert schemas[0].schema_data["Compute.Firmware"].default_value == "UEFI_64"
@@ -151,10 +151,10 @@ def test_run_imports_iso_launches_with_blank_boot_volume_and_hands_over(env):
     assert (d.launch_options.firmware, d.launch_options.boot_volume_type,
             d.launch_options.network_type) == ("UEFI_64", "PARAVIRTUALIZED", "PARAVIRTUALIZED")
     assert d.licensing_configs is None and getattr(d, "platform_config", None) is None
-    assert d.freeform_tags["vc-oci-job"] == job.id
-    assert d.freeform_tags["vc-oci-source-iso"] == f"{NS}/isos/images/ubuntu-24.04-live-server-amd64.iso"
-    assert "80 GB boot volume" in d.freeform_tags["vc-oci-source-details"]
-    assert "UEFI" in d.freeform_tags["vc-oci-source-details"]
+    assert d.freeform_tags["oci-umt-job"] == job.id
+    assert d.freeform_tags["oci-umt-source-iso"] == f"{NS}/isos/images/ubuntu-24.04-live-server-amd64.iso"
+    assert "80 GB boot volume" in d.freeform_tags["oci-umt-source-details"]
+    assert "UEFI" in d.freeform_tags["oci-umt-source-details"]
     inst = fake.compute.instances[job.instance_id]
     assert inst.lifecycle_state == "RUNNING" and job.instance_display_name == "ubuntu-from-iso"
     bv = [b for b in fake.blockstorage.boot_volumes.values() if b.image_id == job.iso_image_id]
@@ -295,7 +295,7 @@ def test_run_windows_iso_defaults_to_emulated_devices_licensing_and_client_editi
     # Secure Boot -> shielded instance (VM shapes: Secure Boot + Measured Boot + TPM as a set)
     assert d.platform_config.is_secure_boot_enabled and d.platform_config.is_measured_boot_enabled
     assert d.platform_config.is_trusted_platform_module_enabled
-    assert "UEFI Secure Boot" in d.freeform_tags["vc-oci-source-details"]
+    assert "UEFI Secure Boot" in d.freeform_tags["oci-umt-source-details"]
     assert job.phase == JobPhase.INSTALLING
 
 
@@ -402,13 +402,13 @@ def test_cleanup_images_deletes_only_iso_images(env):
     # a seed image in the same compartment must survive
     import oci.core.models as M
 
-    fake.object_storage.add_bucket("vc-oci-seed")
-    fake.object_storage.put_object(NS, "vc-oci-seed", "seed.vmdk", b"KDMV")
+    fake.object_storage.add_bucket("oci-umt-seed")
+    fake.object_storage.put_object(NS, "oci-umt-seed", "seed.vmdk", b"KDMV")
     seed = fake.compute.create_image(M.CreateImageDetails(
-        compartment_id=installer.image_compartment, display_name="vc-oci-seed", launch_mode="PARAVIRTUALIZED",
-        freeform_tags={"vc-oci-seed": "true"},
+        compartment_id=installer.image_compartment, display_name="oci-umt-seed", launch_mode="PARAVIRTUALIZED",
+        freeform_tags={"oci-umt-seed": "true"},
         image_source_details=M.ImageSourceViaObjectStorageTupleDetails(
-            source_type="objectStorageTuple", namespace_name=NS, bucket_name="vc-oci-seed", object_name="seed.vmdk",
+            source_type="objectStorageTuple", namespace_name=NS, bucket_name="oci-umt-seed", object_name="seed.vmdk",
             source_image_type="VMDK"))).data
     fake.compute.get_image(seed.id)  # settle the import
     deleted = installer.cleanup_images()

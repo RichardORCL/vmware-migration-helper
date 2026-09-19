@@ -19,9 +19,11 @@ from typing import Any, Optional
 
 from helper_app.oci.clients import OciClients, OciError
 
-TAG_KEY = "vc-oci"
-TAG_VALUE = "console"
-TAG_JOB_KEY = "vc-oci-job"
+from helper_app.branding import TAG_CONSOLE, TAG_CONSOLE_VALUE, TAG_JOB
+
+TAG_KEY = TAG_CONSOLE
+TAG_VALUE = TAG_CONSOLE_VALUE
+TAG_JOB_KEY = TAG_JOB
 
 _PROXY_RE = re.compile(r"(?P<user>ocid1\.instanceconsoleconnection\.[\w.-]+)@(?P<host>[\w.-]+)")
 _PROXY_PORT_RE = re.compile(r"-p\s+(?P<port>\d+)")

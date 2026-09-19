@@ -11,9 +11,10 @@ import os
 from pathlib import Path
 from typing import Callable, Optional
 
+from helper_app.branding import PREFIX
 from helper_app.guest.initramfs import Skip
 
-CLOUD_CFG_DROPIN = "99-vc-oci-after-azure.cfg"
+CLOUD_CFG_DROPIN = f"99-{PREFIX}-after-azure.cfg"
 CLOUD_CFG_TEXT = """# added by the OCI Ultimate Migration Tool after migration from Azure
 # Prefer OCI metadata; do not wait on the Azure instance metadata service.
 datasource_list: [ Oracle, OracleCloud, NoCloud, ConfigDrive, None ]
@@ -65,7 +66,7 @@ class AzureCloudFixer:
             if stripped and not stripped.startswith("#"):
                 low = stripped.lower()
                 if "sr0" in low or "/dev/sr" in low or ("cdrom" in low and "iso9660" in low):
-                    out.append(f"# vc-oci: disabled after Azure migration — {line}")
+                    out.append(f"# {PREFIX}: disabled after Azure migration — {line}")
                     changed = True
                     continue
             out.append(line)

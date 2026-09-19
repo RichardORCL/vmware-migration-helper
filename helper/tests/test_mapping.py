@@ -166,9 +166,9 @@ def test_volume_size_gb():
 
 def test_seed_tags():
     tags = m.seed_image_tags(m.map_guest_os("windows2019srvNext_64Guest"), "UEFI_64")
-    assert tags == {"vc-oci-seed": "true", "vc-oci-firmware": "UEFI_64", "vc-oci-os": "windows-server-2022-standard",
-                    "vc-oci-secure-boot": "false"}
-    assert m.seed_image_tags(m.map_guest_os("ubuntu64Guest"), "UEFI_64", secure_boot=True)["vc-oci-secure-boot"] == "true"
+    assert tags == {"oci-umt-seed": "true", "oci-umt-firmware": "UEFI_64", "oci-umt-os": "windows-server-2022-standard",
+                    "oci-umt-secure-boot": "false"}
+    assert m.seed_image_tags(m.map_guest_os("ubuntu64Guest"), "UEFI_64", secure_boot=True)["oci-umt-secure-boot"] == "true"
 
 
 def test_platform_config_type_by_shape_family():

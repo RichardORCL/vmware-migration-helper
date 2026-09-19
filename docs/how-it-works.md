@@ -153,7 +153,7 @@ data leaving the region.
 ### Remote console
 
 For a completed migration the job view offers *Remote console*: the migration tool creates an OCI *instance console
-connection* for the instance with a temporary RSA key (kept in memory only, tagged `vc-oci=console`), opens
+connection* for the instance with a temporary RSA key (kept in memory only, tagged `oci-umt=console`), opens
 the VNC tunnel of that connection itself (two SSH hops through the console service with asyncssh, host key
 checked against the fingerprint OCI reports) and bridges the RFB stream into a WebSocket on
 `/api/jobs/{id}/console/vnc`, where [noVNC](https://github.com/novnc/noVNC) (vendored under `ui/vendor/novnc`)
@@ -175,7 +175,7 @@ there is never more than one connection per instance.
 
 The internal names predate the product name: the code lives in `helper/` (Python package `helper_app`),
 the service is the systemd unit `vc-oci-helper` under `/opt/vc-oci` and `/var/lib/vc-oci-helper`, the
-settings use the `HELPER_` prefix, the OCI tags are `vc-oci.role=helper` / `vc-oci-seed` and the
+settings use the `HELPER_` prefix, the OCI tags are `oci-umt.role=helper` / `oci-umt-seed` and the
 Terraform variables are called `helper_*`. They are kept unchanged so that deployed migration tool VMs
 keep self-updating; wherever you read "helper" in an identifier it means the OCI Migration Tool VM.
 

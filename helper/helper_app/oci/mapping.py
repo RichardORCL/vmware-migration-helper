@@ -12,6 +12,7 @@ import re
 from dataclasses import dataclass, replace
 from typing import Optional
 
+from helper_app.branding import TAG_FIRMWARE, TAG_OS, TAG_SECURE_BOOT, TAG_SEED
 from helper_app.models import BootVolumeType, Firmware, LaunchOptionsSpec, NetworkType, OciTarget, VmSpec
 
 OCI_FIRMWARE_BIOS = "BIOS"
@@ -266,7 +267,7 @@ def volume_size_gb(capacity_bytes: int, min_volume_gb: int = 50) -> int:
     return max(min_volume_gb, math.ceil(capacity_bytes / 1024**3))
 
 
-SEED_SECURE_BOOT_TAG = "vc-oci-secure-boot"
+SEED_SECURE_BOOT_TAG = TAG_SECURE_BOOT
 # tags older seed images may lack, with the value they implicitly had (so they keep being reused)
 SEED_TAG_DEFAULTS = {SEED_SECURE_BOOT_TAG: "false"}
 
@@ -275,8 +276,8 @@ def seed_image_tags(os_meta: OsMetadata, firmware: str, secure_boot: bool = Fals
     """Identity of a seed image.  Secure Boot is part of it: the image's capability schema must declare
     ``Compute.SecureBoot`` for OCI to accept a shielded launch from it."""
     return {
-        "vc-oci-seed": "true",
-        "vc-oci-firmware": firmware,
-        "vc-oci-os": os_meta.slug,
+        TAG_SEED: "true",
+        TAG_FIRMWARE: firmware,
+        TAG_OS: os_meta.slug,
         SEED_SECURE_BOOT_TAG: "true" if secure_boot else "false",
     }

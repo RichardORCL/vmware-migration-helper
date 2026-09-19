@@ -33,7 +33,7 @@ def test_azure_cloud_fixer_adjusts_guest(tmp_path):
     assert not (root / "etc/cloud/cloud.cfg.d/90-azure.cfg").exists()
     assert (root / "etc/cloud/cloud.cfg.d" / CLOUD_CFG_DROPIN).exists()
     fstab = (root / "etc/fstab").read_text()
-    assert "sr0" in fstab and fstab.strip().splitlines()[1].startswith("# vc-oci")
+    assert "sr0" in fstab and fstab.strip().splitlines()[1].startswith("# oci-umt")
     assert not (root / "etc/systemd/system/multi-user.target.wants/walinuxagent.service").exists()
     serial = root / "etc/systemd/system/getty.target.wants/serial-getty@ttyS0.service"
     assert serial.is_symlink()

@@ -79,12 +79,12 @@ lowering it never interrupts a running one), the rest stay **QUEUED** ("Waiting 
      (firmware fixed; all boot volume and NIC types allowed), reuse by freeform tags on later jobs;
    - `LaunchInstance` from the seed image with explicit `launchOptions`, `shapeConfig`, optional
      `licensingConfigs` (Windows) and a boot volume sized for disk 0. The instance carries
-     provenance freeform tags: `vc-oci-job`, `vc-oci-source-vcenter` (the vCenter the job was
-     started against, `host[:port]`), `vc-oci-source-esxi-host`, `vc-oci-source-vm`,
-     `vc-oci-source-moid` and `vc-oci-source-vm-details` (sizing: vCPU, RAM, disk count and
+     provenance freeform tags: `oci-umt-job`, `oci-umt-source-vcenter` (the vCenter the job was
+     started against, `host[:port]`), `oci-umt-source-esxi-host`, `oci-umt-source-vm`,
+     `oci-umt-source-moid` and `oci-umt-source-vm-details` (sizing: vCPU, RAM, disk count and
      capacities, NICs, guest OS, firmware/Secure Boot); Azure jobs carry
-     `vc-oci-source-azure = <subscription>/<resource group>` instead of the vCenter tags and the Azure
-     resource ID as `vc-oci-source-moid`;
+     `oci-umt-source-azure = <subscription>/<resource group>` instead of the vCenter tags and the Azure
+     resource ID as `oci-umt-source-moid`;
    - create one block volume per additional disk and attach them to the target **while it is
      still running** from the seed image, as read/write *shareable* attachments (OCI only attaches
      data volumes to a `RUNNING` instance, and the target has to be stopped for the boot volume
@@ -208,8 +208,8 @@ i.e. as a shielded instance. On VM shapes (and for Windows on bare metal) `isMea
 `isTrustedPlatformModuleEnabled` are set as well, because OCI rejects Secure Boot on its own there
 ("... Secure Boot, Measured Boot, and the Trusted Platform Module must be enabled"). Shapes without such
 a platform config (Ampere) are refused before any resource is created. The seed's boot volume is replaced by the copied disk before the instance ever
-boots. Seed images are tagged `vc-oci-seed=true` (plus `vc-oci-firmware`, `vc-oci-os`,
-`vc-oci-secure-boot`; seeds from before the Secure Boot tag count as `false`) and can be removed with
+boots. Seed images are tagged `oci-umt-seed=true` (plus `oci-umt-firmware`, `oci-umt-os`,
+`oci-umt-secure-boot`; seeds from before the Secure Boot tag count as `false`) and can be removed with
 `DELETE /api/seed-images`.
 
 ## Windows licensing

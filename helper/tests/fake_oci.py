@@ -542,7 +542,7 @@ class FakeObjectStorage:
     NAMESPACE = "testnamespace"
 
     def __init__(self, bucket_exists=False, compartment_id: str = "ocid1.compartment.oc1..helper"):
-        self.buckets: set[str] = {"vc-oci-seed"} if bucket_exists else set()
+        self.buckets: set[str] = {"oci-umt-seed"} if bucket_exists else set()
         self.bucket_compartments: dict[str, str] = {}  # bucket -> compartment (default: the helper's)
         self.default_compartment = compartment_id
         self.objects: dict[str, bytes] = {}  # seed placeholders (seed bucket): name -> body
@@ -598,7 +598,7 @@ class FakeObjectStorage:
         if bucket_name not in self.buckets:
             raise service_error(404, "BucketNotFound", f"bucket {bucket_name} not found", "ListObjects")
         names = set(self.iso_objects.get(bucket_name, {}))
-        if bucket_name == "vc-oci-seed":
+        if bucket_name == "oci-umt-seed":
             names |= set(self.objects)
         summaries = []
         for name in sorted(names):

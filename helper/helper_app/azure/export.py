@@ -13,6 +13,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 
+from helper_app.branding import PREFIX, TAG_JOB
 from helper_app.azure.client import AzureClient, AzureError
 from helper_app.models import AzureSourceInfo
 
@@ -22,9 +23,9 @@ _SNAPSHOT_NAME = re.compile(r"[^A-Za-z0-9_.\-]")
 
 
 def snapshot_name(job_id: str, disk_id: str, index: int) -> str:
-    """``vcoci-<job>-<n>-<disk name>``, within Azure's 80 character limit and character set."""
+    """``oci-umt-<job>-<n>-<disk name>``, within Azure's 80 character limit and character set."""
     base = disk_id.rsplit("/", 1)[-1]
-    name = f"vcoci-{job_id[:8]}-{index}-{base}"
+    name = f"{PREFIX}-{job_id[:8]}-{index}-{base}"
     name = _SNAPSHOT_NAME.sub("-", name)
     return name[:80].rstrip("-.")
 
@@ -42,7 +43,7 @@ class AzureDiskExport:
         self.snapshot_timeout_s = snapshot_timeout_s
         self._save = save
         self._check = check_cancel or (lambda: None)
-        self.tags = tags or {"vc-oci-job": job_id}
+        self.tags = tags or {TAG_JOB: job_id}
         self._sas: dict[int, str] = {}  # disk index -> SAS URL
         self._sources: dict[int, str] = {}  # disk index -> resource granted (disk or snapshot)
 

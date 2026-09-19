@@ -56,7 +56,7 @@ def make_job(vm: VmSpec, target: OciTarget) -> Job:
 @pytest.fixture
 def env(tmp_path):
     settings = Settings(device_prefix=str(tmp_path / "dev" / "oraclevd"), db_path=str(tmp_path / "jobs.db"),
-                        seed_bucket="vc-oci-seed", launch_timeout_s=5, volume_timeout_s=5,
+                        seed_bucket="oci-umt-seed", launch_timeout_s=5, volume_timeout_s=5,
                         image_import_timeout_s=5)
     fake = FakeOci(settings.device_prefix)
     clients = fake.clients()
@@ -84,9 +84,9 @@ def test_prepare_linux_two_disks(env):
     assert img.launch_mode == "PARAVIRTUALIZED"
     assert img.source_image_type == "VMDK"
     assert (img.operating_system, img.operating_system_version) == ("Oracle Linux", "8")
-    assert img.freeform_tags["vc-oci-firmware"] == "UEFI_64"
+    assert img.freeform_tags["oci-umt-firmware"] == "UEFI_64"
     assert fake.object_storage.deleted == [img.object_name]  # placeholder object removed
-    assert "vc-oci-seed" in fake.object_storage.buckets
+    assert "oci-umt-seed" in fake.object_storage.buckets
     schema = fake.compute.capability_schemas[0].schema_data
     assert schema["Compute.Firmware"].values == ["UEFI_64"]
     assert schema["Compute.LaunchMode"].default_value == "PARAVIRTUALIZED"
@@ -110,9 +110,9 @@ def test_prepare_linux_two_disks(env):
     assert schema["Compute.SecureBoot"].default_value is False
     # provenance tags: job, source vCenter, VM name/moid and its sizing
     tags = ld.freeform_tags
-    assert tags["vc-oci-job"] == job.id and tags["vc-oci-source-vm"] == "app-server-01"
-    assert tags["vc-oci-source-moid"] == "vm-42" and tags["vc-oci-source-vcenter"] == "vc.test:4443"
-    assert tags["vc-oci-source-vm-details"] == ("4 vCPU, 16 GB RAM, 2 disk(s) 140 GB [40 GB, 100 GB], 1 NIC(s), "
+    assert tags["oci-umt-job"] == job.id and tags["oci-umt-source-vm"] == "app-server-01"
+    assert tags["oci-umt-source-moid"] == "vm-42" and tags["oci-umt-source-vcenter"] == "vc.test:4443"
+    assert tags["oci-umt-source-vm-details"] == ("4 vCPU, 16 GB RAM, 2 disk(s) 140 GB [40 GB, 100 GB], 1 NIC(s), "
                                                 "Oracle Linux 8 (64-bit), UEFI")
     assert all(len(v) <= 256 for v in tags.values())
 
@@ -180,7 +180,7 @@ def test_prepare_windows_bios_licensing_and_seed_reuse(env):
     img = fake.compute.images[job.seed_image_id]
     assert img.operating_system == "Windows" and img.operating_system_version == "Server 2022 Standard"
     assert img.launch_mode == "EMULATED"  # IDE + E1000 requested
-    assert img.display_name.endswith("-emulated") and img.freeform_tags["vc-oci-launch-mode"] == "EMULATED"
+    assert img.display_name.endswith("-emulated") and img.freeform_tags["oci-umt-launch-mode"] == "EMULATED"
     # the schema's data volume defaults follow the emulated boot volume (OCI resolves them from the schema)
     schema = [s for s in fake.compute.capability_schemas if s.image_id == job.seed_image_id][-1]
     assert schema.schema_data["Storage.RemoteDataVolumeType"].default_value == "SCSI"
@@ -295,7 +295,7 @@ def test_secure_boot_source_launches_shielded_instance(env):
 
     assert job.launch_options.secure_boot is True
     img = fake.compute.images[job.seed_image_id]
-    assert img.freeform_tags["vc-oci-secure-boot"] == "true" and img.display_name.endswith("-secureboot")
+    assert img.freeform_tags["oci-umt-secure-boot"] == "true" and img.display_name.endswith("-secureboot")
     assert fake.compute.capability_schemas[-1].schema_data["Compute.SecureBoot"].default_value is True
     ld = fake.compute.launch_details[-1]
     assert isinstance(ld.platform_config, M.AmdVmLaunchInstancePlatformConfig)  # VM.Standard.E5.Flex default
@@ -364,7 +364,7 @@ def test_seed_images_without_the_secure_boot_tag_are_still_reused(env):
     store.put(job)
     prov.prepare(job)
     img = fake.compute.images[job.seed_image_id]
-    del img.freeform_tags["vc-oci-secure-boot"]
+    del img.freeform_tags["oci-umt-secure-boot"]
 
     job2 = make_job(make_vm(), make_target())
     job2.id = "job0002"
@@ -400,8 +400,8 @@ def test_seed_import_progress_is_tracked_from_the_work_request(env):
     # 0 when the import is requested; the work request's percent while it runs (capped at 99 until the image
     # is really AVAILABLE); 100 once it is
     assert [pct for pct, _ in import_updates] == [0, 25, 50, 75, 99, 100]
-    assert import_updates[2][1] == "Importing seed image vc-oci-seed-uefi_64-oracle-linux-8: 50% (in progress)"
-    assert import_updates[-1][1].startswith("Seed image vc-oci-seed-uefi_64-oracle-linux-8 imported")
+    assert import_updates[2][1] == "Importing seed image oci-umt-seed-uefi_64-oracle-linux-8: 50% (in progress)"
+    assert import_updates[-1][1].startswith("Seed image oci-umt-seed-uefi_64-oracle-linux-8 imported")
     # the next step starts with a clean percentage, and a finished prepare has none
     assert all(pct is None for step, pct, _ in seen if step == "launch_instance")
     assert job.step_percent is None and job.seed_image_id in fake.compute.images

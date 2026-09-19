@@ -78,7 +78,7 @@ variable "ssh_public_key" {
 variable "seed_bucket_name" {
   description = "Object Storage bucket used while importing seed custom images"
   type        = string
-  default     = "vc-oci-seed-images"
+  default     = "oci-umt-seed-images"
 }
 
 variable "default_target_shape" {

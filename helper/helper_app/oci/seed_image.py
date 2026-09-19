@@ -15,6 +15,7 @@ import logging
 import uuid
 from typing import Any, Optional
 
+from helper_app.branding import SEED_DISPLAY_PREFIX, TAG_LAUNCH_MODE, TAG_SEED
 from helper_app.config import Settings
 from helper_app.disk.vmdk_stream import encode_empty_disk
 from helper_app.models import LaunchOptionsSpec
@@ -36,7 +37,7 @@ from helper_app.oci.mapping import (
 
 log = logging.getLogger(__name__)
 
-SEED_TAG = "vc-oci-seed"
+SEED_TAG = TAG_SEED
 
 __all__ = ["SEED_TAG", "ProgressCallback", "SeedImageService", "import_launch_mode"]
 
@@ -94,7 +95,7 @@ class SeedImageService:
         self._ensure_bucket(namespace, CreateBucketDetails)
 
         launch_mode = import_launch_mode(launch_options)
-        display = f"vc-oci-seed-{firmware.lower()}-{os_meta.slug}"
+        display = f"{SEED_DISPLAY_PREFIX}-{firmware.lower()}-{os_meta.slug}"
         if launch_options.secure_boot:
             display += "-secureboot"
         if launch_mode == "EMULATED":
@@ -123,7 +124,7 @@ class SeedImageService:
                 compartment_id=self.seed_compartment,
                 display_name=display,
                 launch_mode=launch_mode,
-                freeform_tags={**tags, "vc-oci-launch-mode": launch_mode},
+                freeform_tags={**tags, TAG_LAUNCH_MODE: launch_mode},
                 image_source_details=source,
             )
             resp = self.c.compute.create_image(details)

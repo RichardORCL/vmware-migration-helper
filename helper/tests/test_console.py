@@ -132,7 +132,7 @@ def test_console_open_bridge_close(cenv):
     assert st["created_by"] == "admin@vsphere.local" and st["viewers"] == 0
     conns = [x for x in fake.compute.console_connections.values() if x.instance_id == iid]
     assert len(conns) == 1 and conns[0].id == st["connection_id"] and conns[0].lifecycle_state == "ACTIVE"
-    assert conns[0].freeform_tags == {"vc-oci": "console", "vc-oci-job": jid}
+    assert conns[0].freeform_tags == {"oci-umt": "console", "oci-umt-job": jid}
     # a second open is idempotent: no second connection, no 409 from OCI
     assert c.post(f"/api/jobs/{jid}/console").json()["connection_id"] == st["connection_id"]
 
@@ -192,7 +192,7 @@ def test_console_available_while_iso_installation_runs(cenv):
     st = wait_console(c, jid, "ACTIVE", "FAILED")
     assert st["state"] == "ACTIVE" and st["created_by"] == "anonymous"
     conns = [x for x in fake.compute.console_connections.values() if x.instance_id == iid]
-    assert len(conns) == 1 and conns[0].freeform_tags["vc-oci-job"] == jid
+    assert len(conns) == 1 and conns[0].freeform_tags["oci-umt-job"] == jid
     with c.websocket_connect(f"/api/jobs/{jid}/console/vnc", subprotocols=["binary"]) as ws:
         ws.send_bytes(b"RFB 003.008\n")
         assert ws.receive_bytes() == b"echo:RFB 003.008\n"
@@ -262,7 +262,7 @@ def test_console_replaces_helper_leftover_silently(cenv):
     job = completed_job(cenv)
     jid, iid = job["id"], job["instance_id"]
     # a previous helper run created one; its key is gone with the process
-    old = preexisting_connection(fake, iid, {"vc-oci": "console", "vc-oci-job": "older-run"})
+    old = preexisting_connection(fake, iid, {"oci-umt": "console", "oci-umt-job": "older-run"})
     r = c.post(f"/api/jobs/{jid}/console")
     assert r.status_code == 202, r.text
     st = wait_console(c, jid, "ACTIVE", "FAILED")
@@ -385,7 +385,7 @@ def test_instance_console_open_bridge_close(cenv):
     assert st["state"] == "ACTIVE", st
     assert st["instance_id"] == iid and st["job_id"] is None and st["created_by"] == "anonymous"
     conn = fake.compute.console_connections[st["connection_id"]]
-    assert conn.instance_id == iid and conn.freeform_tags == {"vc-oci": "console"}
+    assert conn.instance_id == iid and conn.freeform_tags == {"oci-umt": "console"}
     assert cenv.app.state.consoles.sessions[iid].compartment_id == "ocid1.compartment.oc1..prod"
     assert c.post(f"/api/instances/{iid}/console").json()["connection_id"] == st["connection_id"]  # idempotent
 

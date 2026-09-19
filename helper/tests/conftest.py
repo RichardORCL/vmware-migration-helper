@@ -13,7 +13,7 @@ if str(ROOT) not in sys.path:
 for var in ("HELPER_INSTANCE_ID", "HELPER_COMPARTMENT_ID", "HELPER_AVAILABILITY_DOMAIN", "HELPER_REGION",
             "HELPER_TENANCY_ID"):
     os.environ.pop(var, None)
-os.environ.setdefault("HELPER_SEED_BUCKET", "vc-oci-seed")
+os.environ.setdefault("HELPER_SEED_BUCKET", "oci-umt-seed")
 os.environ.setdefault("HELPER_VCENTER_HOST", "vc.test")
 
 

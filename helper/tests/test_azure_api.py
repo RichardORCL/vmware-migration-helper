@@ -161,9 +161,9 @@ def test_azure_migration_deallocate_mode(env):
     assert (img.operating_system, img.operating_system_version) == ("Ubuntu", "22.04")
     assert job["launch_options"]["firmware"] == "UEFI_64"
     tags = fake.compute.launch_details[-1].freeform_tags
-    assert tags["vc-oci-source-azure"] == f"{SUB}/rg-prod" and "vc-oci-source-vcenter" not in tags
-    assert tags["vc-oci-source-vm"] == "lin-01" and tags["vc-oci-source-moid"] == vid.lower()
-    assert tags["vc-oci-source-vm-details"].startswith("2 vCPU, 8 GB RAM, 2 disk(s)")
+    assert tags["oci-umt-source-azure"] == f"{SUB}/rg-prod" and "oci-umt-source-vcenter" not in tags
+    assert tags["oci-umt-source-vm"] == "lin-01" and tags["oci-umt-source-moid"] == vid.lower()
+    assert tags["oci-umt-source-vm-details"].startswith("2 vCPU, 8 GB RAM, 2 disk(s)")
     assert fake.compute.instances[job["instance_id"]].lifecycle_state == "RUNNING"
     # job list by source, diagnostics
     assert [j["id"] for j in c.get("/api/jobs", params={"vm_moid": vid.lower()}).json()] == [job["id"]]

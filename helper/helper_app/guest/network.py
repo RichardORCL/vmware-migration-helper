@@ -43,11 +43,11 @@ from helper_app.guest.initramfs import CmdResult, Skip
 log = logging.getLogger(__name__)
 
 NM_KEYFILE = "oci-dhcp.nmconnection"
-FIRSTBOOT_UNIT = "vcoci-network-fixup.service"
-FIRSTBOOT_SCRIPT = "usr/local/sbin/vcoci-network-fixup.sh"
+FIRSTBOOT_UNIT = "oci-umt-network-fixup.service"
+FIRSTBOOT_SCRIPT = "usr/local/sbin/oci-umt-network-fixup.sh"
 NETPLAN_FILE = "90-oci-dhcp.yaml"
 NETWORKD_FILE = "90-oci-dhcp.network"
-BACKUP_SUFFIX = ".vcoci-bak"
+BACKUP_SUFFIX = ".oci-umt-bak"
 
 # SELinux fallback labels (targeted policy) when the guest's setfiles cannot be used
 SELINUX_CONTEXTS = (
@@ -103,7 +103,7 @@ for dev in /sys/class/net/*; do
   } > "$cfg"
   chmod 644 "$cfg"
   command -v restorecon >/dev/null 2>&1 && restorecon "$cfg"
-  logger -t vcoci-network-fixup "created $cfg (DHCP)" 2>/dev/null || true
+  logger -t oci-umt-network-fixup "created $cfg (DHCP)" 2>/dev/null || true
 done
 systemctl disable {unit} >/dev/null 2>&1 || true
 exit 0
@@ -146,7 +146,7 @@ DHCP=yes
 
 # Netplan generates /run/.../systemd-networkd-wait-online.service.d/10-netplan.conf that often lists eth0 plus
 # the real NIC; when eth0 does not exist, wait-online hits the 120s timeout and login on the serial console is delayed.
-WAIT_ONLINE_DROPIN = "99-vc-oci-wait-online.conf"
+WAIT_ONLINE_DROPIN = "99-oci-umt-wait-online.conf"
 WAIT_ONLINE_TEXT = """# added by the OCI Ultimate Migration Tool
 # Do not wait for every interface netplan names (often includes a missing eth0 on Azure Ubuntu images).
 [Service]

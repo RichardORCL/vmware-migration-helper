@@ -19,6 +19,17 @@ import logging
 import threading
 from typing import Any, Callable
 
+from helper_app.branding import (
+    PREFIX,
+    TAG_DISK_INDEX,
+    TAG_JOB,
+    TAG_SOURCE_AZURE,
+    TAG_SOURCE_ESXI_HOST,
+    TAG_SOURCE_MOID,
+    TAG_SOURCE_VCENTER,
+    TAG_SOURCE_VM,
+    TAG_SOURCE_VM_DETAILS,
+)
 from helper_app.config import Settings
 from helper_app.disk.devices import DeviceScanner, scan_block_devices, wait_for_new_device
 from helper_app.models import DiskState, DiskStatus, Job, JobPhase, WindowsLicenseType
@@ -203,7 +214,7 @@ class Provisioner:
                     display_name=f"{job.instance_display_name or vm.name}-disk{disk.index}",
                     size_in_gbs=disk.size_gb,
                     vpus_per_gb=target.volume_vpus_per_gb,
-                    freeform_tags={"vc-oci-job": job.id, "vc-oci-disk-index": str(disk.index)},
+                    freeform_tags={TAG_JOB: job.id, TAG_DISK_INDEX: str(disk.index)},
                 )
             ).data
             disk.volume_id = vol.id
@@ -312,7 +323,7 @@ class Provisioner:
             instance_id=self.helper_id,
             volume_id=disk.volume_id,
             device=device,
-            display_name=f"vc-oci-{job.id[:8]}-disk{disk.index}",
+            display_name=f"{PREFIX}-{job.id[:8]}-disk{disk.index}",
         )
         if shareable:
             details.is_shareable = True
@@ -481,17 +492,17 @@ def source_tags(job: Job) -> dict[str, str]:
     details = (f"{vm.num_cpu} vCPU, {vm.memory_mb / 1024:g} GB RAM, {len(vm.disks)} disk(s) {_gb(total):g} GB "
                f"[{disks}], {len(vm.nics)} NIC(s), {vm.guest_full_name or vm.guest_id}, {firmware}")
     tags = {
-        "vc-oci-job": job.id,
-        "vc-oci-source-vm": vm.name[:TAG_VALUE_MAX],
-        "vc-oci-source-moid": vm.moid,
-        "vc-oci-source-vm-details": details[:TAG_VALUE_MAX],
+        TAG_JOB: job.id,
+        TAG_SOURCE_VM: vm.name[:TAG_VALUE_MAX],
+        TAG_SOURCE_MOID: vm.moid,
+        TAG_SOURCE_VM_DETAILS: details[:TAG_VALUE_MAX],
     }
     if job.vcenter_host:
-        tags["vc-oci-source-vcenter"] = job.vcenter_host[:TAG_VALUE_MAX]
+        tags[TAG_SOURCE_VCENTER] = job.vcenter_host[:TAG_VALUE_MAX]
     if vm.host_name:
-        tags["vc-oci-source-esxi-host"] = vm.host_name[:TAG_VALUE_MAX]
+        tags[TAG_SOURCE_ESXI_HOST] = vm.host_name[:TAG_VALUE_MAX]
     if job.azure is not None:
-        tags["vc-oci-source-azure"] = f"{job.azure.subscription_id}/{job.azure.resource_group}"[:TAG_VALUE_MAX]
+        tags[TAG_SOURCE_AZURE] = f"{job.azure.subscription_id}/{job.azure.resource_group}"[:TAG_VALUE_MAX]
     return tags
 
 

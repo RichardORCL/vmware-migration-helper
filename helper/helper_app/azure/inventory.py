@@ -235,11 +235,18 @@ def list_vm_summaries(session: AzureSession) -> list[VmSummary]:
     rows: list[VmSummary] = []
     for sub in session.subscriptions:
         try:
-            vms = session.client.list_vms(sub.id)
+            listed = session.client.list_vms(sub.id)
         except AzureError as exc:
             log.warning("listing VMs of subscription %s failed: %s", sub.id, exc)
             continue
-        rows.extend(vm_summary_from_azure(vm, sub.name) for vm in vms)
+        for vm in listed:
+            vm_id = str(vm.get("id") or "")
+            if vm_id:
+                try:
+                    vm = session.client.get_vm(vm_id)
+                except AzureError as exc:
+                    log.warning("instance view of %s unavailable: %s", vm_id.rsplit("/", 1)[-1], exc)
+            rows.append(vm_summary_from_azure(vm, sub.name))
     rows.sort(key=lambda r: (r.folder.lower(), r.name.lower()))
     return rows
 

@@ -256,10 +256,13 @@ class FakeAzure:
             return httpx.Response(200, json={"value": self.subscriptions})
         if m == "GET" and low.endswith("/providers/microsoft.compute/virtualmachines"):
             sub = path.split("/")[2]
+            if "$expand" in query:
+                return httpx.Response(400, json={"error": {"code": "BadRequest",
+                                                           "message": "Expand Instance View is only supported when "
+                                                           "Virtual Machine Scale Set resource filter is applied"}})
             vms = [vm.doc() for vm in self.vms.values() if vm.id.split("/")[2] == sub]
-            if "$expand" not in query:
-                for doc in vms:
-                    doc["properties"].pop("instanceView", None)
+            for doc in vms:
+                doc["properties"].pop("instanceView", None)
             return httpx.Response(200, json={"value": vms})
         if m == "GET" and "/providers/microsoft.compute/locations/" in low and low.endswith("/vmsizes"):
             return httpx.Response(200, json={"value": list(SIZES.values())})

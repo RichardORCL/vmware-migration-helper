@@ -275,10 +275,14 @@ class AzureClient:
                 for s in self.paged("/subscriptions", API_SUBSCRIPTIONS, what="list subscriptions")]
 
     def list_vms(self, subscription_id: str) -> list[dict]:
-        """All VMs of a subscription with their instance view (power state) expanded."""
+        """All VMs of a subscription (without instance view).
+
+        Azure's current compute API rejects ``$expand=instanceView`` on a subscription-wide list
+        (400: only supported with a VM scale set filter).  Call ``get_vm`` per VM when power state
+        or hypervisor generation from the instance view is needed.
+        """
         path = f"/subscriptions/{subscription_id}/providers/Microsoft.Compute/virtualMachines"
-        return list(self.paged(path, API_COMPUTE, params={"$expand": "instanceView"},
-                               what=f"list virtual machines of subscription {subscription_id}"))
+        return list(self.paged(path, API_COMPUTE, what=f"list virtual machines of subscription {subscription_id}"))
 
     def get_vm(self, vm_id: str) -> dict:
         return self.get(vm_id, API_COMPUTE, params={"$expand": "instanceView"},

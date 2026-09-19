@@ -39,6 +39,9 @@ log = logging.getLogger(__name__)
 VIRTIO_DRIVERS = "virtio virtio_pci virtio_ring virtio_blk virtio_scsi virtio_net"
 DRACUT_CONF_NAME = "oci-virtio.conf"
 ROOT_FS_TYPES = {"xfs", "ext4", "ext3", "ext2"}
+# RHEL (and similar) often place /usr (kernel modules, dracut) on its own LV; mount these from fstab
+# before deciding whether a candidate is the guest root.
+FSTAB_SPLIT_ROOT_MOUNTS = ("/usr", "/var", "/home")
 DRACUT_TIMEOUT_S = 900
 MIN_FREE_BOOT_BYTES = 150 * 1024 * 1024  # a non-hostonly initramfs is 50-90 MB
 
@@ -159,6 +162,62 @@ class _Session:
             self.sh(["umount", "-l", str(where)], ok=False)
         if where in self.mounts:
             self.mounts.remove(where)
+
+    def pop_guest_mounts(self, keep: int) -> None:
+        """Unmount guest mounts added after ``keep`` (children before the root mount)."""
+        while len(self.mounts) > keep:
+            self.umount(self.mounts[-1])
+
+    def has_kernel_modules(self) -> bool:
+        return ((self.mnt / "lib" / "modules").is_dir()
+                or (self.mnt / "usr" / "lib" / "modules").is_dir())
+
+    def iter_fstab(self):
+        fstab = self.mnt / "etc" / "fstab"
+        if not fstab.exists():
+            return
+        for line in fstab.read_text(errors="replace").splitlines():
+            parts = line.split()
+            if len(parts) < 2 or parts[0].startswith("#"):
+                continue
+            spec, mountpoint = parts[0], parts[1]
+            if mountpoint == "swap" or not mountpoint.startswith("/"):
+                continue
+            fstype = parts[2] if len(parts) > 2 else ""
+            yield spec, mountpoint, fstype
+
+    def mount_opts(self, dev: str, fstype: str, nodes: list[BlockNode]) -> list[str]:
+        xfs = fstype == "xfs" or any(n.path == dev and n.fstype == "xfs" for n in nodes)
+        return ["nouuid"] if xfs else []
+
+    def try_mount_fstab(self, mountpoint: str, nodes: list[BlockNode]) -> bool:
+        """Mount one fstab entry on this disk.  Returns True if ``mountpoint`` is mounted."""
+        where = self.mnt / mountpoint.lstrip("/")
+        if where in self.mounts:
+            return True
+        for spec, mp, fstype in self.iter_fstab():
+            if mp != mountpoint:
+                continue
+            dev = self.resolve_spec(spec, nodes)
+            if dev is None:
+                self.note(f"fstab entry for {mountpoint} ({spec}) did not resolve on this disk")
+                return False
+            self.mount(dev, where, self.mount_opts(dev, fstype, nodes))
+            self.note(f"mounted {mp} from {dev}")
+            return True
+        return False
+
+    def mount_split_root_filesystems(self, nodes: list[BlockNode]) -> None:
+        """Mount separate /usr, /var, /home volumes listed in fstab (RHEL LVM layouts)."""
+        for mp in FSTAB_SPLIT_ROOT_MOUNTS:
+            try:
+                self.try_mount_fstab(mp, nodes)
+            except Fail as exc:
+                self.note(f"cannot mount {mp} from fstab: {exc}")
+
+    def remount_guest_rw(self) -> None:
+        for where in self.mounts:
+            self.sh(["mount", "-o", "remount,rw", str(where)], ok=False)
 
     def lsblk(self) -> list[BlockNode]:
         r = self.sh(["lsblk", "-J", "-p", "-o", "NAME,TYPE,FSTYPE,UUID,LABEL,PARTUUID,PARTLABEL", self.real])
@@ -314,6 +373,7 @@ class _Session:
         # LVs first: when both exist, the plain partition is usually /boot
         candidates.sort(key=lambda n: 0 if n.type == "lvm" else 1)
         for n in candidates:
+            mount_base = len(self.mounts)
             opts = ["ro"] + (["nouuid"] if n.fstype == "xfs" else [])
             try:
                 self.mount(n.path, self.mnt, opts)
@@ -321,14 +381,16 @@ class _Session:
                 self.note(f"cannot mount {n.path}: {exc}")
                 continue
             has_fstab = (self.mnt / "etc" / "fstab").exists()
-            has_modules = (self.mnt / "lib" / "modules").is_dir() or (self.mnt / "usr" / "lib" / "modules").is_dir()
+            if has_fstab:
+                self.mount_split_root_filesystems(nodes)
+            has_modules = self.has_kernel_modules()
             if has_fstab and has_modules:
-                self.sh(["mount", "-o", "remount,rw", str(self.mnt)])
+                self.remount_guest_rw()
                 return n
             top = ", ".join(sorted(p.name for p in self.mnt.iterdir())[:12])
             self.note(f"{n.path} is not the root fs (fstab={'yes' if has_fstab else 'no'}, "
                       f"lib/modules={'yes' if has_modules else 'no'}; contains: {top or 'nothing'})")
-            self.umount(self.mnt)
+            self.pop_guest_mounts(mount_base)
         if any(n.fstype == "crypto_LUKS" for n in nodes):
             raise Skip("the guest root file system is LUKS encrypted; rebuild the initramfs inside the guest")
         if any(n.fstype == "btrfs" for n in nodes):
@@ -337,28 +399,40 @@ class _Session:
 
     def mount_boot(self, nodes: list[BlockNode]) -> None:
         """Mount a separate /boot from the guest's fstab; nothing to do when /boot lives on the root fs."""
-        fstab = (self.mnt / "etc" / "fstab").read_text(errors="replace")
-        for line in fstab.splitlines():
-            parts = line.split()
-            if len(parts) < 2 or parts[0].startswith("#") or parts[1] != "/boot":
+        if (self.mnt / "boot") in self.mounts:
+            return
+        for spec, mp, fstype in self.iter_fstab():
+            if mp != "/boot":
                 continue
-            spec, fstype = parts[0], parts[2] if len(parts) > 2 else ""
             dev = self.resolve_spec(spec, nodes)
             if dev is None:
                 raise Skip(f"/boot ({spec} in fstab) not found on the boot disk")
-            opts = ["nouuid"] if fstype == "xfs" or any(n.path == dev and n.fstype == "xfs" for n in nodes) else []
-            self.mount(dev, self.mnt / "boot", opts)
+            self.mount(dev, self.mnt / "boot", self.mount_opts(dev, fstype, nodes))
             self.note(f"/boot on {dev}")
             return
 
-    @staticmethod
-    def resolve_spec(spec: str, nodes: list[BlockNode]) -> Optional[str]:
-        """Map an fstab device spec of the *guest* onto a node of *our* disk.  Only nodes from lsblk are
-        returned: a guest ``/dev/sda1`` must never resolve to the helper's own /dev/sda1.
+    def resolve_spec(self, spec: str, nodes: list[BlockNode]) -> Optional[str]:
+        """Map a guest fstab device spec onto a block node of the copied disk attached to the helper."""
+        dev = self._resolve_spec_from_nodes(spec, nodes)
+        if dev:
+            return dev
+        # RHEL anaconda often writes /dev/disk/by-id/dm-name-vg-lv or dm-uuid-LVM-...; after vgchange the
+        # same symlinks exist on the helper and point at the guest logical volumes.
+        m = re.match(r"^/dev/disk/by-id/dm-name-(.+)$", spec)
+        if m:
+            return next((n.path for n in nodes if n.type == "lvm" and Path(n.path).name == m.group(1)), None)
+        if spec.startswith(("/dev/disk/by-id/", "/dev/mapper/")) and os.path.exists(spec):
+            real = os.path.realpath(spec)
+            if any(n.path == real for n in nodes):
+                return real
+        return None
 
-        Understands ``UUID=``/``LABEL=``/``PARTUUID=``/``PARTLABEL=``, their ``/dev/disk/by-*/`` spellings
-        (Ubuntu's installer writes ``/dev/disk/by-uuid/<uuid>``), ``/dev/mapper/vg-lv``, ``/dev/vg/lv`` and
-        plain partition names."""
+    @staticmethod
+    def _resolve_spec_from_nodes(spec: str, nodes: list[BlockNode]) -> Optional[str]:
+        """Resolve using lsblk metadata only (no helper /dev paths).
+
+        A guest ``/dev/sda1`` maps to partition 1 of *our* disk, never the helper's own ``/dev/sda1``.
+        """
         by_attr = {"UUID": "uuid", "LABEL": "label", "PARTUUID": "partuuid", "PARTLABEL": "partlabel"}
         m = (re.match(r"^(UUID|LABEL|PARTUUID|PARTLABEL)=(.+)$", spec)
              or re.match(r"^/dev/disk/by-(uuid|label|partuuid|partlabel)/(.+)$", spec))

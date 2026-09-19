@@ -56,6 +56,15 @@ class FakeShell:
                       "uuid": None if self.udev_stale else "swap-uuid"},
                  ] if "rhel" in self.active_vgs and not self.lsblk_hides_lvs else []},
             ]
+        elif self.layout == "rhel_split_usr":  # RHEL 8/9: / on rootlv, /usr (modules, dracut) on usrlv
+            disk["children"] = [
+                {"name": "/dev/sdb1", "type": "part", "fstype": "xfs", "uuid": "boot-uuid", "label": None},
+                {"name": "/dev/sdb2", "type": "part", "fstype": "LVM2_member", "uuid": "pv-uuid", "label": None,
+                 "children": [
+                     {"name": "/dev/mapper/rootvg-rootlv", "type": "lvm", "fstype": "xfs", "uuid": "root-uuid"},
+                     {"name": "/dev/mapper/rootvg-usrlv", "type": "lvm", "fstype": "xfs", "uuid": "usr-uuid"},
+                 ] if "rootvg" in self.active_vgs else []},
+            ]
         elif self.layout == "plain":
             disk["children"] = [
                 {"name": "/dev/sdb1", "type": "part", "fstype": "ext4", "uuid": "boot-uuid", "label": "boot",
@@ -124,6 +133,29 @@ class FakeShell:
         (mnt / "etc" / "NetworkManager" / "system-connections" / "ens192.nmconnection").write_text(
             "[connection]\ntype=ethernet\ninterface-name=ens192\n[ipv4]\nmethod=manual\n")
 
+    def fill_split_root(self, mnt: Path, usr_spec="/dev/mapper/rootvg-usrlv"):
+        """RHEL-style root LV: /etc/fstab on / but kernel modules live on a separate /usr LV."""
+        (mnt / "etc").mkdir(parents=True, exist_ok=True)
+        (mnt / "etc" / "fstab").write_text(
+            "/dev/mapper/rootvg-rootlv / xfs defaults 0 0\n"
+            f"{self.boot_fstab} /boot xfs defaults 0 0\n"
+            f"{usr_spec} /usr xfs defaults 0 0\n")
+        (mnt / "usr").mkdir(exist_ok=True)  # mount point until usrlv is mounted
+        (mnt / "etc" / "os-release").write_text('PRETTY_NAME="Red Hat Enterprise Linux 9.4 (Plow)"\n')
+        (mnt / "etc" / "NetworkManager" / "system-connections").mkdir(parents=True, exist_ok=True)
+        (mnt / "etc" / "NetworkManager" / "system-connections" / "ens192.nmconnection").write_text(
+            "[connection]\ntype=ethernet\ninterface-name=ens192\n[ipv4]\nmethod=manual\n")
+
+    def fill_usr(self, usr: Path):
+        for ver in (RHEL_KERNEL, OLD_KERNEL):
+            (usr / "lib" / "modules" / ver).mkdir(parents=True, exist_ok=True)
+            (usr / "lib" / "modules" / ver / "modules.dep").write_text("")
+        if self.dracut:
+            (usr / "bin").mkdir(parents=True, exist_ok=True)
+            (usr / "bin" / "dracut").write_text("#!/bin/bash\n")
+        (usr / "lib" / "systemd" / "system").mkdir(parents=True, exist_ok=True)
+        (usr / "lib" / "systemd" / "system" / "NetworkManager.service").write_text("[Unit]")
+
     def fill_boot(self, boot: Path):
         boot.mkdir(parents=True, exist_ok=True)
         for ver in (RHEL_KERNEL, OLD_KERNEL):
@@ -144,6 +176,8 @@ class FakeShell:
             if "--config" in argv:  # our disk only
                 if self.layout == "ubuntu":
                     return CmdResult(0, "  /dev/sdb3 ubuntu-vg\n", "")
+                if self.layout == "rhel_split_usr":
+                    return CmdResult(0, "  /dev/sdb2 rootvg\n", "")
                 if self.layout != "lvm":
                     return CmdResult(0, "", "")
                 return CmdResult(0, "  /dev/sdb2 rhel\n", "")
@@ -159,11 +193,15 @@ class FakeShell:
             assert "--config" in argv and argv[-1] in self.active_vgs
             if self.layout == "ubuntu":
                 return CmdResult(0, "  /dev/mapper/ubuntu--vg-ubuntu--lv\n", "")
+            if self.layout == "rhel_split_usr":
+                return CmdResult(0, "  /dev/mapper/rootvg-rootlv\n  /dev/mapper/rootvg-usrlv\n", "")
             return CmdResult(0, "  /dev/mapper/rhel-root\n  /dev/mapper/rhel-swap\n", "")
         if cmd == "blkid":
             assert "-p" in argv, "direct probe expected (udev cache is what failed us)"
             probes = {"/dev/mapper/rhel-root": "TYPE=xfs\nUUID=root-uuid\n",
-                      "/dev/mapper/rhel-swap": "TYPE=swap\nUUID=swap-uuid\n"}
+                      "/dev/mapper/rhel-swap": "TYPE=swap\nUUID=swap-uuid\n",
+                      "/dev/mapper/rootvg-rootlv": "TYPE=xfs\nUUID=root-uuid\n",
+                      "/dev/mapper/rootvg-usrlv": "TYPE=xfs\nUUID=usr-uuid\n"}
             self.probed = getattr(self, "probed", []) + [argv[-1]]
             return CmdResult(0, probes[argv[-1]], "") if argv[-1] in probes else CmdResult(2, "", "")
         if cmd == "mount":
@@ -176,7 +214,11 @@ class FakeShell:
             if dev in self.fail_mount:
                 return CmdResult(32, "", f"mount: {dev}: wrong fs type, bad option, bad superblock")
             self.mounted[str(where)] = dev
-            if dev in ("/dev/mapper/rhel-root", "/dev/sdb2") and self.layout in ("lvm", "plain"):
+            if dev == "/dev/mapper/rootvg-rootlv":
+                self.fill_split_root(where, usr_spec=getattr(self, "usr_fstab_spec", "/dev/mapper/rootvg-usrlv"))
+            elif dev == "/dev/mapper/rootvg-usrlv":
+                self.fill_usr(where)
+            elif dev in ("/dev/mapper/rhel-root", "/dev/sdb2") and self.layout in ("lvm", "plain"):
                 self.fill_root(where)
             elif dev == "/dev/mapper/ubuntu--vg-ubuntu--lv":
                 self.fill_root(where)
@@ -275,6 +317,26 @@ def test_lvs_found_even_when_udev_has_not_probed_them(base):
     assert result.status == "done", result
     assert any(c[0] == "lvs" for c in shell.calls)
     assert any("guest root file system on /dev/mapper/rhel-root" in m for m in msgs)
+
+
+def test_rhel_split_usr_root_and_modules_on_separate_lvs(base):
+    """RHEL 9 on Azure: / has fstab, kernel modules and dracut live on a separate /usr LV."""
+    shell = FakeShell(layout="rhel_split_usr", boot_fstab="UUID=boot-uuid")
+    result, msgs = run(shell, base)
+    assert result.status == "done" and result.kernels == [OLD_KERNEL, RHEL_KERNEL], result
+    assert any("guest root file system on /dev/mapper/rootvg-rootlv" in m for m in msgs)
+    assert any("mounted /usr from /dev/mapper/rootvg-usrlv" in m for m in msgs)
+    assert any("/boot on /dev/sdb1" in m for m in msgs)
+    assert shell.rebuilt == [OLD_KERNEL, RHEL_KERNEL]
+
+
+def test_rhel_split_usr_fstab_by_id_dm_name(base):
+    """RHEL anaconda often lists LVs as /dev/disk/by-id/dm-name-vg-lv in fstab."""
+    shell = FakeShell(layout="rhel_split_usr", boot_fstab="UUID=boot-uuid")
+    shell.usr_fstab_spec = "/dev/disk/by-id/dm-name-rootvg-usrlv"
+    result, msgs = run(shell, base)
+    assert result.status == "done", result
+    assert any("mounted /usr from /dev/mapper/rootvg-usrlv" in m for m in msgs)
 
 
 def test_rejected_candidates_are_explained(base):
@@ -443,7 +505,7 @@ def test_resolve_spec():
     nodes = [BlockNode("/dev/sdb1", "part", "xfs", "u1", "BOOT"), BlockNode("/dev/sdb2", "part", "LVM2_member", "u2", ""),
              BlockNode("/dev/mapper/my--vg-root", "lvm", "xfs", "u3", ""),
              BlockNode("/dev/sdb15", "part", "vfat", "u4", "", partuuid="p15", partlabel="EFI System")]
-    r = _Session.resolve_spec
+    r = _Session._resolve_spec_from_nodes
     assert r("UUID=u1", nodes) == "/dev/sdb1"
     assert r("LABEL=BOOT", nodes) == "/dev/sdb1"
     assert r("/dev/disk/by-uuid/u1", nodes) == "/dev/sdb1"  # Ubuntu's installer
@@ -460,3 +522,16 @@ def test_resolve_spec():
     assert r("/dev/sda3", nodes) is None
     assert r("/dev/sda", nodes) is None  # whole disk: not a partition
     assert r("PARTUUID=abc", nodes) is None
+
+
+def test_resolve_spec_dm_name_and_helper_symlinks(monkeypatch):
+    from helper_app.guest.initramfs import BlockNode
+
+    nodes = [BlockNode("/dev/mapper/rootvg-usrlv", "lvm", "xfs", "usr-uuid", "")]
+    sess = _Session(type("F", (), {"run": None, "mount_base": Path("/tmp")})(), "/dev/sdb", lambda _m: None)
+    assert sess.resolve_spec("/dev/disk/by-id/dm-name-rootvg-usrlv", nodes) == "/dev/mapper/rootvg-usrlv"
+
+    link = "/dev/disk/by-id/dm-uuid-LVM-abc123"
+    monkeypatch.setattr("helper_app.guest.initramfs.os.path.exists", lambda p: p == link)
+    monkeypatch.setattr("helper_app.guest.initramfs.os.path.realpath", lambda p: "/dev/mapper/rootvg-usrlv")
+    assert sess.resolve_spec(link, nodes) == "/dev/mapper/rootvg-usrlv"

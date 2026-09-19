@@ -706,12 +706,15 @@
       for (const vm of filtered) {
         const job = state.jobsByVm[vm.moid];
         const active = job && !TERMINAL.includes(job.phase);
-        // running VMs are migratable too: deallocate mode stops them first, snapshot mode copies them live
-        const exportable = !vm.encrypted && ["poweredOn", "poweredOff", "stopped"].includes(vm.power_state);
+        // Block only ADE and transitional power states; unknown power still opens the migration page (it re-checks)
+        const azurePowerBlock = ["starting", "stopping", "deallocating"];
+        const exportable = !vm.encrypted && !azurePowerBlock.includes(vm.power_state);
         const why = vm.encrypted ? "The disks use Azure Disk Encryption: the export would copy ciphertext. Decrypt the VM in Azure first"
-          : vm.power_state === "poweredOn" ? "The VM is running: it is deallocated right before the disk export, or its disks are snapshotted while it runs"
-            : vm.power_state === "stopped" ? "The VM is stopped but still allocated: it is deallocated right before the disk export"
-              : exportable ? "" : `The VM is ${vm.power_state}: wait until it is running or deallocated`;
+          : azurePowerBlock.includes(vm.power_state) ? `The VM is ${vm.power_state}: wait until it is running or deallocated`
+            : vm.power_state === "poweredOn" ? "The VM is running: it is deallocated right before the disk export, or its disks are snapshotted while it runs"
+              : vm.power_state === "stopped" ? "The VM is stopped but still allocated: it is deallocated right before the disk export"
+                : vm.power_state === "unknown" ? "Azure did not report power state in the list; the migration page verifies the VM before starting"
+                  : "";
         rows.append(el("tr", {},
           el("td", { class: "name", title: vm.moid }, vm.name, vm.encrypted ? " " : null, vm.encrypted ? azureEncryptedBadge() : null),
           el("td", { class: "muted" }, vm.folder || "-"),

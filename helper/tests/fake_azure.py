@@ -266,7 +266,10 @@ class FakeAzure:
             return httpx.Response(200, json={"value": vms})
         if m == "GET" and "/providers/microsoft.compute/locations/" in low and low.endswith("/vmsizes"):
             return httpx.Response(200, json={"value": list(SIZES.values())})
-        vm = self.vms.get(low.removesuffix("/deallocate"))
+        vm_path = low.removesuffix("/deallocate").removesuffix("/instanceview")
+        vm = self.vms.get(vm_path)
+        if vm is not None and m == "GET" and low.endswith("/instanceview"):
+            return httpx.Response(200, json=vm.doc()["properties"]["instanceView"])
         if vm is not None:
             if m == "GET":
                 return httpx.Response(200, json=vm.doc())

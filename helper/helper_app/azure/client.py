@@ -293,9 +293,28 @@ class AzureClient:
         path = f"/subscriptions/{subscription_id}/providers/Microsoft.Compute/virtualMachines"
         return list(self.paged(path, API_COMPUTE, what=f"list virtual machines of subscription {subscription_id}"))
 
+    def get_vm_instance_view(self, vm_id: str) -> dict:
+        return self.get(f"{vm_id}/instanceView", API_COMPUTE,
+                        what=f"instance view of {vm_id.rsplit('/', 1)[-1]}")
+
     def get_vm(self, vm_id: str) -> dict:
-        return self.get(vm_id, API_COMPUTE, params={"$expand": "instanceView"},
-                        what=f"get virtual machine {vm_id.rsplit('/', 1)[-1]}")
+        name = vm_id.rsplit("/", 1)[-1]
+        try:
+            return self.get(vm_id, API_COMPUTE, params={"$expand": "instanceView"},
+                            what=f"get virtual machine {name}")
+        except AzureError as exc:
+            if exc.status == 404:
+                raise
+            if exc.status != 400:
+                raise
+            vm = self.get(vm_id, API_COMPUTE, what=f"get virtual machine {name}")
+            try:
+                view = self.get_vm_instance_view(vm_id)
+            except AzureError:
+                return vm
+            props = vm.setdefault("properties", {})
+            props["instanceView"] = view.get("properties") if isinstance(view.get("properties"), dict) else view
+            return vm
 
     def list_vm_sizes(self, subscription_id: str, location: str) -> dict[str, dict]:
         path = f"/subscriptions/{subscription_id}/providers/Microsoft.Compute/locations/{location}/vmSizes"

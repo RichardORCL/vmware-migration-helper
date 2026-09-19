@@ -39,7 +39,8 @@ def power_state(vm: dict) -> str:
     for st in ((vm.get("properties") or {}).get("instanceView") or {}).get("statuses") or []:
         code = str(st.get("code") or "")
         if code.lower().startswith("powerstate/"):
-            return POWER_STATES.get(code.split("/", 1)[1].lower(), code.split("/", 1)[1].lower())
+            key = code.split("/", 1)[1].lower()
+            return POWER_STATES.get(key, key)
     return "unknown"
 
 
@@ -245,7 +246,15 @@ def list_vm_summaries(session: AzureSession) -> list[VmSummary]:
                 try:
                     vm = session.client.get_vm(vm_id)
                 except AzureError as exc:
-                    log.warning("instance view of %s unavailable: %s", vm_id.rsplit("/", 1)[-1], exc)
+                    log.warning("get VM %s failed: %s", vm_id.rsplit("/", 1)[-1], exc)
+                    try:
+                        view = session.client.get_vm_instance_view(vm_id)
+                        merged = dict(vm)
+                        props = merged.setdefault("properties", {})
+                        props["instanceView"] = view.get("properties") if isinstance(view.get("properties"), dict) else view
+                        vm = merged
+                    except AzureError as exc2:
+                        log.warning("instance view of %s unavailable: %s", vm_id.rsplit("/", 1)[-1], exc2)
             rows.append(vm_summary_from_azure(vm, sub.name))
     rows.sort(key=lambda r: (r.folder.lower(), r.name.lower()))
     return rows

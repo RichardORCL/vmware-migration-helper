@@ -11,15 +11,17 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import PlainTextResponse
 
 from helper_app import diagnostics
-from helper_app.api import routes_azure_vms
+from helper_app.api import routes_azure_vms, routes_gcp_vms
 from helper_app.api.routes_vms import inspect
-from helper_app.auth import require_azure_session, require_session, require_vcenter_session
+from helper_app.auth import require_azure_session, require_gcp_session, require_session, require_vcenter_session
 from helper_app.jobs.store import utcnow
 from helper_app.models import (
     AzureSourceInfo,
     CreateAzureJobRequest,
+    CreateGcpJobRequest,
     CreateIsoJobRequest,
     CreateJobRequest,
+    GcpSourceInfo,
     DiskState,
     InstanceStatus,
     Job,
@@ -184,6 +186,57 @@ async def create_azure_job(body: CreateAzureJobRequest, request: Request,
     return job
 
 
+@router.post("/gcp", response_model=Job, status_code=status.HTTP_202_ACCEPTED)
+async def create_gcp_job(body: CreateGcpJobRequest, request: Request,
+                         session: UserSession = Depends(require_gcp_session)):
+    st = request.app.state
+    details = await asyncio.to_thread(routes_gcp_vms.inspect_details, session, body.vm_id)
+    inspection = routes_gcp_vms.inspect(session, body.vm_id, body.capture_mode, details)
+    if not inspection.can_export:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "; ".join(inspection.problems))
+    if inspection.needs_power_off and not body.power_off_source:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                            f"{inspection.vm.name} is {inspection.vm.power_state.replace('poweredOn', 'running')}; "
+                            "confirm that it may be stopped for the migration (power_off_source), stop it in GCP "
+                            "first, or choose snapshot mode")
+    await _check_guest_os(st, inspection, body.target, "Google Cloud")
+    vm_key = inspection.vm.moid
+    active = st.store.active_for_vm(vm_key)
+    if active is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, f"job {active.id} for this VM is still {active.phase.value}")
+    now = utcnow()
+    gcp_sess = session.gcp
+    job_id = uuid.uuid4().hex
+    job = Job(
+        id=job_id,
+        kind="gcp",
+        vm=inspection.vm,
+        gcp=GcpSourceInfo(
+            project_id=details.project_id,
+            zone=details.zone,
+            machine_type=details.machine_type,
+            export_bucket=gcp_sess.export_bucket,
+            export_prefix=f"oci-umt/{job_id}",
+            capture_mode=body.capture_mode,
+            disk_urls=details.disk_urls,
+        ),
+        target=body.target,
+        power_off_source=inspection.needs_power_off,
+        phase=JobPhase.QUEUED,
+        message="Queued" + (" (the VM is stopped right before the disk export)" if inspection.needs_power_off
+                            else (" (the disks are snapshotted right before the export)"
+                                  if body.capture_mode == "snapshot" else "")),
+        disks=[DiskState(index=d.index, label=d.label, capacity_bytes=d.capacity_bytes, is_boot=(d.index == 0))
+               for d in inspection.vm.disks],
+        created_by=session.username,
+        created_at=now,
+        updated_at=now,
+    )
+    st.store.put(job)
+    st.runner.submit(job.id, session)
+    return job
+
+
 @router.post("/iso", response_model=Job, status_code=status.HTTP_202_ACCEPTED)
 async def create_iso_job(body: CreateIsoJobRequest, request: Request,
                          session: UserSession = Depends(require_session)):
@@ -294,7 +347,8 @@ def cancel_job(job_id: str, request: Request, session: UserSession = Depends(req
     job.step = "cancel_queued"
     job.message = "Cleaning up OCI resources"
     st.store.put(job)
-    st.runner.cleanup(job.id, session if session.azure is not None else None)
+    cloud = session if (session.azure is not None or session.gcp is not None) else None
+    st.runner.cleanup(job.id, cloud)
     return job
 
 

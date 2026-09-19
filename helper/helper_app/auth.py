@@ -38,3 +38,11 @@ async def require_azure_session(request: Request) -> UserSession:
     if session.azure is None:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "this function needs an Azure login")
     return session
+
+
+async def require_gcp_session(request: Request) -> UserSession:
+    """A session with a GCP service account behind it (GCP VM inventory and migrations)."""
+    session = await require_session(request)
+    if session.gcp is None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "this function needs a Google Cloud login")
+    return session

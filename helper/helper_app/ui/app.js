@@ -123,6 +123,42 @@
       btn.addEventListener("click", (ev) => { ev.preventDefault(); ev.stopPropagation(); showAzureAuthHelp(); });
     }
   }
+  function showGcpAuthHelp() {
+    const dlg = document.getElementById("gcp-auth-help");
+    if (!dlg.dataset.wired) {
+      dlg.dataset.wired = "1";
+      document.getElementById("gcp-auth-help-close").addEventListener("click", () => dlg.close());
+      const copyBtn = document.getElementById("gcp-auth-help-copy");
+      const copyState = document.getElementById("gcp-auth-help-copy-state");
+      const cliArea = document.getElementById("gcp-auth-help-cli");
+      copyBtn.addEventListener("click", async () => {
+        copyBtn.disabled = true;
+        const text = cliArea.value;
+        try {
+          if (!navigator.clipboard) throw new Error("clipboard API not available");
+          await navigator.clipboard.writeText(text);
+          copyState.textContent = `Copied ${text.split("\n").length} lines to the clipboard.`;
+        } catch (_) {
+          cliArea.focus();
+          cliArea.select();
+          copyState.textContent = "Clipboard not available; the commands are selected — press Ctrl+C.";
+        } finally {
+          copyBtn.disabled = false;
+          setTimeout(() => { if (copyState.textContent.startsWith("Copied")) copyState.textContent = ""; }, 6000);
+        }
+      });
+      dlg.addEventListener("click", (ev) => { if (ev.target === dlg) dlg.close(); });
+      window.addEventListener("hashchange", () => { if (dlg.open) dlg.close(); });
+    }
+    dlg.showModal();
+  }
+  function wireGcpAuthHelpButton(id) {
+    const btn = document.getElementById(id);
+    if (btn && !btn.dataset.wired) {
+      btn.dataset.wired = "1";
+      btn.addEventListener("click", (ev) => { ev.preventDefault(); ev.stopPropagation(); showGcpAuthHelp(); });
+    }
+  }
   const kv = (container, pairs) => {
     container.innerHTML = "";
     for (const [k, v] of pairs) { container.append(el("span", { class: "k" }, k), el("span", { class: "v" }, v)); }
@@ -141,11 +177,14 @@
   const hasConsole = (job) => (job.phase === "COMPLETED" || job.phase === "INSTALLING") && !!job.instance_id;
   const isIso = (job) => job.kind === "iso";
   const isAzure = (job) => job.kind === "azure";
+  const isGcp = (job) => job.kind === "gcp";
   // what the job was made from, for lists and titles: the VM's name, or the ISO's file name
   const sourceName = (job) => job.vm ? job.vm.name : job.iso ? job.iso.object_name.split("/").pop() : "-";
   // a session with an Azure service-principal login (the vCenter login is "!anonymous && !azure")
   const hasAzure = (me) => !!(me && me.azure_tenant_id);
-  const hasVcenter = (me) => !!(me && !me.anonymous && !me.azure_tenant_id);
+  const hasGcp = (me) => !!(me && me.gcp_client_email);
+  const hasVcenter = (me) => !!(me && !me.anonymous && !me.azure_tenant_id && !me.gcp_client_email);
+  const gcpZone = (id) => { const m = /\/zones\/([^/]+)\/instances\//i.exec(id || ""); return m ? m[1] : ""; };
   // Azure resource IDs are lower-cased by the API; the resource group is the fourth path element
   const azureResourceGroup = (id) => { const m = /\/resourcegroups\/([^/]+)/i.exec(id || ""); return m ? m[1] : ""; };
   const STEP_LABELS = { seed_image: "Seed image import", iso_image: "ISO image import", launch_instance: "Instance launch" };
@@ -166,18 +205,24 @@
     if (!me) return;
     const anonymous = !!me.anonymous;
     const azure = hasAzure(me);
+    const gcp = hasGcp(me);
     for (const a of nav.querySelectorAll("a")) {
       const vcenterOnly = a.hasAttribute("data-vcenter-only");
       const azureOnly = a.hasAttribute("data-azure-only");
-      a.hidden = anonymous ? (vcenterOnly || azureOnly) : azure ? (vcenterOnly || a.dataset.nav === "iso") : (azureOnly || a.dataset.nav === "iso");
+      const gcpOnly = a.hasAttribute("data-gcp-only");
+      if (anonymous) a.hidden = vcenterOnly || azureOnly || gcpOnly;
+      else if (gcp) a.hidden = vcenterOnly || azureOnly || a.dataset.nav === "iso";
+      else if (azure) a.hidden = vcenterOnly || gcpOnly || a.dataset.nav === "iso";
+      else a.hidden = azureOnly || gcpOnly || a.dataset.nav === "iso";
     }
     const who = userBox.querySelector("[data-username]");
-    // Azure: the subscription name(s) are what the operator recognises; tenant and client ID go into the tooltip
     const subs = azure ? (me.azure_subscriptions || []).map((s) => s.name || s.id) : [];
     who.textContent = anonymous ? "not logged in"
-      : azure ? `Azure: ${subs.length ? subs.slice(0, 2).join(", ") + (subs.length > 2 ? ` +${subs.length - 2}` : "") : me.azure_tenant_id}`
-        : `${me.username} @ ${me.vcenter_host}${me.vcenter_port && me.vcenter_port !== 443 ? ":" + me.vcenter_port : ""}`;
-    who.title = azure ? `service principal ${me.azure_client_id} in tenant ${me.azure_tenant_id}${subs.length ? `\nsubscriptions: ${subs.join(", ")}` : ""}` : "";
+      : gcp ? `GCP: ${me.gcp_export_bucket || me.gcp_project_id}`
+        : azure ? `Azure: ${subs.length ? subs.slice(0, 2).join(", ") + (subs.length > 2 ? ` +${subs.length - 2}` : "") : me.azure_tenant_id}`
+          : `${me.username} @ ${me.vcenter_host}${me.vcenter_port && me.vcenter_port !== 443 ? ":" + me.vcenter_port : ""}`;
+    who.title = gcp ? `service account ${me.gcp_client_email}\nexport bucket: ${me.gcp_export_bucket}`
+      : azure ? `service principal ${me.azure_client_id} in tenant ${me.azure_tenant_id}${subs.length ? `\nsubscriptions: ${subs.join(", ")}` : ""}` : "";
     document.getElementById("logout-btn").textContent = anonymous ? "Back to start" : "Log out";
   }
 
@@ -188,6 +233,7 @@
     setUser(null);
     if (location.hash === "#/login") return showLogin();
     if (location.hash === "#/azure/login") return showAzureLogin();
+    if (location.hash === "#/gcp/login") return showGcpLogin();
     if (location.hash !== "#/start") { location.hash = "#/start"; return; }  // hashchange routes
     return route().catch((e) => showError(e.message));
   }
@@ -200,7 +246,9 @@
     app.append(tpl("tpl-start"));
     if (hasVcenter(state.me)) document.getElementById("start-vmware").href = "#/vms";
     if (hasAzure(state.me)) document.getElementById("start-azure").href = "#/azure/vms";
+    if (hasGcp(state.me)) document.getElementById("start-gcp").href = "#/gcp/vms";
     wireAzureAuthHelpButton("start-azure-info");
+    wireGcpAuthHelpButton("start-gcp-info");
   }
 
   // Azure service principal login: tenant + client ID are remembered in this browser (never the secret)
@@ -229,6 +277,37 @@
         try { localStorage.setItem("vcoci.azureLogin", JSON.stringify({ tenant_id, client_id })); } catch (_) { /* private mode */ }
         setUser(me);
         if (["#/azure/login", "#/login", "#/start", "#/iso"].includes(location.hash)) location.hash = "#/azure/vms";
+        else route();
+      } catch (e) { err.textContent = e.message; }
+      finally { btn.disabled = false; }
+    });
+  }
+
+  async function showGcpLogin() {
+    stopPolling();
+    setUser(null);
+    app.innerHTML = "";
+    app.append(tpl("tpl-gcp-login"));
+    app.querySelector(".login").prepend(el("p", {}, el("a", { href: "#/start", class: "muted" }, "\u2190 back to start")));
+    const form = document.getElementById("gcp-login-form");
+    const err = document.getElementById("gcp-login-error");
+    const btn = document.getElementById("gcp-login-btn");
+    let last = {};
+    try { last = JSON.parse(localStorage.getItem("vcoci.gcpLogin") || "{}") || {}; } catch (_) { /* ignore */ }
+    form.elements.export_bucket.value = last.export_bucket || "";
+    wireGcpAuthHelpButton("gcp-login-info");
+    form.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      err.textContent = ""; btn.disabled = true;
+      const export_bucket = form.elements.export_bucket.value.trim();
+      try {
+        const me = await api("POST", "/auth/gcp/login", {
+          export_bucket,
+          service_account_json: form.elements.service_account_json.value,
+        });
+        try { localStorage.setItem("vcoci.gcpLogin", JSON.stringify({ export_bucket })); } catch (_) { /* ignore */ }
+        setUser(me);
+        if (["#/gcp/login", "#/login", "#/start", "#/iso"].includes(location.hash)) location.hash = "#/gcp/vms";
         else route();
       } catch (e) { err.textContent = e.message; }
       finally { btn.disabled = false; }
@@ -379,7 +458,9 @@
     const terminal = TERMINAL.includes(job.phase);
     const iso = isIso(job);
     const azure = isAzure(job);
+    const gcpJob = isGcp(job);
     const az = job.azure || {};
+    const gc = job.gcp || {};
     const sm = job.summary || {};
     const name = sourceName(job);
     // left panel: the instance that is (being) created in OCI
@@ -390,6 +471,10 @@
     ] : azure ? [
       ["Source VM", el("span", { title: job.vm.moid }, `${job.vm.name} in Azure${az.location ? ` (${az.location})` : ""} - ${az.vm_size || "size unknown"}, ${job.vm.num_cpu} vCPU, ${fmtBytes(job.vm.memory_mb * 1024 * 1024)} RAM, ${job.vm.disks.length} disk(s)`)],
       ["Subscription / resource group", `${az.subscription_name || az.subscription_id || "-"} / ${az.resource_group || "-"}`],
+      ["Guest OS", `${job.vm.guest_full_name || job.vm.guest_id}${job.target.operating_system_version ? ` - release ${job.target.operating_system_version} (selected)` : ""}`],
+    ] : gcpJob ? [
+      ["Source VM", el("span", { title: job.vm.moid }, `${job.vm.name} in GCP (${gc.zone || "-"}) - ${gc.machine_type || "size unknown"}, ${job.vm.num_cpu} vCPU, ${fmtBytes(job.vm.memory_mb * 1024 * 1024)} RAM, ${job.vm.disks.length} disk(s)`)],
+      ["Project / export bucket", `${gc.project_id || "-"} / ${gc.export_bucket || "-"}`],
       ["Guest OS", `${job.vm.guest_full_name || job.vm.guest_id}${job.target.operating_system_version ? ` - release ${job.target.operating_system_version} (selected)` : ""}`],
     ] : [
       ["Source VM", `${job.vm.name} (${job.vm.moid})${job.vcenter_host ? " on " + job.vcenter_host : ""} - ${job.vm.num_cpu} vCPU, ${fmtBytes(job.vm.memory_mb * 1024 * 1024)} RAM, ${job.vm.disks.length} disk(s)`],
@@ -432,6 +517,18 @@
         "First boot may hang ~90s on Azure metadata or show /dev/sr0 errors. Enable Azure cleanup under Advanced: firmware and device model on the export page, or apply the same steps manually (cloud-init, waagent, fstab sr0, serial-getty@ttyS0).")]] : []),
       ["Disk download", `Azure page blobs (allocated ranges only)${job.target.volume_vpus_per_gb ? `, ${job.target.volume_vpus_per_gb} VPU/GB volumes` : ""}`],
       ["Started by", `${job.created_by || "-"} at ${new Date(job.created_at).toLocaleString()}`],
+    ] : gcpJob ? [
+      ["Step", job.step || "-"],
+      ["Capture", gc.capture_mode === "snapshot"
+        ? "snapshots exported to GCS while the VM keeps running (crash-consistent)"
+        : "stop the VM and export its disks via GCS" + ({ already_off: " - already stopped",
+          stopped: " - stopped before export" }[job.power_off_result] || "")],
+      ...(gc.gcs_objects && gc.gcs_objects.length ? [["GCS objects", gc.gcs_objects.join(", ")]] : []),
+      ...(job.gcp_fixup ? [["GCP cleanup", fixupEl(job.gcp_fixup, "Enable GCP cleanup on the export page if first boot waits on GCE metadata.")]] : []),
+      ...(job.guest_fixup ? [["Initramfs fix-up", fixupEl(job.guest_fixup, "See diagnostics.")]] : []),
+      ...(job.network_fixup ? [["Network fix-up", fixupEl(job.network_fixup, "See diagnostics.")]] : []),
+      ["Disk download", `GCS raw export${job.target.volume_vpus_per_gb ? `, ${job.target.volume_vpus_per_gb} VPU/GB volumes` : ""}`],
+      ["Started by", `${job.created_by || "-"} at ${new Date(job.created_at).toLocaleString()}`],
     ] : [
       ["Step", job.step || "-"],
       ...(job.power_off_source ? [["Source power-off", { already_off: "was already powered off when the export started",
@@ -449,7 +546,7 @@
       rows.push(["Finished", job.finished_at ? new Date(job.finished_at).toLocaleString() : "-"]);
       rows.push(["Duration", fmtDuration(sm.duration_s) + (sm.transfer_duration_s ? ` (export ${fmtDuration(sm.transfer_duration_s)})` : "")]);
       if (tr.started_at && !iso) {
-        rows.push(["Data transferred", `${fmtBytes(sm.bytes_received)} received from ${azure ? "Azure" : "vCenter"}, ${fmtBytes(sm.bytes_written)} written to OCI volumes`]);
+        rows.push(["Data transferred", `${fmtBytes(sm.bytes_received)} received from ${gcpJob ? "Google Cloud" : azure ? "Azure" : "vCenter"}, ${fmtBytes(sm.bytes_written)} written to OCI volumes`]);
         rows.push(["Average bandwidth", sm.average_bps ? fmtRate(sm.average_bps) : "-"]);
       }
     }
@@ -462,6 +559,7 @@
     cancelBtn.onclick = async () => {
       const what = iso ? "Cancel this installation? The OCI instance and its boot volume will be terminated (the imported ISO image is kept)."
         : azure ? "Cancel this migration? The OCI instance and volumes created so far will be deleted; the disk export access is revoked and snapshots created by the job are deleted in Azure. A deallocated VM is not started again."
+          : gcpJob ? "Cancel this migration? OCI resources are deleted and GCS export objects / GCP snapshots from this job are removed. The VM is not started again."
           : "Cancel this migration? The OCI instance and volumes created so far will be deleted.";
       if (!confirm(what)) return;
       cancelBtn.disabled = true;
@@ -791,21 +889,104 @@
     await load(false);
   }
 
+  async function gcpVmsView() {
+    app.innerHTML = "";
+    app.append(tpl("tpl-gcp-vms"));
+    const rows = document.getElementById("gcpvm-rows");
+    const filter = document.getElementById("gcpvm-filter");
+    const groupSel = document.getElementById("gcpvm-group");
+    const osSel = document.getElementById("gcpvm-os");
+    const count = document.getElementById("gcpvm-count");
+    const err = document.getElementById("gcpvm-error");
+    let vms = [];
+    const osOf = (vm) => vm.guest_full_name || vm.guest_id || "(unknown)";
+    const groupOf = (vm) => vm.folder || "(unknown)";
+    const fillFilters = () => {
+      const fill = (sel, values, all) => {
+        const previous = sel.value;
+        sel.innerHTML = "";
+        sel.append(el("option", { value: "" }, all));
+        for (const v of values) sel.append(el("option", { value: v }, v));
+        sel.value = values.includes(previous) ? previous : "";
+      };
+      const uniq = (list) => [...new Set(list)].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+      fill(groupSel, uniq(vms.map(groupOf)), `All locations (${new Set(vms.map(groupOf)).size})`);
+      fill(osSel, uniq(vms.map(osOf)), `All guest OSes (${new Set(vms.map(osOf)).size})`);
+    };
+    const matches = (vm) => {
+      if (groupSel.value && groupOf(vm) !== groupSel.value) return false;
+      if (osSel.value && osOf(vm) !== osSel.value) return false;
+      const q = filter.value.trim().toLowerCase();
+      return !q || `${vm.name} ${vm.folder} ${vm.guest_full_name} ${vm.vm_size} ${vm.location}`.toLowerCase().includes(q);
+    };
+    const render = () => {
+      const filtered = vms.filter(matches);
+      rows.innerHTML = "";
+      for (const vm of filtered) {
+        const job = state.jobsByVm[vm.moid];
+        const active = job && !TERMINAL.includes(job.phase);
+        const block = ["starting", "stopping"];
+        const exportable = !block.includes(vm.power_state);
+        const why = block.includes(vm.power_state) ? `The VM is ${vm.power_state}: wait until it is running or stopped`
+          : vm.power_state === "poweredOn" ? "The VM is running: it is stopped before export, or use snapshot mode"
+            : "";
+        rows.append(el("tr", {},
+          el("td", { class: "name", title: vm.moid }, vm.name),
+          el("td", { class: "muted" }, vm.folder || "-"),
+          el("td", {}, el("span", { class: "power " + vm.power_state }, vm.power_state.replace("powered", "").toLowerCase())),
+          el("td", {}, vm.guest_full_name || vm.guest_id || "-"),
+          el("td", {}, vm.vm_size || "-"),
+          el("td", { class: "muted" }, vm.location || "-"),
+          el("td", {}, `${vm.num_disks}`),
+          el("td", {}, job ? el("a", { href: `#/jobs/${job.id}`, class: "phase " + job.phase }, job.phase) : el("span", { class: "muted" }, "-")),
+          el("td", {}, active
+            ? el("a", { href: `#/jobs/${job.id}`, class: "button secondary small" }, "View job")
+            : el("a", { href: `#/gcp/export/${encodeURIComponent(vm.moid)}`, class: "button primary small" + (exportable ? "" : " disabled"), title: why }, "Migrate"))));
+      }
+      if (!filtered.length) rows.append(el("tr", {}, el("td", { colspan: 9, class: "muted" }, vms.length ? "No virtual machines match the filters." : "No virtual machines found in the projects this service account can read.")));
+      count.textContent = filtered.length === vms.length ? `${vms.length} virtual machines` : `${filtered.length} of ${vms.length} virtual machines`;
+    };
+    const load = async (refresh) => {
+      err.textContent = ""; count.textContent = "Loading Google Cloud inventory...";
+      try {
+        const [list, jobs] = await Promise.all([api("GET", "/gcp/vms" + (refresh ? "?refresh=true" : "")), api("GET", "/jobs")]);
+        vms = list;
+        state.jobsByVm = {};
+        for (const j of jobs) if (j.vm && !state.jobsByVm[j.vm.moid]) state.jobsByVm[j.vm.moid] = j;
+        fillFilters();
+        render();
+      } catch (e) { if (e.status !== 401) err.textContent = e.message; count.textContent = ""; }
+    };
+    filter.addEventListener("input", render);
+    groupSel.addEventListener("change", render);
+    osSel.addEventListener("change", render);
+    document.getElementById("gcpvm-refresh").addEventListener("click", () => load(true));
+    await load(false);
+  }
+
   // -------------------------------------------------------------- export view
   // one form for both sources: ``src.azure`` switches the inspection endpoint, the source details, the
   // capture choice (deallocate vs snapshot instead of the vSphere power-off pop-up) and the job endpoint
   async function exportView(moid, src) {
     const azure = !!(src && src.azure);
+    const gcp = !!(src && src.gcp);
     app.innerHTML = "";
     app.append(tpl("tpl-export"));
     const form = document.getElementById("target-form");
     const formError = document.getElementById("form-error");
     const submit = document.getElementById("submit-btn");
     const captureBox = document.getElementById("azure-capture");
-    // the capture radios sit in the source card (outside the target form), hence document-level queries
-    const captureMode = () => (document.querySelector('#azure-capture input[name="capture_mode"]:checked') || {}).value || "deallocate";
-    const inspectUrl = () => azure ? `/azure/vm?id=${encodeURIComponent(moid)}&capture_mode=${captureMode()}` : `/vms/${encodeURIComponent(moid)}`;
-    if (azure) document.querySelector("#vm-card .toolbar a").href = "#/azure/vms";
+    const gcpCaptureBox = document.getElementById("gcp-capture");
+    const captureMode = () => {
+      if (gcp) return (document.querySelector('#gcp-capture input[name="gcp_capture_mode"]:checked') || {}).value || "stop";
+      if (azure) return (document.querySelector('#azure-capture input[name="capture_mode"]:checked') || {}).value || "deallocate";
+      return "deallocate";
+    };
+    const inspectUrl = () => gcp ? `/gcp/vm?id=${encodeURIComponent(moid)}&capture_mode=${captureMode()}`
+      : azure ? `/azure/vm?id=${encodeURIComponent(moid)}&capture_mode=${captureMode()}`
+        : `/vms/${encodeURIComponent(moid)}`;
+    if (gcp) document.querySelector("#vm-card .toolbar a").href = "#/gcp/vms";
+    else if (azure) document.querySelector("#vm-card .toolbar a").href = "#/azure/vms";
 
     let inspection, options;
     try {
@@ -816,7 +997,8 @@
     kv(document.getElementById("vm-details"), [
       ["Name", azure ? el("span", { title: vm.moid }, vm.name) : vm.name], ["Guest OS", vm.guest_full_name || vm.guest_id],
       ["Power state", vm.power_state],
-      azure ? ["Resource group", azureResourceGroup(vm.moid) || "-"] : ["ESXi host", vm.host_name || "-"],
+      azure ? ["Resource group", azureResourceGroup(vm.moid) || "-"]
+        : gcp ? ["Zone", gcpZone(vm.moid) || "-"] : ["ESXi host", vm.host_name || "-"],
       ["CPU / memory", `${vm.num_cpu} vCPU / ${fmtBytes(vm.memory_mb * 1024 * 1024)}`],
       ["Firmware", vm.firmware.toUpperCase() + (vm.secure_boot ? " (secure boot)" : "") + (vm.has_vtpm ? " + vTPM" : "")],
       ...(vm.encrypted || vm.encrypted_disks.length ? [["Encryption", el("span", {}, azure ? azureEncryptedBadge() : encryptedBadge(vm),
@@ -840,12 +1022,18 @@
       problems.innerHTML = ""; warnings.innerHTML = "";
       for (const p of inspection.problems) problems.append(el("li", {}, p));
       for (const w of inspection.warnings) warnings.append(el("li", {}, w));
-      document.getElementById("power-off-note").hidden = azure || !inspection.needs_power_off;
+      document.getElementById("power-off-note").hidden = azure || gcp || !inspection.needs_power_off;
       if (azure) {
         document.getElementById("azure-capture-hint").textContent = captureMode() === "snapshot"
           ? "Snapshots are created right before the export and deleted when the job ends (Azure bills their storage in between). The VM is not touched."
           : inspection.needs_power_off ? `"${vm.name}" is running: it is deallocated right before the disk export (after the OCI instance and volumes are prepared) and stays deallocated in Azure. You will be asked to confirm.`
             : `"${vm.name}" is already deallocated: its disks are exported as they are.`;
+      }
+      if (gcp) {
+        document.getElementById("gcp-capture-hint").textContent = captureMode() === "snapshot"
+          ? "Snapshots are exported to your GCS bucket and deleted when the job ends. The VM keeps running."
+          : inspection.needs_power_off ? `"${vm.name}" is running: it is stopped before the disk export. You will be asked to confirm.`
+            : `"${vm.name}" is already stopped: its disks are exported as they are.`;
       }
       submit.disabled = !inspection.can_export;
       const revocable = inspection.azure_revoke_export_disks || [];
@@ -886,13 +1074,17 @@
       });
     }
     captureBox.hidden = !azure;
-    if (azure) {
-      for (const radio of captureBox.querySelectorAll('input[name="capture_mode"]')) radio.addEventListener("change", async () => {
+    gcpCaptureBox.hidden = !gcp;
+    const wireCapture = (box) => {
+      if (!box || box.hidden) return;
+      for (const radio of box.querySelectorAll('input[type="radio"]')) radio.addEventListener("change", async () => {
         submit.disabled = true;
         try { inspection = await api("GET", inspectUrl()); fillChecks(); }
         catch (e) { if (e.status !== 401) formError.textContent = e.message; }
       });
-    }
+    };
+    wireCapture(captureBox);
+    wireCapture(gcpCaptureBox);
 
     // populate the target form (compartments, networks, private IP check, shapes, device model preview)
     const { sel, renderSizing } = wireTargetForm(form, options, {
@@ -915,7 +1107,7 @@
       osSel.required = !osInfo.version_detected;
       osLabel.classList.toggle("attention", !osInfo.version_detected);
       osSel.addEventListener("change", () => osLabel.classList.toggle("attention", !osSel.value));
-      const from = azure ? "Azure" : "vCenter";
+      const from = gcp ? "Google Cloud" : azure ? "Azure" : "vCenter";
       document.getElementById("os-version-hint").textContent = osInfo.version_detected
         ? `Detected from ${from} (${vm.guest_full_name || vm.guest_id}); change it if the guest runs another release.`
         : `${from} only reports "${vm.guest_full_name || vm.guest_id}" without the release. Select the one installed in the guest; OCI records it on the image and uses it for OS-specific defaults.`;
@@ -933,6 +1125,13 @@
     for (const id of ["azure-cleanup-label", "azure-cleanup-hint"]) {
       document.getElementById(id).hidden = !showAzureCleanup;
     }
+    const showGcpCleanup = gcp && !isWin;
+    for (const id of ["gcp-cleanup-label", "gcp-cleanup-hint"]) {
+      document.getElementById(id).hidden = !showGcpCleanup;
+    }
+    document.getElementById("gcp-transfer-note").hidden = !gcp;
+    document.getElementById("azure-transfer-note").hidden = !azure;
+    document.getElementById("nfc-options").hidden = azure || gcp;
     if (isWin && isWindowsClient(vm)) {
       // OCI has no licenses for client editions; the API refuses OCI_PROVIDED for them
       const ociLic = form.querySelector('input[name="windows_license_type"][value="OCI_PROVIDED"]');
@@ -974,17 +1173,22 @@
         compatibility_mode: fd.get("compatibility_mode") === "on",
         boot_volume_type_override: fd.get("boot_volume_type_override") || null,
         network_type_override: fd.get("network_type_override") || null,
-        nfc_direct_to_esxi: !azure && fd.get("nfc_direct_to_esxi") === "on",
-        pipelined_decode: !azure && fd.get("pipelined_decode") === "on",
+        nfc_direct_to_esxi: !azure && !gcp && fd.get("nfc_direct_to_esxi") === "on",
+        pipelined_decode: !azure && !gcp && fd.get("pipelined_decode") === "on",
         rebuild_initramfs: !isWin && fd.get("rebuild_initramfs") === "on",
         fix_network: !isWin && fd.get("fix_network") === "on",
         azure_cleanup: azure && !isWin && fd.get("azure_cleanup") === "on",
+        gcp_cleanup: gcp && !isWin && fd.get("gcp_cleanup") === "on",
         volume_vpus_per_gb: Number(fd.get("volume_vpus_per_gb") || 10),
       };
       // a running VM is shut down (vSphere) or deallocated (Azure, deallocate mode) by the migration: make the
       // operator confirm it, naming the VM; Azure snapshot mode leaves the VM alone and needs no confirmation
       if (inspection.needs_power_off) {
-        const ok = azure
+        const ok = gcp
+          ? confirm(`WARNING: "${vm.name}" is running in Google Cloud.\n\n` +
+            `Starting this migration will STOP the VM "${vm.name}" right before the disk export.\n\n` +
+            `Stop "${vm.name}" and migrate it?`)
+          : azure
           ? confirm(`WARNING: "${vm.name}" is running in Azure.\n\n` +
             `Starting this migration will DEALLOCATE (stop) the VM "${vm.name}" right before the disk export ` +
             "(after the OCI instance and volumes are prepared). Azure shuts the guest OS down first; if it does not stop in time the VM is stopped hard.\n\n" +
@@ -1001,7 +1205,9 @@
       }
       submit.disabled = true;
       try {
-        const job = azure
+        const job = gcp
+          ? await api("POST", "/jobs/gcp", { vm_id: moid, target, capture_mode: captureMode(), power_off_source: inspection.needs_power_off })
+          : azure
           ? await api("POST", "/jobs/azure", { vm_id: moid, target, capture_mode: captureMode(), power_off_source: inspection.needs_power_off })
           : await api("POST", "/jobs", { vm_moid: moid, target, power_off_source: inspection.needs_power_off });
         location.hash = `#/jobs/${job.id}`;  // follow the migration on its own page
@@ -1977,6 +2183,7 @@
         if (e.status !== 401) { showError(e.message); return; }
         if (hash === "#/login") return showLogin();
         if (hash === "#/azure/login") return showAzureLogin();
+        if (hash === "#/gcp/login") return showGcpLogin();
         try { setUser(await api("POST", "/auth/anonymous")); }
         catch (e2) { showError(e2.message); return; }
       }
@@ -1988,13 +2195,17 @@
       } catch (_) { /* links work without it */ }
     }
     // the export forms light up their list entry (#/azure/export/... -> Azure VMs, #/export/... -> Source VMs)
-    const navHash = hash.startsWith("#/azure/export/") ? "#/azure/vms" : hash.startsWith("#/export/") ? "#/vms" : hash;
+    const navHash = hash.startsWith("#/azure/export/") ? "#/azure/vms"
+      : hash.startsWith("#/gcp/export/") ? "#/gcp/vms"
+        : hash.startsWith("#/export/") ? "#/vms" : hash;
     for (const a of nav.querySelectorAll("a")) a.classList.toggle("active", navHash.startsWith(a.getAttribute("href")));
     const anonymous = !!state.me.anonymous;
     const azure = hasAzure(state.me);
+    const gcp = hasGcp(state.me);
     if (hash === "#/start") return startView();
     if (hash === "#/login") { if (!hasVcenter(state.me)) return showLogin(); location.hash = "#/vms"; return; }
     if (hash === "#/azure/login") { if (!azure) return showAzureLogin(); location.hash = "#/azure/vms"; return; }
+    if (hash === "#/gcp/login") { if (!gcp) return showGcpLogin(); location.hash = "#/gcp/vms"; return; }
     if (hash === "#/iso") return isoView();
     let m;
     if (hash === "#/instances") return instancesView();
@@ -2010,7 +2221,12 @@
       if ((m = /^#\/azure\/export\/(.+)$/.exec(hash))) return exportView(decodeURIComponent(m[1]), { azure: true });
       return azureVmsView();
     }
-    if (anonymous || azure) { location.hash = "#/login"; return; }
+    if (hash === "#/gcp/vms" || hash.startsWith("#/gcp/export/")) {
+      if (!gcp) { location.hash = "#/gcp/login"; return; }
+      if ((m = /^#\/gcp\/export\/(.+)$/.exec(hash))) return exportView(decodeURIComponent(m[1]), { gcp: true });
+      return gcpVmsView();
+    }
+    if (anonymous || azure || gcp) { location.hash = "#/login"; return; }
     if ((m = /^#\/export\/(.+)$/.exec(hash))) return exportView(decodeURIComponent(m[1]));
     return vmsView();
   }

@@ -21,7 +21,11 @@ import httpx
 
 from helper_app.azure.client import AzureError
 from helper_app.azure.export import AzureDiskExport, release_azure_resources
-from helper_app.azure.inventory import power_state
+from helper_app.azure.inventory import power_state as azure_power_state
+from helper_app.disk.gcs_range_copy import GcsCopyError, copy_sequential, object_size
+from helper_app.gcp.client import GcpError
+from helper_app.gcp.export import GcpDiskExport, release_gcp_resources
+from helper_app.gcp.inventory import power_state as gcp_power_state
 from helper_app.config import Settings
 from helper_app.disk.pipeline import PipelinedDecoder
 from helper_app.disk.vhd_range_copy import VhdCopyError, blob_length, copy_ranges, list_page_ranges
@@ -217,6 +221,8 @@ class MigrationRunner:
             slot = True
             if job.kind == "azure":
                 self._run_azure(job)
+            elif job.kind == "gcp":
+                self._run_gcp(job)
             else:
                 self._run(job)
         except JobCancelled:
@@ -224,6 +230,7 @@ class MigrationRunner:
             try:
                 self.prov.cleanup(job)
                 self._release_azure(job)
+                self._release_gcp(job)
             except Exception as exc:  # noqa: BLE001
                 log.warning("cleanup for %s failed: %s", job.id, describe_error(exc))
                 job.phase = JobPhase.CANCELLED
@@ -257,6 +264,23 @@ class MigrationRunner:
         actions = release_azure_resources(session.azure.client, info)
         if actions:
             job.message = (job.message + "; " if job.message else "") + "Azure: " + "; ".join(actions)
+        self.store.put(job)
+
+    def _release_gcp(self, job: Job) -> None:
+        info = job.gcp
+        if job.kind != "gcp" or info is None or not (info.snapshot_names or info.gcs_objects):
+            return
+        session = self._sessions.get(job.id)
+        if session is None or session.gcp is None:
+            left = list(info.gcs_objects) + list(info.snapshot_names)
+            job.message = (job.message + "; " if job.message else "") + (
+                "GCP export objects/snapshots left behind (no GCP login to release them): "
+                + ", ".join(left))
+            self.store.put(job)
+            return
+        actions = release_gcp_resources(session.gcp.client, info)
+        if actions:
+            job.message = (job.message + "; " if job.message else "") + "GCP: " + "; ".join(actions)
         self.store.put(job)
 
     def _run_iso_safely(self, job_id: str) -> None:
@@ -310,6 +334,7 @@ class MigrationRunner:
             elif job is not None:
                 self.prov.cleanup(job)
                 self._release_azure(job)
+                self._release_gcp(job)
         except Exception as exc:  # noqa: BLE001
             log.exception("cleanup of %s failed", job_id)
             if job is not None:
@@ -408,7 +433,7 @@ class MigrationRunner:
         self._save(job, JobPhase.EXPORTING, "Checking the source VM in Azure")
         vm_id = job.vm.moid
         vm = client.get_vm(vm_id)
-        state = power_state(vm)
+        state = azure_power_state(vm)
         job.vm.power_state = state
         if info.capture_mode == "deallocate":
             if state != "poweredOff":
@@ -561,15 +586,138 @@ class MigrationRunner:
                 writer.close()
         raise ExportError(f"{label} failed after {disk.attempts} attempts: {last_error}")
 
+    # ------------------------------------------------------------------- GCP
+    def _run_gcp(self, job: Job) -> None:
+        session = self._sessions[job.id]
+        if session.gcp is None:
+            raise ExportError("the session that created the job has no GCP login")
+        client = session.gcp.client
+        info = job.gcp
+        if info is None:
+            raise ExportError("job has no GCP source information")
+
+        self._save(job, JobPhase.PROVISIONING, "Requesting target instance and volumes in OCI")
+        self.prov.prepare(job, check_cancel=lambda: self._check_cancel(job))
+        self._check_cancel(job)
+
+        self._save(job, JobPhase.EXPORTING, "Checking the source VM in Google Cloud")
+        vm_id = job.vm.moid
+        instance = client.get_instance(vm_id)
+        state = gcp_power_state(instance)
+        job.vm.power_state = state
+        if info.capture_mode == "stop":
+            if state != "poweredOff":
+                if not job.power_off_source:
+                    raise ExportError(f"VM is {state.replace('poweredOn', 'running')}; it must be stopped during "
+                                      "the export (or use snapshot mode)")
+                job.step = "power_off"
+                self._save(job, message=f"Stopping {job.vm.name} in Google Cloud")
+                client.stop_instance(vm_id, timeout_s=self.s.gcp_stop_timeout_s,
+                                     on_wait=lambda: self._check_cancel(job))
+                job.power_off_result = "stopped"
+                job.vm.power_state = "poweredOff"
+                self._save(job, message=f"{job.vm.name} stopped")
+            elif job.power_off_source:
+                job.power_off_result = "already_off"
+        else:
+            job.power_off_result = "snapshotted"
+
+        job.step = "export_access"
+        self._save(job, message=f"Exporting disks of {job.vm.name} to Cloud Storage")
+        export = GcpDiskExport(
+            client, job.id, info,
+            snapshot_timeout_s=self.s.gcp_snapshot_timeout_s,
+            export_timeout_s=self.s.gcp_export_timeout_s,
+            save=lambda: self.store.put(job),
+            check_cancel=lambda: self._check_cancel(job),
+        )
+        with export:
+            job.transfer.started_at = job.transfer.started_at or utcnow()
+            job.transfer.percent = 0
+            self.store.put(job)
+            try:
+                for disk in job.disks:
+                    if disk.status == DiskStatus.COPIED:
+                        continue
+                    self._check_cancel(job)
+                    self._copy_gcp_disk(job, disk, export, client)
+                job.transfer.percent = 100
+            finally:
+                job.transfer.finished_at = utcnow()
+                job.transfer.throughput_bps = 0.0
+        job.step = "export_released"
+        self._save(job, message="GCS export objects and snapshots deleted")
+
+        self._check_cancel(job)
+        self._guest_fixup(job)
+
+        self._save(job, JobPhase.FINALIZING, "Attaching volumes to the target instance")
+        self.prov.finalize(job)
+        self._save(job, message=f"Migration complete: instance {job.instance_id}")
+
+    def _copy_gcp_disk(self, job: Job, disk: DiskState, export: GcpDiskExport, client) -> None:
+        last_error: Optional[Exception] = None
+        label = disk.label or f"disk {disk.index}"
+        bucket = job.gcp.export_bucket if job.gcp else ""
+        for attempt in range(1, self.s.disk_retry_attempts + 1):
+            self._check_cancel(job)
+            disk.attempts = attempt
+            disk.status = DiskStatus.COPYING
+            disk.bytes_received = disk.bytes_written = disk.grains_written = 0
+            disk.percent = 0
+            disk.error = None
+            job.step = "copying"
+            self._save(job, message=f"Copying {label} from GCS (attempt {attempt}/{self.s.disk_retry_attempts})")
+            try:
+                writer = BlockDeviceWriter(disk.device, expected_min_size=disk.capacity_bytes)
+            except (OSError, ValueError) as exc:
+                raise ExportError(f"cannot open {disk.device}: {exc}") from exc
+            meter = RateMeter()
+            written_before = sum(d.bytes_written for d in job.disks if d is not disk)
+            obj = export.gcs_object(disk.index)
+            try:
+                writer.ensure_size(disk.capacity_bytes)
+                total = min(disk.capacity_bytes, object_size(client, bucket, obj))
+                disk.stream_bytes = total
+                self._save(job, message=f"Copying {label} to {disk.device}: {total:,} bytes from gs://{bucket}/{obj}")
+                stats = copy_sequential(
+                    client, bucket, obj, writer, total_bytes=total,
+                    chunk_bytes=self.s.gcp_range_chunk_bytes, workers=self.s.gcp_range_workers,
+                    check_cancel=lambda: self._check_cancel(job),
+                    on_progress=self._azure_progress_callback(job, disk, meter, written_before),
+                )
+                self._record_azure_progress(job, disk, stats.bytes_received, stats.bytes_written,
+                                            stats.chunks_written, meter.rate(), written_before)
+                disk.percent = 100
+                disk.status = DiskStatus.COPIED
+                self._save(job, message=f"{label} copied ({stats.bytes_received:,} bytes)")
+                return
+            except JobCancelled:
+                disk.status = DiskStatus.FAILED
+                disk.error = "cancelled"
+                raise
+            except (ExportError, GcsCopyError, GcpError, OSError, httpx.HTTPError) as exc:
+                last_error = exc
+                disk.status = DiskStatus.FAILED
+                disk.error = str(exc)
+                self._save(job, message=f"{label} attempt {attempt} failed: {exc}")
+                if attempt < self.s.disk_retry_attempts:
+                    time.sleep(min(30, 5 * attempt))
+            finally:
+                writer.close()
+        raise ExportError(f"{label} failed after {disk.attempts} attempts: {last_error}")
+
     def _guest_fixup(self, job: Job) -> None:
         want_initramfs, want_network = job.target.rebuild_initramfs, job.target.fix_network
         want_azure = job.kind == "azure" and job.target.azure_cleanup
+        want_gcp = job.kind == "gcp" and job.target.gcp_cleanup
         disabled = GuestFixup(status="skipped", detail="disabled for this job")
 
         def all_steps(fx: GuestFixup) -> None:
             job.guest_fixup = fx if want_initramfs else disabled
             job.network_fixup = fx if want_network else disabled
             job.azure_fixup = (fx if want_azure else disabled) if job.kind == "azure" else None
+            job.gcp_fixup = (fx if want_gcp else disabled) if job.kind == "gcp" else None
 
         if job.vm.is_windows:
             job.guest_fixup = GuestFixup(status="skipped", detail="Windows guest (VirtIO drivers are installed inside "
@@ -577,8 +725,9 @@ class MigrationRunner:
             job.network_fixup = GuestFixup(status="skipped", detail="Windows guest (the VirtIO network adapter "
                                                                     "uses DHCP by default)")
             job.azure_fixup = None
+            job.gcp_fixup = None
             return
-        if not want_initramfs and not want_network and not want_azure:
+        if not want_initramfs and not want_network and not want_azure and not want_gcp:
             all_steps(disabled)
             return
         boot = next((d for d in job.disks if d.is_boot), job.disks[0])
@@ -587,21 +736,23 @@ class MigrationRunner:
             return
         job.step = "guest_fixup"
         what = " and ".join(filter(None, ["initramfs" if want_initramfs else "", "network" if want_network else "",
-                                          "Azure cloud-init" if want_azure else ""]))
+                                          "Azure cloud-init" if want_azure else "",
+                                          "GCP cloud-init" if want_gcp else ""]))
         self._save(job, JobPhase.FINALIZING, f"All disks copied; preparing the guest for OCI ({what})")
         try:
-            res = self.guest_fixer(boot.device, want_initramfs, want_network, want_azure,
+            res = self.guest_fixer(boot.device, want_initramfs, want_network, want_azure, want_gcp,
                                    lambda msg: self._save(job, message=f"Guest fix-up: {msg}"))
             job.guest_fixup = res.initramfs or disabled
             job.network_fixup = res.network or disabled
-            job.azure_fixup = res.azure_cloud if want_azure else None
+            job.azure_fixup = (res.azure_cloud if want_azure else disabled) if job.kind == "azure" else None
+            job.gcp_fixup = (res.gcp_cloud if want_gcp else disabled) if job.kind == "gcp" else None
         except Exception as exc:  # noqa: BLE001 - a fix-up problem must not fail the migration
             log.exception("guest fix-up for job %s crashed", job.id)
             fail = GuestFixup(status="failed", detail=describe_error(exc))
             all_steps(fail)
         parts = [f"{name} {fx.status.replace('_', ' ')}: {fx.detail}"
                  for name, fx in (("initramfs", job.guest_fixup), ("network", job.network_fixup),
-                                  ("Azure", job.azure_fixup))
+                                  ("Azure", job.azure_fixup), ("GCP", job.gcp_fixup))
                  if fx is not None and fx is not disabled]
         self._save(job, message="Guest fix-up - " + "; ".join(parts))
 

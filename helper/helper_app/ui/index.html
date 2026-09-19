@@ -12,6 +12,7 @@
     <nav id="nav" hidden>
       <a href="#/vms" data-nav="vms" data-vcenter-only>Source VMs</a>
       <a href="#/azure/vms" data-nav="azure-vms" data-azure-only>Azure VMs</a>
+      <a href="#/gcp/vms" data-nav="gcp-vms" data-gcp-only>Google Cloud VMs</a>
       <a href="#/iso" data-nav="iso">New ISO instance</a>
       <a href="#/instances" data-nav="instances">Remote console</a>
       <a href="#/jobs" data-nav="jobs">Jobs</a>
@@ -47,6 +48,16 @@
             <a class="button primary" href="#/azure/login" id="start-azure">Log in to Azure</a>
             <button type="button" class="info" id="start-azure-info" title="How Azure authentication works"
                     aria-label="How Azure authentication works">i</button>
+          </div>
+        </div>
+        <div class="card start-choice">
+          <h3>Google Cloud</h3>
+          <p>Migrate Compute Engine VMs to OCI: log in with a service account, pick the VMs, and the migration tool
+            exports their persistent disks (via snapshots to your GCS bucket) onto OCI volumes.</p>
+          <div class="start-actions">
+            <a class="button primary" href="#/gcp/login" id="start-gcp">Log in to Google Cloud</a>
+            <button type="button" class="info" id="start-gcp-info" title="How Google Cloud authentication works"
+                    aria-label="How Google Cloud authentication works">i</button>
           </div>
         </div>
         <a class="card start-choice" href="#/iso" id="start-iso">
@@ -321,6 +332,54 @@ Microsoft.Compute/snapshots/endGetAccess/action</pre>
     </section>
   </template>
 
+  <!-- ------------------------------------------------------------------ GCP login -->
+  <template id="tpl-gcp-login">
+    <section class="card login">
+      <h2>Log in to Google Cloud</h2>
+      <p class="muted">Paste the JSON key of a <em>service account</em> and the name of a Cloud Storage bucket used for
+        temporary disk exports (objects are deleted when each job finishes). Credentials stay in memory for this session
+        only.</p>
+      <form id="gcp-login-form" class="form" autocomplete="off">
+        <label>Export bucket
+          <input name="export_bucket" type="text" required autocapitalize="off" spellcheck="false"
+                 placeholder="my-migration-exports">
+          <small>GCS bucket in a project the service account can write to (same or different from the VM project).</small>
+        </label>
+        <label>Service account JSON key
+          <textarea name="service_account_json" rows="8" required spellcheck="false" class="log"
+                    placeholder='{"type": "service_account", ...}'></textarea>
+        </label>
+        <div class="actions">
+          <span id="gcp-login-error" class="error"></span>
+          <button type="submit" class="primary" id="gcp-login-btn">Log in</button>
+          <button type="button" class="info" id="gcp-login-info" title="How Google Cloud authentication works"
+                  aria-label="How Google Cloud authentication works">i</button>
+        </div>
+      </form>
+    </section>
+  </template>
+
+  <!-- ------------------------------------------------------------------ GCP VM list -->
+  <template id="tpl-gcp-vms">
+    <section class="card">
+      <div class="toolbar">
+        <h2>Google Cloud VMs</h2>
+        <input id="gcpvm-filter" type="search" placeholder="Filter by name, project/zone or OS">
+        <select id="gcpvm-group" class="filter" title="Project / zone"><option value="">All locations</option></select>
+        <select id="gcpvm-os" class="filter" title="Guest OS"><option value="">All guest OSes</option></select>
+        <button class="secondary small" id="gcpvm-refresh">Refresh</button>
+        <span id="gcpvm-count" class="muted"></span>
+      </div>
+      <div id="gcpvm-error" class="error"></div>
+      <table class="vms">
+        <thead>
+          <tr><th>Name</th><th>Project / zone</th><th>Power</th><th>Guest OS</th><th>Machine type</th><th>Zone</th><th>Disks</th><th>Last job</th><th></th></tr>
+        </thead>
+        <tbody id="gcpvm-rows"></tbody>
+      </table>
+    </section>
+  </template>
+
   <!-- ------------------------------------------------------------------ Azure VM list -->
   <template id="tpl-azure-vms">
     <section class="card">
@@ -427,6 +486,16 @@ Microsoft.Compute/snapshots/endGetAccess/action</pre>
             changes made after the snapshot are not migrated; the snapshots are deleted when the job ends</label>
           <small id="azure-capture-hint"></small>
         </fieldset>
+        <fieldset id="gcp-capture" hidden>
+          <legend>How to capture the disks</legend>
+          <label class="check"><input type="radio" name="gcp_capture_mode" value="stop" checked>
+            <strong>Stop the VM</strong> and export its disks - consistent copy; the instance is stopped right before
+            the export and stays stopped</label>
+          <label class="check"><input type="radio" name="gcp_capture_mode" value="snapshot">
+            <strong>Snapshot the disks</strong> while the VM keeps running - crash-consistent copy; snapshots and GCS
+            export objects are deleted when the job ends</label>
+          <small id="gcp-capture-hint"></small>
+        </fieldset>
         <div id="windows-driver-note" class="callout important" hidden>
           <strong>Important: Windows guest.</strong> Install the
           <a href="https://docs.oracle.com/en/operating-systems/oracle-linux/kvm-virtio/" target="_blank" rel="noopener">Oracle VirtIO Drivers for Microsoft Windows</a>
@@ -514,6 +583,7 @@ Microsoft.Compute/snapshots/endGetAccess/action</pre>
               <small>Overlaps the network read with decompression and the volume write instead of doing them one after another. Buffers a few chunks in memory (<code>HELPER_NFC_PIPELINE_DEPTH</code>).</small>
             </div>
             <small id="azure-transfer-note" hidden>Azure: only the allocated pages of each managed disk are downloaded (<em>Get Page Ranges</em>), with <code>HELPER_AZURE_RANGE_WORKERS</code> parallel range requests per disk, straight onto the OCI volume. Azure charges egress for the data leaving the region.</small>
+            <small id="gcp-transfer-note" hidden>Google Cloud: each disk is snapshotted and exported to your GCS bucket as a raw object, then copied with parallel HTTP range reads onto the OCI volume. GCS egress and snapshot storage apply until the job finishes.</small>
             <label>Volume performance (VPU/GB)
               <select name="volume_vpus_per_gb">
                 <option value="10" selected>10 - Balanced (default)</option>
@@ -534,6 +604,8 @@ Microsoft.Compute/snapshots/endGetAccess/action</pre>
             <small id="fix-network-hint">The network interface gets a new name in OCI (<code>ens3</code>, <code>enp0s5</code> or <code>eth0</code> instead of <code>ens192</code>), so the VMware profile - bound to the old name and usually to a static address - never comes up. The migration tool adds a NetworkManager profile that matches <em>any</em> Ethernet interface with DHCP (OCI's DHCP always hands out the VNIC's address, also a fixed private IP chosen above), installs a first-boot unit that creates <code>ifcfg-&lt;nic&gt;</code> files on guests using the legacy network scripts, adds netplan/systemd-networkd drop-ins where those are used, and disables udev rules that pin interface names to the VMware MAC addresses. Old profiles are left in place; SELinux labels are set with the guest's own tools.</small>
             <label class="check" id="azure-cleanup-label" hidden><input type="checkbox" name="azure_cleanup" checked> Azure cleanup after the copy (cloud-init, waagent, serial console)</label>
             <small id="azure-cleanup-hint" hidden>Azure Linux guests often stall on first boot waiting for Azure metadata, log <code>/dev/sr0</code> errors, and never show a login on the serial console. With this option the migration tool removes Azure cloud-init drop-ins, disables <code>walinuxagent</code>, comments out the Azure CD-ROM in <code>fstab</code>, enables <code>serial-getty@ttyS0</code>, and installs an OCI cloud-init datasource preference — only on the copied boot volume.</small>
+            <label class="check" id="gcp-cleanup-label" hidden><input type="checkbox" name="gcp_cleanup" checked> GCP cleanup after the copy (GCE guest agent / cloud-init)</label>
+            <small id="gcp-cleanup-hint" hidden>Linux images from Google Cloud may wait on GCE metadata on first boot. This option disables Google guest-agent units, removes GCE cloud-init snippets, and prefers the OCI cloud-init datasource on the copied boot volume.</small>
             <label>Boot volume type override
               <select name="boot_volume_type_override">
                 <option value="">(automatic)</option>
@@ -730,6 +802,42 @@ Microsoft.Compute/snapshots/endGetAccess/action</pre>
   </template>
 
   <!-- opened by the (i) next to an "encrypted" badge: what to do in vCenter before such a VM can be exported -->
+  <dialog id="gcp-auth-help" class="help help-wide">
+    <h2>Google Cloud authentication for the migration tool</h2>
+    <p>The UI uses a <strong>service account JSON key</strong> (not your user account). The key is sent to the migration
+      tool VM over HTTPS and kept in memory for the session. Disk exports are written to the <strong>GCS bucket</strong>
+      you name at login; the tool deletes those objects when the job ends.</p>
+    <p><strong>Minimum IAM:</strong> on VM projects — Compute Instance Admin (stop/list) or custom roles with
+      <code>compute.instances.list/get/stop</code>, <code>compute.disks.get</code>,
+      <code>compute.snapshots.create/delete</code>, and snapshot export to Cloud Storage; on the export bucket —
+      <code>storage.objects.create/get/delete</code> and <code>storage.buckets.get</code>.</p>
+    <p class="muted">Edit the project, bucket and role names below, then copy the commands to your shell
+      (<code>gcloud auth login</code> as a user who can create service accounts).</p>
+    <textarea class="log azure-cli-edit" id="gcp-auth-help-cli" rows="18" spellcheck="false"
+              aria-label="gcloud setup commands"># --- variables (edit these) ---
+PROJECT_ID="my-gcp-project"
+EXPORT_BUCKET="my-migration-exports"
+SA_NAME="oci-umt-migration"
+SA_EMAIL="${SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
+
+gcloud iam service-accounts create "$SA_NAME" --project="$PROJECT_ID" --display-name="OCI UMT migration"
+
+gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:${SA_EMAIL}" --role="roles/compute.viewer"
+gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:${SA_EMAIL}" --role="roles/compute.instanceAdmin.v1"
+gcloud projects add-iam-policy-binding "$PROJECT_ID" --member="serviceAccount:${SA_EMAIL}" --role="roles/compute.storageAdmin"
+
+gsutil mb -p "$PROJECT_ID" -l EU "gs://${EXPORT_BUCKET}" || true
+gsutil iam ch "serviceAccount:${SA_EMAIL}:objectAdmin" "gs://${EXPORT_BUCKET}"
+
+gcloud iam service-accounts keys create oci-umt-key.json --iam-account="$SA_EMAIL" --project="$PROJECT_ID"
+echo "Paste oci-umt-key.json and bucket ${EXPORT_BUCKET} into the migration tool login form."</textarea>
+    <p class="muted" id="gcp-auth-help-copy-state"></p>
+    <div class="actions">
+      <button type="button" class="primary" id="gcp-auth-help-copy">Copy commands to clipboard</button>
+      <button type="button" class="secondary" id="gcp-auth-help-close">Close</button>
+    </div>
+  </dialog>
+
   <dialog id="azure-auth-help" class="help help-wide">
     <h2>Azure authentication for the migration tool</h2>
     <p>The UI does <strong>not</strong> use your personal Microsoft account. You log in with a

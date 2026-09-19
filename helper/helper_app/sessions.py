@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from helper_app.azure.session import AzureSession
+from helper_app.gcp.session import GcpSession
 from helper_app.models import SessionInfo
 from helper_app.vsphere.session import VCenterSession
 
@@ -29,11 +30,19 @@ class UserSession:
     principal of an Azure login; both ``None`` for an *anonymous* session (the ISO flow needs neither)."""
 
     def __init__(self, token: str, vc: Optional[VCenterSession], ttl_s: float,
-                 azure: Optional[AzureSession] = None):
+                 azure: Optional[AzureSession] = None, gcp: Optional[GcpSession] = None):
         self.token = token
         self.vc = vc
         self.azure = azure
-        self.username = vc.username if vc is not None else (azure.username if azure is not None else ANONYMOUS_USER)
+        self.gcp = gcp
+        if vc is not None:
+            self.username = vc.username
+        elif azure is not None:
+            self.username = azure.username
+        elif gcp is not None:
+            self.username = gcp.username
+        else:
+            self.username = ANONYMOUS_USER
         self.created_at = datetime.now(timezone.utc)
         self.ttl_s = ttl_s
         self._last_used = time.monotonic()
@@ -65,13 +74,23 @@ class UserSession:
 
     @property
     def anonymous(self) -> bool:
-        return self.vc is None and self.azure is None
+        return self.vc is None and self.azure is None and self.gcp is None
 
     def info(self) -> SessionInfo:
-        if self.vc is None and self.azure is None:
+        if self.vc is None and self.azure is None and self.gcp is None:
             return SessionInfo(username=self.username, anonymous=True, created_at=self.created_at,
                                expires_at=self.expires_at)
-        if self.vc is None:
+        if self.gcp is not None:
+            return SessionInfo(
+                username=self.username,
+                gcp_client_email=self.gcp.client.client_email,
+                gcp_project_id=self.gcp.project_id,
+                gcp_export_bucket=self.gcp.export_bucket,
+                gcp_projects=self.gcp.projects,
+                created_at=self.created_at,
+                expires_at=self.expires_at,
+            )
+        if self.vc is None and self.azure is not None:
             return SessionInfo(username=self.username, azure_tenant_id=self.azure.tenant_id,
                                azure_client_id=self.azure.client_id, azure_subscriptions=self.azure.subscriptions,
                                created_at=self.created_at, expires_at=self.expires_at)
@@ -110,6 +129,8 @@ class UserSession:
             self.vc.close()
         if self.azure is not None:
             self.azure.close()
+        if self.gcp is not None:
+            self.gcp.close()
 
 
 class SessionStore:
@@ -118,11 +139,15 @@ class SessionStore:
         self._sessions: dict[str, UserSession] = {}
         self._lock = threading.Lock()
 
-    def create(self, vc: Optional[VCenterSession], azure: Optional[AzureSession] = None) -> UserSession:
-        """New session for a vCenter login, an Azure login, or an anonymous one (both ``None``) for the ISO
-        flow."""
+    def create(
+        self,
+        vc: Optional[VCenterSession],
+        azure: Optional[AzureSession] = None,
+        gcp: Optional[GcpSession] = None,
+    ) -> UserSession:
+        """New session for a vCenter login, an Azure/GCP login, or an anonymous one for the ISO flow."""
         token = secrets.token_urlsafe(32)
-        session = UserSession(token, vc, self.ttl_s, azure=azure)
+        session = UserSession(token, vc, self.ttl_s, azure=azure, gcp=gcp)
         with self._lock:
             self._sessions[token] = session
         log.info("session created for %s", session.username)

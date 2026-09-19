@@ -24,6 +24,7 @@ from helper_app.branding import (
     TAG_DISK_INDEX,
     TAG_JOB,
     TAG_SOURCE_AZURE,
+    TAG_SOURCE_GCP,
     TAG_SOURCE_ESXI_HOST,
     TAG_SOURCE_MOID,
     TAG_SOURCE_VCENTER,
@@ -492,6 +493,8 @@ def source_tags(job: Job) -> dict[str, str]:
     prefix = ""
     if job.azure is not None and job.azure.vm_size:
         prefix = f"Azure shape {job.azure.vm_size}, "
+    elif job.gcp is not None and job.gcp.machine_type:
+        prefix = f"GCP shape {job.gcp.machine_type}, "
     details = (prefix + f"{vm.num_cpu} vCPU, {vm.memory_mb / 1024:g} GB RAM, {len(vm.disks)} disk(s) "
                f"{_gb(total):g} GB [{disks}], {len(vm.nics)} NIC(s), {vm.guest_full_name or vm.guest_id}, {firmware}")
     tags = {
@@ -506,6 +509,8 @@ def source_tags(job: Job) -> dict[str, str]:
         tags[TAG_SOURCE_ESXI_HOST] = vm.host_name[:TAG_VALUE_MAX]
     if job.azure is not None:
         tags[TAG_SOURCE_AZURE] = f"{job.azure.subscription_id}/{job.azure.resource_group}"[:TAG_VALUE_MAX]
+    if job.gcp is not None:
+        tags[TAG_SOURCE_GCP] = f"{job.gcp.project_id}/{job.gcp.zone}"[:TAG_VALUE_MAX]
     return tags
 
 

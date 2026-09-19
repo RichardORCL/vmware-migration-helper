@@ -155,7 +155,7 @@ def test_azure_migration_deallocate_mode(env):
     assert env.raws[0] in contents and env.raws[1] in contents
     assert job["guest_fixup"]["status"] == "done" and job["network_fixup"]["status"] == "done"
     assert job["azure_fixup"]["status"] == "done"
-    assert env.fixups and env.fixups[-1][1:] == (True, True, True)
+    assert env.fixups and env.fixups[-1][1:] == (True, True, True, False)
     # OCI side: Ubuntu 22.04 UEFI image, instance tagged with the Azure origin
     img = fake.compute.images[job["seed_image_id"]]
     assert (img.operating_system, img.operating_system_version) == ("Ubuntu", "22.04")
@@ -221,7 +221,7 @@ def test_azure_cleanup_disabled_skips_fixup(env):
     job = wait_phase(c, r.json()["id"], "COMPLETED", "FAILED")
     assert job["phase"] == "COMPLETED", job
     assert job["azure_fixup"]["status"] == "skipped" and "disabled" in job["azure_fixup"]["detail"]
-    assert env.fixups and env.fixups[-1][1:] == (True, True, False)
+    assert env.fixups and env.fixups[-1][1:] == (True, True, False, False)
     assert "azure fixup=skipped (enabled=False)" in c.get(f"/api/jobs/{job['id']}/diagnostics").text
 
 

@@ -54,6 +54,13 @@ class Settings(BaseSettings):
     azure_deallocate_timeout_s: int = 900
     azure_snapshot_timeout_s: int = 900  # snapshot creation (snapshot mode), per disk
 
+    # GCP source: snapshots exported to a user-supplied GCS bucket, then copied with parallel range GETs.
+    gcp_stop_timeout_s: int = 900
+    gcp_snapshot_timeout_s: int = 900
+    gcp_export_timeout_s: int = 3600  # snapshot export to Cloud Storage, per disk
+    gcp_range_workers: int = 4
+    gcp_range_chunk_bytes: int = 8 * 1024 * 1024
+
     # Logging (both adjustable from the Setup page; changes persist in runtime_settings_path)
     log_level: str = "INFO"
     oci_log_requests: bool = False  # log every OCI SDK request/response (bodies included) at DEBUG

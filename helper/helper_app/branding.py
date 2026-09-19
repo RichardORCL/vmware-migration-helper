@@ -28,6 +28,7 @@ TAG_SOURCE_VM_DETAILS = tag_key("source-vm-details")
 TAG_SOURCE_VCENTER = tag_key("source-vcenter")
 TAG_SOURCE_ESXI_HOST = tag_key("source-esxi-host")
 TAG_SOURCE_AZURE = tag_key("source-azure")
+TAG_SOURCE_GCP = tag_key("source-gcp")
 TAG_SOURCE_ISO = tag_key("source-iso")
 TAG_SOURCE_DETAILS = tag_key("source-details")
 

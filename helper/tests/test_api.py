@@ -59,7 +59,7 @@ def target(**kw):
 
 class Env:
     def __init__(self, tmp_path, fail_once=frozenset({1}), block_event=None, store=None, tunnel_factory=None,
-                 azure=None):
+                 azure=None, gcp=None):
         self.settings = Settings(device_prefix=str(tmp_path / "dev" / "oraclevd"), db_path=str(tmp_path / "jobs.db"),
                                  seed_bucket="oci-umt-seed", launch_timeout_s=5, volume_timeout_s=5,
                                  image_import_timeout_s=5, cookie_secure=False, console_connect_timeout_s=5,
@@ -88,7 +88,8 @@ class Env:
             "vm-tpl": make_vm(moid="vm-tpl", name="golden", template=True),
         }
         self.vcenter = FakeVCenterConnector(self.vms)
-        self.azure = azure or make_fleet(self.raws)  # Azure VMs whose disks hold the same raw content
+        self.azure = azure if azure is not None else make_fleet(self.raws)
+        self.gcp = gcp
         self.store = store or JobStore(self.settings.db_path)
         FakeExport.instances.clear()
         self.updater = Updater(self.settings, runner=self._run_command, http_get=self._http_get)
@@ -101,25 +102,27 @@ class Env:
             return FakeExport(vm, payloads, fail_once=set(fail_once), block_event=block_event)
 
         # post-copy guest fix-up: scripted outcome per test (device -> GuestFixup or exception)
-        self.fixups: list[tuple[str, bool, bool, bool]] = []  # device, initramfs, network, azure_cloud
+        self.fixups: list[tuple[str, bool, bool, bool, bool]] = []  # initramfs, network, azure, gcp
         self.fixup_result = GuestFixup(status="done", detail="initramfs rebuilt with virtio drivers for 3.10.0-1160",
                                        kernels=["3.10.0-1160.el7.x86_64"])
         self.network_result = GuestFixup(status="done", detail="NetworkManager DHCP profile for any Ethernet "
                                                                "interface added")
 
-        def guest_fixer(device, initramfs, network, azure_cloud, notify):
-            self.fixups.append((device, initramfs, network, azure_cloud))
+        def guest_fixer(device, initramfs, network, azure_cloud, gcp_cloud, notify):
+            self.fixups.append((device, initramfs, network, azure_cloud, gcp_cloud))
             notify("scanning the boot disk")
             if isinstance(self.fixup_result, Exception):
                 raise self.fixup_result
             azure_result = GuestFixup(status="done", detail="Azure cloud-init adjusted") if azure_cloud else None
+            gcp_result = GuestFixup(status="done", detail="GCP cloud-init adjusted") if gcp_cloud else None
             return GuestFixupResult(self.fixup_result if initramfs else None,
-                                    self.network_result if network else None, azure_result)
+                                    self.network_result if network else None, azure_result, gcp_result)
 
         extra = {"tunnel_factory": tunnel_factory} if tunnel_factory else {}
+        gcp_conn = self.gcp.connector(self.settings) if self.gcp is not None else None
         self.app = create_app(
             settings=self.settings, clients=self.fake.clients(), store=self.store, vcenter=self.vcenter,
-            azure=self.azure.connector(self.settings),
+            azure=self.azure.connector(self.settings), gcp=gcp_conn,
             export_factory=export_factory, updater=self.updater, command_runner=self._run_command,
             scan_devices=self.fake.scan_devices, guest_fixer=guest_fixer, **extra,
         )
@@ -902,7 +905,7 @@ def test_guest_fixup_runs_after_copy(env):
     job = wait_phase(c, r.json()["id"], "COMPLETED", "FAILED")
     assert job["phase"] == "COMPLETED", job
     # ran on the boot volume's disk (the device path is cleared from the record once it is detached)
-    assert env.fixups == [(str(Path(env.settings.device_prefix).parent / "sdb"), True, True, False)]
+    assert env.fixups == [(str(Path(env.settings.device_prefix).parent / "sdb"), True, True, False, False)]
     assert job["guest_fixup"]["status"] == "done" and job["guest_fixup"]["kernels"] == ["3.10.0-1160.el7.x86_64"]
     assert job["network_fixup"]["status"] == "done" and "NetworkManager" in job["network_fixup"]["detail"]
     assert "power_off" not in job["step"]
@@ -924,11 +927,11 @@ def test_guest_fixup_runs_after_copy(env):
     job = wait_phase(c, r.json()["id"], "COMPLETED", "FAILED")
     assert job["guest_fixup"] == {"status": "skipped", "detail": "disabled for this job", "kernels": [], "log": []}
     assert job["network_fixup"]["status"] == "done"
-    assert env.fixups[-1][1:] == (False, True, False)
+    assert env.fixups[-1][1:] == (False, True, False, False)
     r = c.post("/api/jobs", json={"vm_moid": "vm-101", "target": target(fix_network=False)})
     job = wait_phase(c, r.json()["id"], "COMPLETED", "FAILED")
     assert job["network_fixup"]["detail"] == "disabled for this job" and job["guest_fixup"]["status"] == "not_needed"
-    assert env.fixups[-1][1:] == (True, False, False)
+    assert env.fixups[-1][1:] == (True, False, False, False)
 
     # both opted out / Windows: skipped without touching the disk
     n = len(env.fixups)

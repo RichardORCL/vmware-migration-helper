@@ -6,6 +6,7 @@ Steps (each opt-in per job, each reported on its own, none can fail the migratio
 * initramfs - rebuild with virtio drivers (``helper_app.guest.initramfs``)
 * network   - DHCP on the renamed network interface (``helper_app.guest.network``)
 * azure_cloud - drop Azure cloud-init/waagent/fstab sr0; enable OCI serial console (``azure_cloud``)
+* gcp_cloud   - drop GCE guest-agent / cloud-init hooks (``gcp_cloud``)
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from pathlib import Path
 from typing import Callable, NamedTuple, Optional
 
 from helper_app.guest.azure_cloud import AzureCloudFixer
+from helper_app.guest.gcp_cloud import GcpCloudFixer
 from helper_app.guest.initramfs import _LOCK, Fail, Runner, Skip, _Session, default_runner, initramfs_outcome
 from helper_app.guest.network import NetworkFixer
 from helper_app.models import GuestFixup
@@ -28,10 +30,11 @@ class GuestFixupResult(NamedTuple):
     initramfs: Optional[GuestFixup]  # None when the step was not requested
     network: Optional[GuestFixup]
     azure_cloud: Optional[GuestFixup]
+    gcp_cloud: Optional[GuestFixup]
 
 
-# (boot volume device, initramfs, network, azure_cloud, progress callback) -> per-step outcomes
-GuestFixerFn = Callable[[str, bool, bool, bool, Optional[Notify]], GuestFixupResult]
+# (device, initramfs, network, azure_cloud, gcp_cloud, notify) -> per-step outcomes
+GuestFixerFn = Callable[[str, bool, bool, bool, bool, Optional[Notify]], GuestFixupResult]
 
 
 class GuestFixer:
@@ -40,7 +43,7 @@ class GuestFixer:
         self.mount_base = Path(mount_base)
 
     def fix(self, device: str, initramfs: bool = True, network: bool = True, azure_cloud: bool = False,
-            notify: Optional[Notify] = None) -> GuestFixupResult:
+            gcp_cloud: bool = False, notify: Optional[Notify] = None) -> GuestFixupResult:
         """Open the guest root on ``device`` once and run the requested steps."""
         notes: list[str] = []
 
@@ -61,11 +64,12 @@ class GuestFixer:
             note(f"failed: {exc}")
             return GuestFixup(status="failed", detail=f"unexpected error: {exc}", log=notes[log_from:])
 
-        if not initramfs and not network and not azure_cloud:
-            return GuestFixupResult(None, None, None)
+        if not initramfs and not network and not azure_cloud and not gcp_cloud:
+            return GuestFixupResult(None, None, None, None)
         res_i: Optional[GuestFixup] = None
         res_n: Optional[GuestFixup] = None
         res_a: Optional[GuestFixup] = None
+        res_g: Optional[GuestFixup] = None
         with _LOCK:
             session = _Session(self, device, note)
             try:
@@ -74,7 +78,7 @@ class GuestFixer:
                 except Exception as exc:  # noqa: BLE001 - no root: every step gets the same answer
                     same = outcome(exc, 0)
                     return GuestFixupResult(same if initramfs else None, same if network else None,
-                                            same if azure_cloud else None)
+                                            same if azure_cloud else None, same if gcp_cloud else None)
                 if initramfs:
                     try:
                         kernels, rebuilt = session.rebuild_initramfs()
@@ -95,10 +99,17 @@ class GuestFixer:
                         res_a = GuestFixup(status=status, detail=detail, log=notes[start:])  # type: ignore[arg-type]
                     except Exception as exc:  # noqa: BLE001
                         res_a = outcome(exc, start)
+                if gcp_cloud:
+                    start = len(notes)
+                    try:
+                        status, detail = GcpCloudFixer(session.mnt, note).apply()
+                        res_g = GuestFixup(status=status, detail=detail, log=notes[start:])  # type: ignore[arg-type]
+                    except Exception as exc:  # noqa: BLE001
+                        res_g = outcome(exc, start)
                 try:
                     session.sh(["sync"], ok=False)
                 except Fail:
                     pass
             finally:
                 session.cleanup()
-        return GuestFixupResult(res_i, res_n, res_a)
+        return GuestFixupResult(res_i, res_n, res_a, res_g)

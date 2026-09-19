@@ -240,6 +240,12 @@ class OciTarget(BaseModel):
                     "datasource so the guest boots cleanly in OCI. Ignored for VMware jobs and Windows; never fails "
                     "the migration",
     )
+    gcp_cleanup: bool = Field(
+        default=True,
+        description="GCP Linux guests: after the copy, remove Google guest-agent / GCE cloud-init hooks and prefer "
+                    "the OCI cloud-init datasource so the guest boots cleanly in OCI. Ignored for VMware/Azure "
+                    "jobs and Windows; never fails the migration",
+    )
 
     @field_validator("private_ip", mode="before")
     @classmethod
@@ -385,9 +391,10 @@ class GuestFixup(BaseModel):
     log: list[str] = Field(default_factory=list, description="Step-by-step notes for diagnostics")
 
 
-JobKind = Literal["vmware", "iso", "azure"]
+JobKind = Literal["vmware", "iso", "azure", "gcp"]
 
 AzureCaptureMode = Literal["deallocate", "snapshot"]
+GcpCaptureMode = Literal["stop", "snapshot"]
 
 
 class AzureSourceInfo(BaseModel):
@@ -412,6 +419,25 @@ class AzureSourceInfo(BaseModel):
     sas_expires_at: Optional[datetime] = None
 
 
+class GcpSourceInfo(BaseModel):
+    """Where a GCP job's VM lives and how its disks are exported via GCS."""
+
+    project_id: str
+    zone: str
+    machine_type: str = ""
+    export_bucket: str
+    export_prefix: str = ""
+    capture_mode: GcpCaptureMode = Field(
+        default="stop",
+        description="stop: stop the VM and snapshot its disks for export; snapshot: snapshot while the VM keeps "
+                    "running (crash-consistent)",
+    )
+    disk_urls: list[str] = Field(default_factory=list, description="Persistent disk URLs in DiskSpec order")
+    snapshot_names: list[str] = Field(default_factory=list, description="Snapshots created by this job")
+    gcs_objects: list[str] = Field(default_factory=list,
+                                   description="Object names under export_bucket written by this job")
+
+
 class Job(BaseModel):
     id: str
     kind: JobKind = "vmware"  # vmware: VM from vSphere; iso: instance installed from an ISO; azure: VM from Azure
@@ -424,6 +450,7 @@ class Job(BaseModel):
     iso: Optional[IsoSpec] = None  # the installer ISO (iso jobs)
     iso_image_id: Optional[str] = None  # custom image imported from the ISO (iso jobs)
     azure: Optional[AzureSourceInfo] = None  # subscription / resource group / capture mode (azure jobs)
+    gcp: Optional[GcpSourceInfo] = None  # project / zone / GCS export (gcp jobs)
     vcenter_host: str = ""  # vCenter the VM was inspected on ("host" or "host:port"); tagged onto the instance
     target: OciTarget
     power_off_source: bool = False  # VM was powered on when the job was created; shut it down before the export
@@ -438,6 +465,7 @@ class Job(BaseModel):
     guest_fixup: Optional[GuestFixup] = None  # post-copy initramfs rebuild on the target boot volume
     network_fixup: Optional[GuestFixup] = None  # post-copy network configuration (DHCP on the renamed NIC)
     azure_fixup: Optional[GuestFixup] = None  # Azure source: cloud-init / waagent / serial console (Linux only)
+    gcp_fixup: Optional[GuestFixup] = None  # GCP source: GCE guest agent / cloud-init (Linux only)
     disks: list[DiskState] = Field(default_factory=list)
     transfer: TransferStats = Field(default_factory=TransferStats)
     created_by: str = ""
@@ -508,6 +536,19 @@ class CreateIsoJobRequest(BaseModel):
     target: OciTarget
 
 
+class CreateGcpJobRequest(BaseModel):
+    """Migrate a GCP VM (needs a GCP login on the session)."""
+
+    vm_id: str = Field(description="Compute Engine instance id (projects/.../zones/.../instances/...)")
+    target: OciTarget
+    capture_mode: GcpCaptureMode = "stop"
+    power_off_source: bool = Field(
+        default=False,
+        description="Stop mode with a running VM: the user confirmed that the migration tool stops the instance "
+                    "right before the disk export",
+    )
+
+
 class CreateAzureJobRequest(BaseModel):
     """Migrate an Azure VM (needs an Azure login on the session)."""
 
@@ -557,6 +598,16 @@ class AzureSubscription(BaseModel):
     state: str = ""
 
 
+class GcpProject(BaseModel):
+    id: str
+    name: str = ""
+
+
+class GcpLoginRequest(BaseModel):
+    service_account_json: str = Field(description="JSON key of a Google Cloud service account")
+    export_bucket: str = Field(description="GCS bucket for temporary snapshot exports (objects deleted after the job)")
+
+
 class SessionInfo(BaseModel):
     username: str
     anonymous: bool = False  # ISO flow: a UI session without a vCenter or Azure login
@@ -567,6 +618,10 @@ class SessionInfo(BaseModel):
     azure_tenant_id: str = ""  # set when the session is an Azure (service principal) login
     azure_client_id: str = ""
     azure_subscriptions: list[AzureSubscription] = Field(default_factory=list)
+    gcp_client_email: str = ""
+    gcp_project_id: str = ""
+    gcp_export_bucket: str = ""
+    gcp_projects: list[GcpProject] = Field(default_factory=list)
     created_at: datetime
     expires_at: datetime
 

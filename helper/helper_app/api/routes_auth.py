@@ -8,7 +8,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 
 from helper_app.auth import require_session, session_token
 from helper_app.azure.client import AzureAuthError, AzureError
-from helper_app.models import AzureLoginRequest, LoginRequest, SessionInfo
+from helper_app.gcp.client import GcpAuthError, GcpError
+from helper_app.models import AzureLoginRequest, GcpLoginRequest, LoginRequest, SessionInfo
 from helper_app.sessions import UserSession
 from helper_app.vsphere.session import VCenterAuthError, VCenterError
 
@@ -53,6 +54,22 @@ async def azure_login(body: AzureLoginRequest, request: Request, response: Respo
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc))
     st.sessions.logout(session_token(request))
     session = st.sessions.create(None, azure=az)
+    _set_cookie(st, response, session.token)
+    return session.info()
+
+
+@router.post("/gcp/login", response_model=SessionInfo)
+async def gcp_login(body: GcpLoginRequest, request: Request, response: Response):
+    """Log in with a GCP service account JSON key and export bucket."""
+    st = request.app.state
+    try:
+        gcp = await asyncio.to_thread(st.gcp.login, body.service_account_json, body.export_bucket)
+    except GcpAuthError as exc:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, str(exc))
+    except GcpError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc))
+    st.sessions.logout(session_token(request))
+    session = st.sessions.create(None, gcp=gcp)
     _set_cookie(st, response, session.token)
     return session.info()
 

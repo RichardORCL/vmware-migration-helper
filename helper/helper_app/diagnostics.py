@@ -57,7 +57,9 @@ def _fixup_lines(job: Job) -> str:
     for name, fx, enabled in (("guest fixup", job.guest_fixup, job.target.rebuild_initramfs),
                               ("network fixup", job.network_fixup, job.target.fix_network),
                               ("azure fixup", job.azure_fixup,
-                               job.kind == "azure" and job.target.azure_cleanup)):
+                               job.kind == "azure" and job.target.azure_cleanup),
+                              ("gcp fixup", job.gcp_fixup,
+                               job.kind == "gcp" and job.target.gcp_cleanup)):
         head = f"  {name}={fx.status if fx else '-'} (enabled={enabled}): {fx.detail if fx else '-'}"
         extra = ([f"    kernels: {', '.join(fx.kernels)}"] if fx and fx.kernels else [])
         extra += [f"    - {line}" for line in fx.log] if fx else []
@@ -78,6 +80,18 @@ def _source_lines(job: Job, settings: Settings) -> list[str]:
             f"sas_granted={len(az.sas_granted)} "
             f"sas_expires_at={az.sas_expires_at.isoformat() if az.sas_expires_at else '-'} "
             f"range_workers={settings.azure_range_workers} chunk_bytes={settings.azure_range_chunk_bytes}",
+            _fixup_lines(job),
+        ]
+    if job.vm is not None and job.gcp is not None:
+        g = job.gcp
+        return [
+            f"  source GCP VM: {job.vm.name} ({job.vm.moid}) guest={job.vm.guest_id} firmware={job.vm.firmware} "
+            f"cpu={job.vm.num_cpu} mem_mb={job.vm.memory_mb} disks={len(job.vm.disks)} "
+            f"power_off_source={job.power_off_source} power_off_result={job.power_off_result or '-'}",
+            f"  gcp: project={g.project_id} zone={g.zone} machine_type={g.machine_type or '-'} "
+            f"bucket={g.export_bucket} prefix={g.export_prefix} capture_mode={g.capture_mode} "
+            f"snapshots={','.join(g.snapshot_names) or '-'} objects={','.join(g.gcs_objects) or '-'} "
+            f"range_workers={settings.gcp_range_workers} chunk_bytes={settings.gcp_range_chunk_bytes}",
             _fixup_lines(job),
         ]
     if job.vm is not None:

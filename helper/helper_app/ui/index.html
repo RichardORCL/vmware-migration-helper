@@ -38,13 +38,17 @@
             and the migration tool copies their disks into OCI instances.</p>
           <span class="button primary">Log in to vCenter</span>
         </a>
-        <a class="card start-choice" href="#/azure/login" id="start-azure">
+        <div class="card start-choice">
           <h3>Microsoft Azure</h3>
           <p>Migrate virtual machines from Azure to OCI: log in with a service principal, pick the VMs, and the migration
             tool exports their managed disks (after deallocating the VM, or from snapshots while it runs) straight onto
             OCI volumes.</p>
-          <span class="button primary">Log in to Azure</span>
-        </a>
+          <div class="start-actions">
+            <a class="button primary" href="#/azure/login" id="start-azure">Log in to Azure</a>
+            <button type="button" class="info" id="start-azure-info" title="How Azure authentication works"
+                    aria-label="How Azure authentication works">i</button>
+          </div>
+        </div>
         <a class="card start-choice" href="#/iso" id="start-iso">
           <h3>Create OCI instance based on ISO</h3>
           <p>Boot a new OCI instance from an installer ISO stored in an Object Storage bucket, choose shape, OS type, firmware
@@ -289,6 +293,8 @@
         <div class="actions">
           <span id="azure-login-error" class="error"></span>
           <button type="submit" class="primary" id="azure-login-btn">Log in</button>
+          <button type="button" class="info" id="azure-login-info" title="How Azure authentication works"
+                  aria-label="How Azure authentication works">i</button>
         </div>
       </form>
       <details class="rbac">
@@ -724,6 +730,74 @@ Microsoft.Compute/snapshots/endGetAccess/action</pre>
   </template>
 
   <!-- opened by the (i) next to an "encrypted" badge: what to do in vCenter before such a VM can be exported -->
+  <dialog id="azure-auth-help" class="help help-wide">
+    <h2>Azure authentication for the migration tool</h2>
+    <p>The UI does <strong>not</strong> use your personal Microsoft account. You log in with a
+      <strong>service principal</strong> (an Entra ID app registration plus a client secret). The browser sends
+      tenant ID, client ID and secret to the migration tool VM over HTTPS; the helper exchanges them for a
+      short-lived OAuth token against <code>login.microsoftonline.com</code> and calls Azure Resource Manager
+      on your behalf. Credentials stay in memory for the session only (the secret is never stored on disk;
+      tenant and client ID may be remembered in this browser).</p>
+    <p><strong>You need:</strong></p>
+    <ul>
+      <li><strong>Reader</strong> on each subscription that holds VMs (list VMs, disks and sizes).</li>
+      <li>Permission to <strong>deallocate</strong> VMs and to grant <strong>read SAS</strong> on managed disks
+        (and create/delete snapshots if you use snapshot capture mode).</li>
+      <li>Outbound HTTPS from the migration tool VM to
+        <code>login.microsoftonline.com</code>, <code>management.azure.com</code>, and Azure blob endpoints
+        (<code>*.blob.core.windows.net</code>, <code>*.blob.storage.azure.net</code>).</li>
+    </ul>
+    <p class="muted">Replace the variables at the top, then run in Azure CLI (<code>az login</code> as a user who can
+      create app registrations and role assignments). Copy the <strong>password</strong> from the secret step into the
+      login form; it is shown only once.</p>
+    <pre class="log" id="azure-auth-help-cli"># --- variables (edit these) ---
+SUBSCRIPTION_ID="00000000-0000-0000-0000-000000000000"
+APP_NAME="oci-umt-migration"
+ROLE_NAME="OCI Ultimate Migration Tool Disk Export"
+# Subscription scope, or a resource group:
+# ASSIGNMENT_SCOPE="/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/my-rg"
+ASSIGNMENT_SCOPE="/subscriptions/${SUBSCRIPTION_ID}"
+
+TENANT_ID=$(az account show --query tenantId -o tsv)
+
+# 1) App registration + service principal
+az ad app create --display-name "$APP_NAME"
+APP_ID=$(az ad app list --display-name "$APP_NAME" --query "[0].appId" -o tsv)
+az ad sp create --id "$APP_ID"
+
+# 2) Client secret — copy "password" into the migration tool Azure login (shown once)
+az ad app credential reset --id "$APP_ID" --display-name oci-umt --years 2
+
+# 3) Custom role (save as oci-umt-role.json; set AssignableScopes to your subscription id)
+# {
+#   "Name": "OCI Ultimate Migration Tool Disk Export",
+#   "IsCustom": true,
+#   "Description": "Deallocate VMs and grant disk export SAS for Azure-to-OCI migration",
+#   "Actions": [
+#     "Microsoft.Compute/virtualMachines/deallocate/action",
+#     "Microsoft.Compute/disks/beginGetAccess/action",
+#     "Microsoft.Compute/disks/endGetAccess/action",
+#     "Microsoft.Compute/snapshots/write",
+#     "Microsoft.Compute/snapshots/delete",
+#     "Microsoft.Compute/snapshots/beginGetAccess/action",
+#     "Microsoft.Compute/snapshots/endGetAccess/action"
+#   ],
+#   "AssignableScopes": ["/subscriptions/00000000-0000-0000-0000-000000000000"]
+# }
+az role definition create --role-definition oci-umt-role.json
+
+az role assignment create --assignee "$APP_ID" --role "Reader" --scope "$ASSIGNMENT_SCOPE"
+az role assignment create --assignee "$APP_ID" --role "$ROLE_NAME" --scope "$ASSIGNMENT_SCOPE"
+
+echo "Tenant ID: $TENANT_ID"
+echo "Client ID: $APP_ID"</pre>
+    <p class="muted">Instead of the custom role you can assign built-in roles:
+      <strong>Virtual Machine Contributor</strong> (deallocate),
+      <strong>Disk Snapshot Contributor</strong> (snapshots and <code>beginGetAccess</code>),
+      and <strong>Disk Restore Operator</strong> (<code>endGetAccess</code> on disks).</p>
+    <div class="actions"><button type="button" class="secondary" id="azure-auth-help-close">Close</button></div>
+  </dialog>
+
   <dialog id="encrypted-help" class="help">
     <h2>Encrypted VM: <span id="encrypted-help-name"></span></h2>
     <p>vSphere does not allow exporting an encrypted VM (<code>The operation is not supported on encrypted VM</code>),

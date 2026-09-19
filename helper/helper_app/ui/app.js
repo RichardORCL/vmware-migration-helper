@@ -85,6 +85,23 @@
     }
     dlg.showModal();
   }
+  function showAzureAuthHelp() {
+    const dlg = document.getElementById("azure-auth-help");
+    if (!dlg.dataset.wired) {
+      dlg.dataset.wired = "1";
+      document.getElementById("azure-auth-help-close").addEventListener("click", () => dlg.close());
+      dlg.addEventListener("click", (ev) => { if (ev.target === dlg) dlg.close(); });
+      window.addEventListener("hashchange", () => { if (dlg.open) dlg.close(); });
+    }
+    dlg.showModal();
+  }
+  function wireAzureAuthHelpButton(id) {
+    const btn = document.getElementById(id);
+    if (btn && !btn.dataset.wired) {
+      btn.dataset.wired = "1";
+      btn.addEventListener("click", (ev) => { ev.preventDefault(); ev.stopPropagation(); showAzureAuthHelp(); });
+    }
+  }
   const kv = (container, pairs) => {
     container.innerHTML = "";
     for (const [k, v] of pairs) { container.append(el("span", { class: "k" }, k), el("span", { class: "v" }, v)); }
@@ -162,6 +179,7 @@
     app.append(tpl("tpl-start"));
     if (hasVcenter(state.me)) document.getElementById("start-vmware").href = "#/vms";
     if (hasAzure(state.me)) document.getElementById("start-azure").href = "#/azure/vms";
+    wireAzureAuthHelpButton("start-azure-info");
   }
 
   // Azure service principal login: tenant + client ID are remembered in this browser (never the secret)
@@ -179,6 +197,7 @@
     form.elements.tenant_id.value = last.tenant_id || "";
     form.elements.client_id.value = last.client_id || "";
     (form.elements.tenant_id.value && form.elements.client_id.value ? form.elements.client_secret : form.elements.tenant_id).focus();
+    wireAzureAuthHelpButton("azure-login-info");
     form.addEventListener("submit", async (ev) => {
       ev.preventDefault();
       err.textContent = ""; btn.disabled = true;

@@ -163,7 +163,7 @@ def test_azure_migration_deallocate_mode(env):
     tags = fake.compute.launch_details[-1].freeform_tags
     assert tags["oci-umt-source-azure"] == f"{SUB}/rg-prod" and "oci-umt-source-vcenter" not in tags
     assert tags["oci-umt-source-vm"] == "lin-01" and tags["oci-umt-source-moid"] == vid.lower()
-    assert tags["oci-umt-source-vm-details"].startswith("2 vCPU, 8 GB RAM, 2 disk(s)")
+    assert tags["oci-umt-source-vm-details"].startswith("Azure shape Standard_D2s_v3, 2 vCPU, 8 GB RAM, 2 disk(s)")
     assert fake.compute.instances[job["instance_id"]].lifecycle_state == "RUNNING"
     # job list by source, diagnostics
     assert [j["id"] for j in c.get("/api/jobs", params={"vm_moid": vid.lower()}).json()] == [job["id"]]

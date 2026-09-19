@@ -39,6 +39,8 @@ h2 { font-size: 15px; margin: 0 0 8px; font-weight: 600; }
 .start-choice h3 { margin: 0; font-size: 16px; color: var(--primary); }
 .start-choice p { margin: 0; color: var(--muted); flex: 1; }
 .start-choice .button { align-self: flex-start; margin-top: 6px; }
+.start-actions { display: flex; align-items: center; gap: 8px; margin-top: 6px; flex-wrap: wrap; }
+.login .actions .info { flex: 0 0 auto; }
 .toolbar { display: flex; gap: 12px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }
 .toolbar h2 { margin: 0; flex: 0 0 auto; }
 .toolbar input[type=search] { flex: 1; min-width: 200px; padding: 5px 8px; border: 1px solid var(--border); border-radius: 3px; font: inherit; }
@@ -98,6 +100,10 @@ pre.log { background: #1b2a32; color: #d7e0e5; padding: 10px; border-radius: 3px
 button.info { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; padding: 0; margin-left: 4px; border-radius: 50%; border: 1px solid var(--primary); background: #fff; color: var(--primary); font: 700 11px/1 Georgia, serif; vertical-align: middle; cursor: pointer; }
 button.info:hover { background: var(--primary); color: #fff; }
 dialog.help { max-width: 640px; border: 1px solid var(--border); border-radius: 4px; padding: 18px 22px; font-size: 14px; line-height: 1.5; }
+dialog.help-wide { max-width: min(820px, 96vw); }
+dialog.help-wide pre.log { max-height: 340px; font-size: 11px; }
+dialog.help ul { padding-left: 22px; margin: 8px 0; }
+dialog.help li { margin: 4px 0; }
 dialog.help::backdrop { background: rgba(0, 0, 0, .35); }
 dialog.help h2 { margin: 0 0 8px; font-size: 17px; }
 dialog.help ol { padding-left: 22px; }

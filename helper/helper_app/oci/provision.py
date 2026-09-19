@@ -489,8 +489,11 @@ def source_tags(job: Job) -> dict[str, str]:
     firmware = "UEFI" if vm.firmware.value.lower() == "efi" else "BIOS"
     if vm.secure_boot:
         firmware += " Secure Boot"
-    details = (f"{vm.num_cpu} vCPU, {vm.memory_mb / 1024:g} GB RAM, {len(vm.disks)} disk(s) {_gb(total):g} GB "
-               f"[{disks}], {len(vm.nics)} NIC(s), {vm.guest_full_name or vm.guest_id}, {firmware}")
+    prefix = ""
+    if job.azure is not None and job.azure.vm_size:
+        prefix = f"Azure shape {job.azure.vm_size}, "
+    details = (prefix + f"{vm.num_cpu} vCPU, {vm.memory_mb / 1024:g} GB RAM, {len(vm.disks)} disk(s) "
+               f"{_gb(total):g} GB [{disks}], {len(vm.nics)} NIC(s), {vm.guest_full_name or vm.guest_id}, {firmware}")
     tags = {
         TAG_JOB: job.id,
         TAG_SOURCE_VM: vm.name[:TAG_VALUE_MAX],
